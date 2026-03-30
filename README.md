@@ -113,13 +113,13 @@ docker compose up -d
 
 # 3. Run service
 python run.py
-
-##🔮 Future Work
+---
+🔮 Future Work
 Multi-Agent workflow integration (LangGraph)
 Advanced retrieval strategies (hybrid / rerank)
 Knowledge graph augmentation
 Evaluation pipeline
-
+---
 ##⭐ If you find this project useful
 
 Give it a star ⭐ and feel free to contribute!
