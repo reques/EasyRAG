@@ -121,7 +121,7 @@ docker compose up -d
 
 # 4. 启动项目
 python run.py
----
+```
 🔮 后续规划
 多智能体工作流（LangGraph）
 混合检索与重排序（Hybrid / Rerank）
