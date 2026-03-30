@@ -1,21 +1,125 @@
-🚀 EasyRAG：基于多策略优化的轻量级高性能 RAG 系统
+# 🚀 EasyRAG
 
-EasyRAG 是一个面向实际应用场景设计的轻量级检索增强生成（RAG）系统，聚焦于高精度检索、可扩展 Agent 能力与工程可落地性，支持从数据构建到问答生成的完整闭环。
+> A lightweight, high-performance Retrieval-Augmented Generation (RAG) system with optimized retrieval strategies and extensible Agent capabilities.
 
-🔧 项目简介
-基于模块化架构设计，构建 数据处理 → 向量索引 → 检索增强 → LLM 生成 的完整 RAG 流水线，实现端到端知识问答能力
-集成 Milvus 向量数据库 + BGE 系列嵌入模型，结合语义分块与检索策略优化，有效提升关键信息召回与命中能力
-支持 结构化检索结果返回（chunk / doc / metadata），增强系统可解释性与调试能力
-引入 多策略检索机制（Top-K / 过滤 / 条件检索），提升复杂查询场景下的鲁棒性与准确性
-支持 FastAPI 服务封装 + 流式输出（Streaming），便于系统集成与前端对接
-提供 OCR + 文档解析能力（PDF / Markdown / 多模态），扩展多源知识接入能力
-⚙️ 核心能力
-🔍 高精度检索：语义向量 + 过滤策略联合优化
-🧠 可扩展 Agent：支持 Function Call 工具调用能力（可扩展为复杂任务执行）
-🧩 灵活数据接入：支持多格式文档解析与知识库构建
-📡 工程可落地：完整 API 服务 + Docker 部署支持
-🛠 可调试性强：支持中间结果追踪与检索链路分析
-📈 性能与优化（实验表现）
-检索命中率（Precision@K）通过分块与策略优化显著提升
-在复杂查询场景中，相比基础 RAG，回答相关性与稳定性明显增强
-系统支持持续迭代优化（检索策略 / Prompt / 工具调用）
+---
+
+## 📖 Overview
+
+EasyRAG is a practical, production-oriented RAG framework designed for real-world applications.  
+It focuses on **high-precision retrieval**, **scalable Agent integration**, and **engineering usability**, providing a complete pipeline from data ingestion to answer generation.
+
+---
+
+## 🧱 Architecture
+Data Processing → Vector Indexing → Retrieval Enhancement → LLM Generation
+
+- End-to-end RAG pipeline
+- Modular design for easy extension and customization
+
+---
+
+## 🔧 Features
+
+- 🔍 **High-Precision Retrieval**
+  - Milvus vector database + BGE embedding models  
+  - Semantic chunking + retrieval optimization strategies  
+
+- 🧠 **Agent-Ready Design**
+  - Supports Function Call for tool invocation  
+  - Easily extensible to multi-step Agent workflows  
+
+- 🧩 **Structured Retrieval Output**
+  - Returns structured results (chunk / doc / metadata)  
+  - Improves interpretability and debugging  
+
+- ⚙️ **Multi-Strategy Retrieval**
+  - Top-K retrieval  
+  - Filtering & conditional search  
+  - Enhanced robustness for complex queries  
+
+- 📡 **Production-Ready API**
+  - FastAPI-based service  
+  - Streaming response support  
+
+- 📄 **Multi-Source Data Support**
+  - OCR integration  
+  - PDF / Markdown / multi-modal document parsing  
+
+---
+
+## ⚙️ Core Capabilities
+
+- **Retrieval Optimization**: Semantic embedding + filtering strategies  
+- **Agent Integration**: Function Call-based tool usage  
+- **Flexible Data Ingestion**: Multi-format knowledge sources  
+- **Engineering Deployment**: API service + Docker support  
+- **Debugging & Observability**: Intermediate result tracking  
+
+---
+
+## 📈 Performance
+
+- Improved **Precision@K** through chunking and retrieval strategy optimization  
+- Enhanced answer relevance and stability in complex queries  
+- Supports continuous optimization (retrieval / prompt / tool usage)
+
+---
+
+## 🛠 Tech Stack
+
+- **LLM**: OpenAI / DeepSeek / compatible APIs  
+- **Embedding**: BGE (BAAI)  
+- **Vector DB**: Milvus  
+- **Backend**: FastAPI  
+- **Frameworks**: LangChain / LlamaIndex (optional)  
+- **Deployment**: Docker  
+
+---
+
+## 📦 Project Structure
+EasyRAG/
+├── app/ # Core logic
+├── models/ # (Not included, external download)
+├── api/ # FastAPI service(coming soon)
+├── scripts/ # Utility scripts(coming soon)
+├── README.md
+
+---
+
+## 📥 Model & Data
+
+> ⚠️ Model files are not included in this repository.
+
+Download pretrained models from:
+
+- HuggingFace / external storage (to be added)
+- Place them under:
+/models/
+
+---
+
+## 🚀 Quick Start
+
+```bash
+# 1. Clone repo
+git clone https://github.com/reques/EasyRAG.git
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+#install dicker environment
+docker compose up -d
+
+# 3. Run service
+python run.py
+
+🔮 Future Work
+Multi-Agent workflow integration (LangGraph)
+Advanced retrieval strategies (hybrid / rerank)
+Knowledge graph augmentation
+Evaluation pipeline
+
+⭐ If you find this project useful
+
+Give it a star ⭐ and feel free to contribute!
