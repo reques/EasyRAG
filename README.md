@@ -122,13 +122,13 @@ docker compose up -d
 # 4. 启动项目
 python run.py
 ```
-🔮 后续规划
+## 🔮 后续规划
 多智能体工作流（LangGraph）
 混合检索与重排序（Hybrid / Rerank）
 知识图谱增强（Graph RAG）
 自动化评估体系（Evaluation Pipeline）
 
-⭐ 支持项目
+## ⭐ 支持项目
 
 如果这个项目对你有帮助，欢迎点个 Star ⭐！
 
