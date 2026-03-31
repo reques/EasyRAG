@@ -1,4 +1,4 @@
-version: '3.5'
+version: '1.0'
 
 services:
   etcd:
@@ -55,7 +55,6 @@ services:
       retries: 3
     ports:
       - "19530:19530"
-      # Port 9091 removed: reserved by Windows and causes bind failure
     depends_on:
       - "etcd"
       - "minio"
