@@ -75,6 +75,33 @@ class Settings(BaseSettings):
     ANSWER_VALIDATION_ENABLED: bool = True
     ANSWER_MIN_LENGTH: int = 20      # chars below which answer is "too short"
 
+    # ── PostgreSQL (阶段 1) ──────────────────────────────────────────────
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_USER: str = "easyrag"
+    POSTGRES_PASSWORD: str = "easyrag_secret"
+    POSTGRES_DB: str = "easyrag"
+    POSTGRES_POOL_SIZE: int = 10
+    POSTGRES_MAX_OVERFLOW: int = 5
+
+    # ── Redis (阶段 1) ──────────────────────────────────────────────────
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_PASSWORD: str = ""
+
+    # ── MinIO (阶段 1) ──────────────────────────────────────────────────
+    MINIO_ENDPOINT: str = "localhost:9091"
+    MINIO_ACCESS_KEY: str = "easyrag_admin"
+    MINIO_SECRET_KEY: str = "easyrag_minio_secret"
+    MINIO_BUCKET: str = "easyrag-files"
+    MINIO_SECURE: bool = False
+
+    # ── JWT (阶段 1) ────────────────────────────────────────────────────
+    JWT_SECRET_KEY: str = "change-this-to-a-random-secret-string"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

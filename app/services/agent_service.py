@@ -56,13 +56,21 @@ class AgentService:
         self._graph = get_graph()
         self._sessions = SessionStore(ttl=cfg.SESSION_TTL)
 
-    def run(self, query: str, session_id: str = "default") -> Dict[str, Any]:
+    def run(
+        self,
+        query: str,
+        session_id: str = "default",
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
         logger.info("[agent_service] session=%s query=%r", session_id, query[:80])
         start = time.perf_counter()
-        history = self._sessions.get_history(session_id)
+        # 优先使用传入的 DB 历史，否则回退到内存 SessionStore
+        if history is None:
+            history = self._sessions.get_history(session_id)
         initial: Dict[str, Any] = {
             "query": query,
             "session_id": session_id,
+            "history": history,
             "steps": [],
             "retrieved_docs": [],
             "tool_args": {},

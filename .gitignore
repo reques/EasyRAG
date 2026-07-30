@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+*.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Docker volumes
+volumes/
+
+# Models (large files)
+models/*.bin
+models/*.safetensors
+models/*.pt
+models/*.pth
+
+# Node
+node_modules/
+frontend/dist/
+
+# Temp
+*.log
+image.png
