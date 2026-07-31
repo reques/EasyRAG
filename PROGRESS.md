@@ -9,10 +9,96 @@
 
 ```
 阶段 1: 后端架构化   FastAPI分层 + PostgreSQL/Redis/MinIO + Repository模式  ✅ 完成
-阶段 2: 知识库增强   多策略分块 + OCR链路 + 知识图谱 + 评估管线
+阶段 2: 知识库增强   多策略分块 + OCR链路 + 知识图谱 + 评估管线            ✅ 完成
 阶段 3: Agent 体系    Sub-agent + MCP + Skill系统 + 中间件
 阶段 4: 产品化       Vue3前端 + 多租户 + 管理后台                    🚧 前端先行
 ```
+
+---
+
+## 阶段 2（进行中）：知识库增强
+
+### 2A 多策略分块 (2026-07-31) ✅
+
+| # | 任务 | 状态 |
+|---|---|---|
+| 1 | 配置项 CHUNK_STRATEGY / PARENT_CHUNK_SIZE（config.py） | ✅ |
+| 2 | recursive 递归分隔符切分（段落→句子→词，语义边界断开） | ✅ |
+| 3 | markdown 结构感知切分（标题路径注入 chunk 前缀，代码块不拆，metadata 带 section_path） | ✅ |
+| 4 | parent_child 父子分块（child 小块索引 + parent 大块上下文，metadata 带 parent_text） | ✅ |
+| 5 | retriever 三后端统一 _unwrap_parent：命中 child 后返回去重后的 parent 上下文 | ✅ |
+| 6 | 验证脚本 13/13 通过（4 策略 + 边界 + 报错路径） | ✅ |
+
+用法：`.env` 设 `CHUNK_STRATEGY=fixed|recursive|markdown|parent_child`（默认 recursive）。上传 API 的 `strategy` 参数可单次覆盖。parent_child 模式下 `PARENT_CHUNK_SIZE`（默认 1500）控制上下文块大小。
+
+### 2B OCR 链路 (2026-07-31) ✅
+
+| # | 任务 | 状态 |
+|---|---|---|
+| 1 | app/rag/ocr.py — RapidOCR 本地引擎单例（onnxruntime，无需外部服务） | ✅ |
+| 2 | 图片文件（.png/.jpg/.jpeg/.bmp/.webp）直接 OCR 提取文本 | ✅ |
+| 3 | 扫描版 PDF 兜底：pypdf 平均每页 <20 字符判定无文字层 → pdfium 渲染 → 逐页 OCR | ✅ |
+| 4 | chunker 接入：_EXTRACTORS 增加 5 种图片类型 | ✅ |
+| 5 | 上传端点 ALLOWED_EXTENSIONS 放开图片；前端 accept 同步 | ✅ |
+| 6 | 验证：真实 OCR 中文图片 + PIL 生成无文字层 PDF 全链路 4/4 通过 | ✅ |
+
+新增依赖（stage1-agent 环境）：rapidocr 3.9.2、onnxruntime 1.28.0、pypdfium2 5.12.1、pypdf 6.14.2（顺带补齐缺失的 pypdf）。模型首次自动下载 PP-OCRv6（det/cls/rec 三个 onnx，存于 site-packages/rapidocr/models）。
+
+### 2C 知识图谱 (2026-07-31) ✅
+
+| # | 任务 | 状态 |
+|---|---|---|
+| 1 | PostgreSQL 两张新表：knowledge_entities / knowledge_relations（含 kb 外键级联） | ✅ |
+| 2 | backend/services/graph_service.py — LLM JSON 模式逐 chunk 抽取实体/关系（失败 chunk 跳过） | ✅ |
+| 3 | 图谱检索 query_related：query 关键词匹配实体 → 1 跳邻居关系 → prompt 文本注入 | ✅ |
+| 4 | 上传链路接入：GRAPH_ENABLED 时索引后自动抽取（不阻塞主链路） | ✅ |
+| 5 | 检索链路接入：knowledge_retrieval 节点注入子图为特殊 doc（metadata.graph=True） | ✅ |
+| 6 | 查询端点 GET /knowledge/bases/{id}/graph（供前端可视化） | ✅ |
+| 7 | 验证 6/6：schema 建表、子图查询、prompt 格式化、真实 LLM 抽取（10 实体 9 关系） | ✅ |
+
+用法：`.env` 设 `GRAPH_ENABLED=true` 开启（默认 false，行为与阶段 1 一致）。成本控制：`GRAPH_MAX_CHUNKS_PER_FILE`（默认 30）限制单文件抽取 chunk 数。设计取舍：不引入 Neo4j，先用 PG 两表 + SQL 验证图谱价值；query_related 目前是跨知识库全局匹配，按会话锁定 kb 留待多 kb 路由完善。
+
+### 2D 检索评估管线 (2026-07-31) ✅
+
+| # | 任务 | 状态 |
+|---|---|---|
+| 1 | evaluation_runs 表：命名运行 + 聚合指标（hit_rate/mrr/avg_score）+ 逐条明细 JSON | ✅ |
+| 2 | backend/services/evaluation_service.py — run_evaluation 逐条真实检索 + 指标聚合 | ✅ |
+| 3 | evaluation_router.py：POST /evaluation/runs（执行+落库）、GET /runs（对比列表）、GET /runs/{id}（明细） | ✅ |
+| 4 | 验证 9/9（打真实 API）：已知内容 query hit_rank=1、不存在文件不命中、两次命名运行可对比 | ✅ |
+
+评估集格式：`[{"query": ..., "expected_source": 文件名}]`，expected_source 出现在 top_k 任一结果的 source 即算命中。指标：HitRate@k（命中率）、MRR@k（平均倒数排名）、avg_score。典型用法：切换 CHUNK_STRATEGY 重建索引后各跑一次同名评估，GET /runs 对比指标。
+
+### Ollama 本地嵌入后端
+
+| # | 任务 | 状态 | 日期 |
+|---|---|---|---|
+| 1 | OllamaEmbedder (POST /api/embed, 批量) | ✅ | 2026-07-31 |
+| 2 | 配置项 (OLLAMA_BASE_URL/EMBED_MODEL/TIMEOUT) | ✅ | 2026-07-31 |
+| 3 | EMBEDDING_TYPE 工厂路由 "ollama" | ✅ | 2026-07-31 |
+| 4 | .env.template 更新 | ✅ | 2026-07-31 |
+| 5 | 真实 Ollama 嵌入验证 (bge-m3, 1024维) | ✅ | 2026-07-31 |
+
+用法：`.env` 里设 `EMBEDDING_TYPE=ollama`，默认连 `http://localhost:11434` 的 `bge-m3:latest`。维度 1024 与现有 Milvus collection 兼容，无需改 schema。
+
+---
+
+## 阶段 3（部分）：Agent 工具扩展
+
+### 联网搜索工具 (Tavily)
+
+| # | 任务 | 状态 | 日期 |
+|---|---|---|---|
+| 1 | web_search 工具 (Tavily REST API) | ✅ | 2026-07-31 |
+| 2 | 配置项 + .env.template (TAVILY_API_KEY 等 4 项) | ✅ | 2026-07-31 |
+| 3 | 工具注册 + 意图识别 prompt 更新 | ✅ | 2026-07-31 |
+| 4 | tool_selection 关键词兜底推断 | ✅ | 2026-07-31 |
+| 5 | 全链路验证 (registry/schema/graph compile) | ✅ | 2026-07-31 |
+| 6 | 搜索来源追踪 (state.sources + 答案底部有序参考来源) | ✅ | 2026-07-31 |
+
+调用链路：用户问"今天的新闻" → intent_recognition 判定 tool_use/web_search → tool_execution 调 Tavily API → answer_generation 基于搜索结果生成回答。未配置 TAVILY_API_KEY 时返回明确错误提示而非崩溃。
+
+来源展示：web_search 输出尾部嵌入 `<!--SOURCES:[...]-->` 机器可读块，tool_execution 解析进 `state.sources`，answer_validation/fallback 统一在最终答案底部追加有序「参考来源」列表（Markdown 链接）。ChatResponse 同时返回结构化 `sources` 字段供前端使用。
 
 ---
 
@@ -56,6 +142,32 @@ frontend/
         ├── ChatView.vue      # 对话页 (聊天气泡 + Agent 调用)
         └── KnowledgeView.vue # 知识库管理 (CRUD + 文件上传)
 ```
+
+### UI 重构：Yuxi 设计语言 (2026-07-31)
+
+参考 [Yuxi 设计规范](https://github.com/xerrors/Yuxi/blob/main/docs/develop-guides/design.md) 全面重构前端 UI（克隆仓库提取 token 体系与布局模式）：
+
+| # | 任务 | 状态 |
+|---|---|---|
+| 1 | 引入 lucide-vue-next 图标库，全面替换 emoji 图标 | ✅ |
+| 2 | style.css 重写为 Yuxi token 体系（main 青色系 + gray 中性色阶、8px 圆角、阴影仅用于浮层） | ✅ |
+| 3 | 侧边栏重构：顶部图标横排 → 纵向「图标+文字」导航，白底带边框「新建对话」主操作卡 | ✅ |
+| 4 | 消息流重构：去头像，用户消息右侧浅青胶囊气泡（main-50），AI 回复无边框全宽纯文本 | ✅ |
+| 5 | 输入框重构：全圆胶囊 → 12px 圆角卡片（灰边框 + 轻阴影），深色圆形发送按钮 | ✅ |
+| 6 | 空状态去巨型 emoji + 40px 大标题 → Yuxi greeting（22px 克制标题 + 居中输入框） | ✅ |
+| 7 | 知识库卡片去 hover 位移/重阴影，状态标签改语义浅底+深文字 | ✅ |
+| 8 | 视觉验证：Edge headless 截图 smoke-chat / smoke-empty 双状态核对通过 | ✅ |
+
+设计要点（Yuxi 规范）：主色 `--main-700 #046a82` 仅用于选中态/主操作；卡片 = 白底 + 1px `gray-150` 边框 + 8px 圆角、无装饰阴影；hover 只改背景/边框，禁用 transform 位移；滚动条 4px 细条。
+
+### 修复：知识库上传文件不落库 (2026-07-31)
+
+问题：前端上传走旧端点 `POST /kb/upload`，只做向量索引、不写 PostgreSQL 文件记录，导致 `GET /knowledge/bases/{id}/files` 永远返回空（页面显示「暂无文件」）。
+
+修复：
+1. 后端新增 `POST /api/v1/knowledge/bases/{kb_id}/upload`（knowledge_router.py）：解析分块 → 向量索引（metadata 带 knowledge_base_id）→ PostgreSQL 登记文件记录（pending → completed/failed）。
+2. 前端 `KnowledgeView.vue` 上传改调新端点（携带当前知识库 id）。
+3. 已上传但未落库的历史文件需重新上传才会出现在列表中。
 
 ---
 
@@ -194,3 +306,14 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 7. 创建 `backend/server/` — 新 FastAPI 入口 + 3 组 Router + JWT 中间件 + 种子脚本
 8. 安装全部阶段 1 依赖: sqlalchemy 2.0.36, asyncpg 0.30, redis 4.6, arq 0.26, minio 7.2, python-jose 3.3, python-multipart 0.0.18, bcrypt 5.0 等
 9. 所有模块通过导入验证，auth_service 密码哈希/验证/Token 签发全部正常
+
+#### 2026-07-31 — 对话 UI 模块化 + 知识库引用透出
+
+**变更内容：**
+1. 聊天界面模块化气泡：用户消息右侧青底胶囊气泡，AI 回复左侧浅灰卡片（细边框 + 大圆角），视觉区分清晰
+2. 修复 LLM 回复排版错乱：移除 `.message-text` 的 `white-space: pre-wrap`（与 marked 输出的 `<p>/<br>` 冲突导致双倍空行），补全标题/嵌套列表/代码块/引用/表格等 markdown 样式
+3. 知识库引用透出链路：`app/graph/nodes.py` 检索后从 retrieved_docs 提取去重来源生成 `kb_sources`（含知识库/图谱类型标记），`agent_service._build_response` 合并 kb_sources 与 web_search sources 返回
+4. 引用持久化：`chat_router` 将 sources 存入消息 metadata_json，`chat_service.get_conversation_history` 解析 meta 返回，历史会话重载后引用块可还原
+5. 前端 ChatView 新增「参考来源」引用块：知识库/图谱/网页三类标签 + 有序列表，web 来源可点击新窗口打开
+6. 移除答案正文内嵌的 `_render_sources` 文本（避免与前端引用块重复），删除无用函数
+7. 验证：后端 py_compile 通过；`npm run build` 通过；Edge headless 截图 + vision 核对气泡区分/排版/引用块三项全部正常
