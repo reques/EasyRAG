@@ -2,7 +2,7 @@
   <div class="auth-page">
     <div class="auth-card">
       <div class="auth-header">
-        <span class="auth-logo">🧠</span>
+        <span class="auth-logo"><Brain :size="24" /></span>
         <h1>EasyRAG</h1>
         <p>企业知识库智能平台</p>
       </div>
@@ -30,6 +30,7 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
+import { Brain } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()

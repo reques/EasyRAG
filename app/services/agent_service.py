@@ -101,6 +101,9 @@ class AgentService:
     @staticmethod
     def _build_response(state: Dict[str, Any], elapsed: float) -> Dict[str, Any]:
         docs = state.get("retrieved_docs") or []
+        # 合并知识库引用与 web 搜索引用, 前端统一渲染引用块
+        sources = list(state.get("kb_sources") or [])
+        sources.extend(state.get("sources") or [])
         return {
             "query": state.get("query", ""),
             "session_id": state.get("session_id", ""),
@@ -117,6 +120,7 @@ class AgentService:
             "validation_passed": state.get("validation_passed", False),
             "validation_feedback": state.get("validation_feedback", ""),
             "is_fallback": state.get("is_fallback", False),
+            "sources": sources,
             "final_answer": state.get("final_answer") or state.get("draft_answer", ""),
             "elapsed_seconds": round(elapsed, 3),
         }

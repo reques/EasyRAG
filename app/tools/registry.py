@@ -148,5 +148,17 @@ def _build_default_registry() -> ToolRegistry:
         },
     ))
 
+    from app.tools.web_search_tool import web_search
+
+    reg.register(ToolDefinition(
+        name="web_search",
+        description="Search the web for current/real-time information: news, weather, recent events, prices, or anything not in the knowledge base. Returns titles, URLs and content snippets.",
+        fn=lambda query, max_results=None, **_: web_search(query=query, max_results=max_results),
+        arg_schema={
+            "query": ("string", "The search query, e.g. 'latest AI news today'", True),
+            "max_results": ("number", "Max results to return (1-10, default 5)", False),
+        },
+    ))
+
     logger.info("Tool registry initialised with tools: %s", reg.list_names())
     return reg

@@ -34,6 +34,7 @@ class AgentState(TypedDict, total=False):
     tool_result: Optional[str]          # raw output of tool execution
     tool_triggered: bool
     tool_error: Optional[str]           # error message if tool failed
+    sources: List[Dict[str, str]]       # web_search sources [{"title", "url"}]
 
     # ── Generation ────────────────────────────────────────────────────────
     draft_answer: str                   # first-pass generated answer

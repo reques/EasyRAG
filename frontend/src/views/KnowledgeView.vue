@@ -1,9 +1,11 @@
 <template>
   <div class="knowledge-view">
     <header class="chat-header">
-      <h2>📚 知识库管理</h2>
+      <h2><LibraryBig :size="16" /> 知识库管理</h2>
       <div class="header-actions">
-        <button @click="showCreate = true" class="btn-primary-sm">+ 新建知识库</button>
+        <button @click="showCreate = true" class="btn-primary-sm">
+          <Plus :size="14" /> 新建知识库
+        </button>
       </div>
     </header>
 
@@ -34,8 +36,8 @@
       <div class="modal">
         <h3>上传文档到「{{ activeKb?.name }}」</h3>
         <label class="file-label">
-          <input type="file" @change="onFileSelect" accept=".txt,.md,.pdf,.docx" />
-          <span v-if="!uploadFile">点击选择文件 (.txt .md .pdf .docx)</span>
+          <input type="file" @change="onFileSelect" accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.bmp,.webp" />
+          <span v-if="!uploadFile">点击选择文件 (.txt .md .pdf .docx 图片)</span>
           <span v-else>📄 {{ uploadFile.name }}</span>
         </label>
         <p v-if="uploadMsg" :class="uploadOk ? 'auth-success' : 'auth-error'">{{ uploadMsg }}</p>
@@ -52,7 +54,6 @@
     <div v-if="loading" class="chat-empty"><p>加载中…</p></div>
 
     <div v-else-if="kbList.length === 0" class="chat-empty">
-      <span class="empty-icon">📭</span>
       <h3>暂无知识库</h3>
       <p>点击上方按钮创建你的第一个知识库</p>
     </div>
@@ -66,7 +67,7 @@
         @click="selectKb(kb)"
       >
         <div class="kb-card-header">
-          <span class="kb-icon">📁</span>
+          <span class="kb-icon"><FolderOpen :size="17" /></span>
           <strong>{{ kb.name }}</strong>
         </div>
         <p v-if="kb.description" class="kb-desc">{{ kb.description }}</p>
@@ -81,7 +82,9 @@
     <div v-if="activeKb" class="kb-files-section">
       <div class="kb-files-header">
         <h3>「{{ activeKb.name }}」中的文件</h3>
-        <button @click="showUpload = true" class="btn-primary-sm">📤 上传文件</button>
+        <button @click="showUpload = true" class="btn-primary-sm">
+          <Upload :size="14" /> 上传文件
+        </button>
       </div>
       <div v-if="filesLoading" style="color:#888;padding:20px">加载中…</div>
       <div v-else-if="fileList.length === 0" style="color:#888;padding:20px">暂无文件</div>
@@ -113,6 +116,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { LibraryBig, Plus, FolderOpen, Upload } from 'lucide-vue-next'
 import api from '../api'
 
 const kbList = ref([])
@@ -174,19 +178,19 @@ function onFileSelect(e) {
 }
 
 async function doUpload() {
-  if (!uploadFile.value) return
+  if (!uploadFile.value || !activeKb.value) return
   uploading.value = true
   uploadMsg.value = ''
   uploadOk.value = false
   try {
     const fd = new FormData()
     fd.append('file', uploadFile.value)
-    const res = await api.upload('/kb/upload', fd)
+    const res = await api.upload(`/knowledge/bases/${activeKb.value.id}/upload`, fd)
     uploadMsg.value = `✅ 上传成功，索引了 ${res.indexed} 个块`
     uploadOk.value = true
     uploadFile.value = null
     // 刷新文件列表
-    if (activeKb.value) await selectKb(activeKb.value)
+    await selectKb(activeKb.value)
   } catch (e) {
     uploadMsg.value = `❌ ${e.response?.data?.detail || '上传失败'}`
     uploadOk.value = false

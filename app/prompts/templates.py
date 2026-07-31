@@ -36,14 +36,14 @@ Return ONLY valid JSON in this exact format:
   "confidence": <float 0.0-1.0>,
   "requires_retrieval": <true|false>,
   "requires_tool": <true|false>,
-  "tool_name": "<calculator|datetime_tool|text_tool|null>",
+  "tool_name": "<calculator|datetime_tool|text_tool|web_search|null>",
   "tool_args": {{}},
   "reasoning": "<one sentence why>"
 }}
 
 Intent definitions:
 - knowledge_qa  : user asks a factual question answerable from a knowledge base
-- tool_use      : user wants a calculation, time lookup, or text processing
+- tool_use      : user wants a calculation, time lookup, text processing, or a real-time web search
 - complex_task  : multi-step reasoning combining retrieval and/or tools
 - chitchat      : casual greeting or off-topic
 
@@ -51,6 +51,11 @@ For tool_use, populate tool_name and tool_args appropriately.
 Example tool_args for calculator: {{"expression": "12 * 34"}}
 Example tool_args for datetime_tool: {{"format": "%Y-%m-%d"}}
 Example tool_args for text_tool: {{"operation": "word_count", "text": "..."}}
+Example tool_args for web_search: {{"query": "latest AI news today"}}
+
+Choose web_search when the user asks about current events, news, weather, recent
+happenings, prices, or anything that requires up-to-date information from the
+internet rather than the local knowledge base.
 """
 )
 

@@ -2,7 +2,7 @@
   <div class="auth-page">
     <div class="auth-card">
       <div class="auth-header">
-        <span class="auth-logo">🧠</span>
+        <span class="auth-logo"><Brain :size="24" /></span>
         <h1>创建账户</h1>
         <p>加入 EasyRAG 知识库平台</p>
       </div>
@@ -38,6 +38,7 @@
 
 <script setup>
 import { ref, reactive } from 'vue'
+import { Brain } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 

@@ -43,13 +43,18 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = 2
 
     # ── Embedding ────────────────────────────────────────────────────────
-    # EMBEDDING_TYPE: "local" uses SentenceTransformers; "openai_compatible" uses HTTP API
-    EMBEDDING_TYPE: Literal["local", "openai_compatible"] = "local"
+    # EMBEDDING_TYPE: "local"=SentenceTransformers | "openai_compatible"=HTTP API | "ollama"=本地Ollama
+    EMBEDDING_TYPE: Literal["local", "openai_compatible", "ollama"] = "local"
     EMBEDDING_MODEL_PATH: str = "./models/bge-m3"
     EMBEDDING_API_BASE: Optional[str] = None
     EMBEDDING_API_KEY: Optional[str] = None
     EMBEDDING_MODEL_NAME: str = "bge-m3"
     EMBEDDING_DIMENSION: int = 1024
+
+    # ── Ollama (本地嵌入) ─────────────────────────────────────────────────
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_EMBED_MODEL: str = "bge-m3:latest"
+    OLLAMA_TIMEOUT: int = 60
 
     # ── Vector store ─────────────────────────────────────────────────────
     VECTOR_STORE_TYPE: Literal["memory", "milvus", "chroma"] = "milvus"
@@ -63,8 +68,19 @@ class Settings(BaseSettings):
     # ── RAG ──────────────────────────────────────────────────────────────
     RETRIEVER_TOP_K: int = 4
     RAG_SCORE_THRESHOLD: float = 0.0
+    # 阶段 2C: 知识图谱
+    GRAPH_ENABLED: bool = False            # 上传时是否抽取实体/关系（慢，需 LLM 调用）
+    GRAPH_MAX_CHUNKS_PER_FILE: int = 30    # 单文件最多送入抽取的 chunk 数（成本控制）
+    GRAPH_QUERY_TOP_ENTITIES: int = 3      # 检索增强时最多展开的实体数
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
+    # 阶段 2A: 分块策略
+    #   fixed        固定窗口滑窗（原行为）
+    #   recursive    递归分隔符切分（段落→句子→词，尽量在语义边界断开）
+    #   markdown     Markdown 结构感知（按标题层级聚合，代码块不拆）
+    #   parent_child 父子分块（小块索引用于检索，返回所属大块作为上下文）
+    CHUNK_STRATEGY: Literal["fixed", "recursive", "markdown", "parent_child"] = "recursive"
+    PARENT_CHUNK_SIZE: int = 1500   # parent_child 策略下父块（上下文块）大小
 
     # ── Agent / LangGraph ────────────────────────────────────────────────
     AGENT_MAX_ITERATIONS: int = 20   # LangGraph recursion_limit
@@ -101,6 +117,12 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change-this-to-a-random-secret-string"
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+
+    # ── Tavily Web Search ────────────────────────────────────────────────
+    TAVILY_API_KEY: str = ""
+    TAVILY_MAX_RESULTS: int = 5
+    TAVILY_SEARCH_DEPTH: str = "basic"   # "basic" | "advanced"
+    TAVILY_INCLUDE_ANSWER: bool = True
 
 
 @lru_cache(maxsize=1)

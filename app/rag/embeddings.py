@@ -1,9 +1,10 @@
 """Embedding model abstraction.
 
-Supports two backends controlled by ``Settings.EMBEDDING_TYPE``:
+Supports backends controlled by ``Settings.EMBEDDING_TYPE``:
 
-* ``local``            – SentenceTransformers (BGE-M3 by default, runs on CPU/GPU)
-* ``openai_compatible`` – any OpenAI-compatible /v1/embeddings HTTP endpoint
+* ``local``              – SentenceTransformers (BGE-M3 by default, runs on CPU/GPU)
+* ``openai_compatible``  – any OpenAI-compatible /v1/embeddings HTTP endpoint
+* ``ollama``             – local Ollama server (e.g. bge-m3) via /api/embed
 """
 from __future__ import annotations
 
@@ -73,6 +74,52 @@ class OpenAICompatibleEmbedder(BaseEmbedder):
             raise EmbeddingError(f"OpenAI-compatible embedding failed: {exc}") from exc
 
 
+class OllamaEmbedder(BaseEmbedder):
+    """Embedder that calls a local Ollama server's /api/embed endpoint.
+
+    Works with any Ollama embedding model (bge-m3, nomic-embed-text, mxbai-embed-large...).
+    Uses the modern batch API (POST /api/embed, {"model":..., "input":[...]}).
+    """
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        timeout: Optional[int] = None,
+    ):
+        import requests
+        self._requests = requests
+        self._base_url = (base_url or cfg.OLLAMA_BASE_URL).rstrip("/")
+        self._model = model or cfg.OLLAMA_EMBED_MODEL
+        self._timeout = timeout or cfg.OLLAMA_TIMEOUT
+        logger.info("[OllamaEmbedder] base=%s model=%s", self._base_url, self._model)
+
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+        try:
+            resp = self._requests.post(
+                f"{self._base_url}/api/embed",
+                json={"model": self._model, "input": texts},
+                timeout=self._timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            vectors = data.get("embeddings")
+            if not vectors or len(vectors) != len(texts):
+                raise EmbeddingError(
+                    f"Ollama returned {len(vectors or [])} vectors for {len(texts)} inputs"
+                )
+            return vectors
+        except EmbeddingError:
+            raise
+        except Exception as exc:
+            raise EmbeddingError(
+                f"Ollama embedding failed (is `ollama serve` running and model "
+                f"'{self._model}' pulled?): {exc}"
+            ) from exc
+
+
 # ── Singleton factory ─────────────────────────────────────────────────────────
 
 _embedder: Optional[BaseEmbedder] = None
@@ -86,6 +133,8 @@ def get_embedder() -> BaseEmbedder:
             _embedder = LocalEmbedder()
         elif cfg.EMBEDDING_TYPE == "openai_compatible":
             _embedder = OpenAICompatibleEmbedder()
+        elif cfg.EMBEDDING_TYPE == "ollama":
+            _embedder = OllamaEmbedder()
         else:
             raise EmbeddingError(f"Unknown EMBEDDING_TYPE: {cfg.EMBEDDING_TYPE}")
     return _embedder

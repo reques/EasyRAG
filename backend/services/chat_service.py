@@ -63,10 +63,21 @@ async def get_conversation(
 async def get_conversation_history(
     session: AsyncSession, conversation_id: uuid.UUID
 ) -> List[dict]:
-    """获取对话历史，返回 [{"role": ..., "content": ...}] 格式。"""
+    """获取对话历史，返回 [{"role", "content", "meta"?}] 格式。"""
+    import json as _json
     msg_repo = MessageRepository(session)
     msgs = await msg_repo.list_by_conversation(conversation_id)
-    return [{"role": m.role, "content": m.content} for m in msgs]
+    out: List[dict] = []
+    for m in msgs:
+        item: dict = {"role": m.role, "content": m.content}
+        raw = getattr(m, "metadata_json", None)
+        if raw:
+            try:
+                item["meta"] = _json.loads(raw)
+            except Exception:
+                pass
+        out.append(item)
+    return out
 
 
 async def list_user_conversations(

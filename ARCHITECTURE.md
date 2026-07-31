@@ -1,6 +1,6 @@
 # EasyRAG 项目架构总览
 
-> 最后更新：2026-07-30 | 当前阶段：阶段 1 完成
+> 最后更新：2026-07-31 | 当前阶段：阶段 1+2 完成 | 前端已重构为 Yuxi 设计语言
 
 ---
 
@@ -37,16 +37,23 @@ EasyRAG/
 │   └── src/
 │       ├── main.js                #   入口
 │       ├── App.vue                #   根组件
-│       ├── style.css              #   全局样式
+│       ├── style.css              #   全局样式（Yuxi 设计 token 体系：main 青色系 + gray 色阶）
 │       ├── api/index.js           #   Axios + JWT 拦截器
 │       ├── stores/auth.js         #   Pinia 认证
 │       ├── router/index.js        #   路由 + 守卫
 │       └── views/
 │           ├── LoginView.vue      #   登录
 │           ├── RegisterView.vue   #   注册
-│           ├── LayoutView.vue     #   主布局（侧边栏）
-│           ├── ChatView.vue       #   对话
+│           ├── LayoutView.vue     #   主布局（Yuxi 式纵向文字导航侧边栏，lucide 图标）
+│           ├── ChatView.vue       #   对话（用户右侧胶囊气泡 / AI 无边框全宽 / 卡片输入框）
 │           └── KnowledgeView.vue  #   知识库管理
+│
+│   前端设计语言（2026-07-31 起）: 参考 Yuxi design.md 规范
+│   - 主色 --main-700 #046a82（青），仅用于选中态/主操作/focus
+│   - 卡片: 白底 + 1px var(--gray-150) 边框 + 8px 圆角，无装饰阴影
+│   - 阴影仅用于真实浮层（弹窗/输入卡）；hover 只改背景/边框，禁用 transform
+│   - 图标: lucide-vue-next（16/18/20px），不使用 emoji 装饰
+│   - 侧边栏: var(--main-5) 极浅青底，纵向「图标+文字」导航，白底「新建对话」主操作卡
 │
 ├── app/                           # ─── 旧核心代码（保留兼容）───
 │   ├── __init__.py
@@ -57,9 +64,10 @@ EasyRAG/
 │   ├── llm/                       # LLM 客户端
 │   │   └── client.py              #   OpenAI 兼容 SDK 封装 (sync/async/JSON)
 │   ├── rag/                       # 检索增强
-│   │   ├── embeddings.py          #   嵌入模型 (local BGE-M3 / OpenAI API)
-│   │   ├── chunker.py             #   文档解析 + 分块 (.txt/.md/.pdf/.docx)
-│   │   ├── retriever.py           #   检索引擎 (Memory/Milvus/Chroma)
+│   │   ├── embeddings.py          #   嵌入模型 (local BGE-M3 / OpenAI API / Ollama)
+│   │   ├── chunker.py             #   文档解析 + 4 种分块策略 (fixed/recursive/markdown/parent_child)
+│   │   ├── ocr.py                 #   [2B] RapidOCR 图片/扫描版 PDF 文字识别
+│   │   ├── retriever.py           #   检索引擎 (Memory/Milvus/Chroma + _unwrap_parent 父子块还原)
 │   │   └── vector_store.py        #   [旧] 向量库抽象（已迁移到 retriever）
 │   ├── graph/                     # LangGraph 工作流
 │   │   ├── state.py               #   AgentState 共享状态
@@ -67,10 +75,11 @@ EasyRAG/
 │   │   ├── router.py              #   6 个条件路由函数
 │   │   └── workflow.py            #   图组装 + 编译
 │   ├── tools/                     # 工具调用
-│   │   ├── registry.py            #   工具注册中心
+│   │   ├── registry.py            #   工具注册中心 (calculator/datetime/text/web_search)
 │   │   ├── calculator.py          #   安全计算器
 │   │   ├── datetime_tool.py       #   日期时间工具
-│   │   └── text_tool.py           #   文本处理工具
+│   │   ├── text_tool.py           #   文本处理工具
+│   │   └── web_search_tool.py     #   Tavily 联网搜索 (含 SOURCES 来源块提取)
 │   ├── prompts/                   # Prompt 模板
 │   │   └── templates.py           #   6 个 Prompt 模板
 │   ├── services/                  # 服务层
@@ -100,14 +109,17 @@ EasyRAG/
     ├── services/                  # 业务逻辑层
     │   ├── auth_service.py        #   注册/登录/JWT/密码哈希 (bcrypt)
     │   ├── chat_service.py        #   对话 CRUD + 调用 Agent
-    │   └── knowledge_service.py   #   知识库 CRUD + 文件管理
+    │   ├── knowledge_service.py   #   知识库 CRUD + 文件管理
+    │   ├── graph_service.py       #   [2C] 图谱实体/关系抽取 + 子图查询
+    │   └── evaluation_service.py  #   [2D] 检索评估 (HitRate/MRR/avg_score)
     └── server/                    # HTTP 服务层
         ├── main.py                #   新 FastAPI 入口（整合新旧路由）
         ├── seed.py                #   管理员种子脚本
         ├── routers/
         │   ├── auth_router.py     #   POST /auth/register, /auth/login
         │   ├── chat_router.py     #   POST /chat/send, GET /chat/conversations
-        │   └── knowledge_router.py    # CRUD /knowledge/bases
+        │   ├── knowledge_router.py    # CRUD /knowledge/bases + upload + /graph
+        │   └── evaluation_router.py   # [2D] POST/GET /evaluation/runs
         └── utils/
             └── auth_middleware.py #   get_current_user (JWT 依赖注入)
 ```
@@ -228,6 +240,18 @@ knowledge_bases    knowledge_files      │ id (int)       │  │
 │ collection  │    │ chunk_count  │
 │ created_at  │    │ status       │
 └─────────────┘    └──────────────┘
+
+[2C] knowledge_entities    knowledge_relations      [2D] evaluation_runs
+┌──────────────┐      ┌───────────────┐            ┌────────────────┐
+│ id (UUID)    │      │ id (UUID)     │            │ id (UUID)      │
+│ kb_id (FK)   │      │ kb_id (FK)    │            │ name           │
+│ name         │      │ source_entity │            │ kb_id (FK,nul) │
+│ entity_type  │      │ target_entity │            │ top_k          │
+│ description  │      │ relation_type │            │ hit_rate       │
+│ source_chunks│      │ description   │            │ mrr            │
+└──────────────┘      │ weight        │            │ avg_score      │
+                      └───────────────┘            │ metrics_json   │
+                                                   └────────────────┘
 ```
 
 ---

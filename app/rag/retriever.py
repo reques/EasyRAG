@@ -24,6 +24,29 @@ cfg = get_settings()
 DocList = List[Dict[str, Any]]  # [{"content": str, "metadata": dict}]
 
 
+def _unwrap_parent(docs: DocList) -> DocList:
+    """parent_child 策略：检索命中的 child 块替换为 parent 上下文块返回。
+
+    命中的 metadata 含 parent_text 时，用它替换 content（parent 才是完整上下文），
+    相同 parent 去重，避免一个父块被多个 child 命中后重复占上下文窗口。
+    """
+    if not any(d["metadata"].get("parent_text") for d in docs):
+        return docs
+    seen: set = set()
+    out: DocList = []
+    for d in docs:
+        parent = d["metadata"].get("parent_text")
+        if not parent:
+            out.append(d)
+            continue
+        key = hash(parent)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"content": parent, "metadata": d["metadata"]})
+    return out
+
+
 # ── Base ─────────────────────────────────────────────────────────────────────
 
 class FileInfo(dict):
@@ -93,7 +116,7 @@ class MemoryRetriever(BaseRetriever):
                 "metadata": {**self._metas[idx], "score": score},
             })
         logger.info("[MemoryRetriever] query returned %d docs", len(results))
-        return results
+        return _unwrap_parent(results)
 
     def delete_collection(self) -> None:
         self._texts.clear()
@@ -129,7 +152,8 @@ class MilvusRetriever(BaseRetriever):
             )
         except ImportError as exc:
             raise VectorStoreError(
-                "pymilvus is not installed. Run: pip install pymilvus"
+                f"pymilvus import failed (installed but API changed, or wrong "
+                f"Python env): {exc}"
             ) from exc
 
         connections.connect(host=cfg.MILVUS_HOST, port=cfg.MILVUS_PORT)
@@ -201,7 +225,7 @@ class MilvusRetriever(BaseRetriever):
                 "metadata": {"source": hit.entity.get("source", ""), "score": score},
             })
         logger.info("[MilvusRetriever] query returned %d docs", len(docs))
-        return docs
+        return _unwrap_parent(docs)
 
     def delete_collection(self) -> None:
         from pymilvus import utility
@@ -290,7 +314,7 @@ class ChromaRetriever(BaseRetriever):
                 continue
             docs.append({"content": text, "metadata": {**meta, "score": score}})
         logger.info("[ChromaRetriever] query returned %d docs", len(docs))
-        return docs
+        return _unwrap_parent(docs)
 
     def delete_collection(self) -> None:
         import chromadb

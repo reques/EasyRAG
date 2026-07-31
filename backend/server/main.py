@@ -78,10 +78,12 @@ def create_app() -> FastAPI:
     from backend.server.routers.auth_router import router as auth_router
     from backend.server.routers.chat_router import router as chat_router
     from backend.server.routers.knowledge_router import router as kb_router
+    from backend.server.routers.evaluation_router import router as eval_router
 
     application.include_router(auth_router, prefix="/api/v1")
     application.include_router(chat_router, prefix="/api/v1")
     application.include_router(kb_router, prefix="/api/v1")
+    application.include_router(eval_router, prefix="/api/v1")
 
     # =========================================================================
     # 旧路由（保持兼容）— app/api/routes.py + app/api/kb_routes.py

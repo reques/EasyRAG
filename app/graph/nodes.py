@@ -85,7 +85,12 @@ def task_planning(state):
 
 
 def knowledge_retrieval(state):
-    """Node 3: Run RAG retrieval and populate retrieved_docs."""
+    """Node 3: Run RAG retrieval and populate retrieved_docs.
+
+    阶段 2C: GRAPH_ENABLED 时额外做图谱检索，子图文本作为一条特殊 doc 注入
+    （metadata.graph=True），与向量检索结果并列进入 answer_generation 的上下文。
+    图谱查询是尽力而为的旁路：任何失败都不影响向量检索主链路。
+    """
     query = state["query"]
     logger.info("[knowledge_retrieval] query=%r", query[:80])
     try:
@@ -93,11 +98,57 @@ def knowledge_retrieval(state):
         retriever = get_retriever()
         docs = retriever.retrieve(query, top_k=cfg.RETRIEVER_TOP_K)
         logger.info("[knowledge_retrieval] retrieved %d docs", len(docs))
+
+        if cfg.GRAPH_ENABLED:
+            try:
+                import asyncio
+                from backend.storage.postgres.manager import get_session
+                from backend.services.graph_service import query_related, format_subgraph_for_prompt
+
+                async def _graph_query():
+                    async with get_session() as session:
+                        # 跨知识库全局查询（暂未按会话锁定 kb，待多 kb 路由完善）
+                        import uuid as _uuid
+                        from sqlalchemy import select
+                        from backend.storage.postgres.models_knowledge import KnowledgeBase
+                        kb_ids = (await session.execute(select(KnowledgeBase.id))).scalars().all()
+                        subgraphs = []
+                        for kb_id in kb_ids:
+                            subgraphs.extend(await query_related(session, kb_id, query))
+                        return subgraphs
+
+                subgraphs = asyncio.run(_graph_query())
+                if subgraphs:
+                    docs.append({
+                        "content": format_subgraph_for_prompt(subgraphs),
+                        "metadata": {"source": "knowledge_graph", "graph": True, "score": 1.0},
+                    })
+                    logger.info("[knowledge_retrieval] graph: %d entities injected", len(subgraphs))
+            except Exception as exc:
+                logger.warning("[knowledge_retrieval] graph query failed (ignored): %s", exc)
+
         if not docs:
             raise EmptyRetrievalError("No documents matched.")
+        # 知识库引用透出: 从 retrieved_docs 提取去重后的来源,
+        # 与 web_search 的 sources 并列进入最终响应, 供前端渲染引用块。
+        kb_sources: List[Dict[str, str]] = []
+        seen: set = set()
+        for d in docs:
+            meta = d.get("metadata") or {}
+            src = (meta.get("source") or "").strip()
+            if not src or src in seen:
+                continue
+            seen.add(src)
+            kb_sources.append({
+                "title": src,
+                "url": "",
+                "type": "knowledge_graph" if meta.get("graph") else "kb",
+                "score": round(float(meta.get("score", 0.0)), 4),
+            })
         return {
             "retrieved_docs": docs,
             "retrieval_triggered": True,
+            "kb_sources": kb_sources,
             "error_message": None,
             "steps": _append_step(state, "knowledge_retrieval -> " + str(len(docs)) + " docs"),
         }
@@ -132,13 +183,27 @@ def tool_selection(state):
             "steps": _append_step(state, "tool_selection -> " + tool_name),
         }
     q = state["query"].lower()
-    if any(w in q for w in ["calculat", "compute", "sqrt", "pow"]):
+    # web_search first: queries like "今天的新闻" contain both news & date
+    # keywords — searching is the more specific intent.
+    if any(w in q for w in [
+        "search", "news", "latest", "today's", "current events", "look up",
+        "搜索", "检索", "新闻", "最新", "最近", "今天的新闻",
+    ]):
+        return {
+            "tool_name": "web_search",
+            "tool_args": {"query": state["query"]},
+            "steps": _append_step(state, "tool_selection -> inferred web_search"),
+        }
+    if any(w in q for w in ["calculat", "compute", "sqrt", "pow", "计算", "等于多少", "多少"]):
         return {
             "tool_name": "calculator",
             "tool_args": {"expression": state["query"]},
             "steps": _append_step(state, "tool_selection -> inferred calculator"),
         }
-    if any(w in q for w in ["time", "date", "today", "now", "weekday"]):
+    if any(w in q for w in [
+        "time", "date", "today", "now", "weekday",
+        "几点", "时间", "日期", "今天", "现在", "星期", "周几",
+    ]):
         return {
             "tool_name": "datetime_tool",
             "tool_args": {},
@@ -174,12 +239,18 @@ def tool_execution(state):
     try:
         result = registry.invoke(tool_name, **tool_args)
         logger.info("[tool_execution] result=%r", str(result)[:120])
-        return {
+        update: Dict[str, Any] = {
             "tool_result": result,
             "tool_triggered": True,
             "tool_error": None,
             "steps": _append_step(state, "tool_execution -> " + tool_name + " OK"),
         }
+        # web_search embeds a machine-readable sources block; extract it so the
+        # final answer can list references at the bottom.
+        if tool_name == "web_search":
+            from app.tools.web_search_tool import extract_sources
+            update["sources"] = extract_sources(result)
+        return update
     except ToolError as exc:
         logger.error("[tool_execution] ToolError: %s", exc)
         return {
@@ -232,6 +303,21 @@ def answer_generation(state):
             })
         draft = client.chat_sync(messages)
         logger.info("[answer_generation] draft length=%d", len(draft))
+
+        # LLM occasionally returns an empty body with HTTP 200 — retry once
+        # in-place before giving up, so the user doesn't hit a fallback.
+        if not draft.strip():
+            logger.warning("[answer_generation] empty draft, retrying once")
+            draft = client.chat_sync(messages)
+            logger.info("[answer_generation] retry draft length=%d", len(draft))
+
+        if not draft.strip():
+            return {
+                "draft_answer": "",
+                "error_message": "LLM returned an empty response",
+                "steps": _append_step(state, "answer_generation -> EMPTY after retry"),
+            }
+
         return {
             "draft_answer": draft,
             "regeneration_count": regen_count + 1,
@@ -299,7 +385,7 @@ def answer_validation(state):
 def fallback_handler(state):
     """Node 8: Produce a safe fallback response on any failure."""
     query = state.get("query", "")
-    error = state.get("error_message", "An unknown error occurred.")
+    error = state.get("error_message") or "the model could not produce an answer"
     logger.warning("[fallback_handler] error=%r", error)
     fallback_text = FALLBACK_ANSWER.format(query=query, error=error)
     return {

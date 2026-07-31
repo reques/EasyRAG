@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -94,3 +94,79 @@ class KnowledgeFile(Base):
 
     def __repr__(self) -> str:
         return f"<KnowledgeFile {self.filename}>"
+
+
+class KnowledgeEntity(Base):
+    """知识图谱实体（阶段 2C）— 从文档 chunk 中抽取。"""
+
+    __tablename__ = "knowledge_entities"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String(64), default="concept", nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 来源 chunk（逗号分隔的 chunk 标识，用于溯源）
+    source_chunks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class KnowledgeRelation(Base):
+    """知识图谱关系（阶段 2C）— 实体间的有向边。"""
+
+    __tablename__ = "knowledge_relations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+    source_entity: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    target_entity: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    relation_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    weight: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class EvaluationRun(Base):
+    """检索评估运行（阶段 2D）— 一次命名评估的聚合指标 + 逐条明细。
+
+    metrics_json 结构:
+        {"hit_rate": 0.8, "mrr": 0.65, "avg_score": 0.72,
+         "details": [{"query":..., "expected_source":..., "hit_rank":1|None, "top_score":...}]}
+    """
+
+    __tablename__ = "evaluation_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    knowledge_base_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="SET NULL"),
+        nullable=True, index=True
+    )
+    top_k: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    query_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    hit_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    mrr: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    avg_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    metrics_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
