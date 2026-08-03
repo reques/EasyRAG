@@ -66,6 +66,10 @@ class BaseRetriever:
     def delete_collection(self) -> None:
         raise NotImplementedError
 
+    def delete_documents_by_source(self, source: str) -> int:
+        """Delete all chunks belonging to a source file. Returns count deleted."""
+        raise NotImplementedError
+
     def list_documents(self) -> List[FileInfo]:
         """Return per-file statistics: [{source, chunk_count, char_count}]."""
         raise NotImplementedError
@@ -123,6 +127,18 @@ class MemoryRetriever(BaseRetriever):
         self._metas.clear()
         self._vecs.clear()
         logger.info("[MemoryRetriever] collection cleared")
+
+    def delete_documents_by_source(self, source: str) -> int:
+        """Delete all chunks with metadata.source == source."""
+        keep = [(t, m, v) for t, m, v in zip(self._texts, self._metas, self._vecs)
+                if m.get("source") != source]
+        deleted = len(self._texts) - len(keep)
+        self._texts = [k[0] for k in keep]
+        self._metas = [k[1] for k in keep]
+        self._vecs = [k[2] for k in keep]
+        if deleted:
+            logger.info("[MemoryRetriever] deleted %d docs for source '%s'", deleted, source)
+        return deleted
 
     def list_documents(self) -> List["FileInfo"]:
         from collections import defaultdict
@@ -232,6 +248,23 @@ class MilvusRetriever(BaseRetriever):
         utility.drop_collection(cfg.MILVUS_COLLECTION)
         logger.info("[MilvusRetriever] collection '%s' dropped", cfg.MILVUS_COLLECTION)
 
+    def delete_documents_by_source(self, source: str) -> int:
+        """Delete all chunks with metadata.source == source."""
+        if not self._col:
+            return 0
+        # Escape single quotes in source for Milvus expr
+        safe = source.replace("'", "''")
+        expr = f"source == '{safe}'"
+        # Count first
+        res = self._col.query(expr=expr, output_fields=["id"])
+        count = len(res)
+        if count == 0:
+            return 0
+        self._col.delete(expr)
+        self._col.flush()
+        logger.info("[MilvusRetriever] deleted %d docs for source '%s'", count, source)
+        return count
+
     def list_documents(self) -> List["FileInfo"]:
         """Return per-file statistics by scanning all stored entities."""
         from collections import defaultdict
@@ -321,6 +354,16 @@ class ChromaRetriever(BaseRetriever):
         client = chromadb.PersistentClient(path=cfg.CHROMA_PERSIST_DIR)
         client.delete_collection(cfg.CHROMA_COLLECTION)
         logger.info("[ChromaRetriever] collection '%s' deleted", cfg.CHROMA_COLLECTION)
+
+    def delete_documents_by_source(self, source: str) -> int:
+        """Delete all chunks with metadata.source == source."""
+        res = self._col.get(where={"source": source})
+        ids = res.get("ids", [])
+        if not ids:
+            return 0
+        self._col.delete(ids=ids)
+        logger.info("[ChromaRetriever] deleted %d docs for source '%s'", len(ids), source)
+        return len(ids)
 
 
 # ── Singleton factory ─────────────────────────────────────────────────────────

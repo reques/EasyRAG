@@ -1,6 +1,6 @@
 # EasyRAG 项目架构总览
 
-> 最后更新：2026-07-31 | 当前阶段：阶段 1+2 完成 | 前端已重构为 Yuxi 设计语言
+> 最后更新：2026-08-03 | 当前阶段：阶段 1+2 完成，前端已重构为 Yuxi 设计语言，新增文件预览
 
 ---
 
@@ -198,6 +198,10 @@ EasyRAG/
 | POST | `/api/v1/knowledge/bases` | JWT |
 | GET | `/api/v1/knowledge/bases` | JWT |
 | GET | `/api/v1/knowledge/bases/{id}/files` | JWT |
+| GET | `/api/v1/knowledge/bases/{id}/files/{fid}/preview` | JWT |
+| GET | `/api/v1/knowledge/bases/{id}/files/{fid}/raw` | JWT |
+| DELETE | `/api/v1/knowledge/bases/{id}/files/{fid}` | JWT |
+| GET | `/api/v1/knowledge/bases/{id}/graph` | JWT |
 
 ### 系统 + Agent + RAG (旧接口，保持兼容)
 | 方法 | 路径 | 说明 |

@@ -74,6 +74,9 @@ class KnowledgeFile(Base):
     minio_bucket: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     minio_object: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
+    # 提取的纯文本内容（预览兜底；MinIO 不可用时直接读此列）
+    text_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # 索引统计
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

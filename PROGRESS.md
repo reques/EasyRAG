@@ -317,3 +317,24 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 5. 前端 ChatView 新增「参考来源」引用块：知识库/图谱/网页三类标签 + 有序列表，web 来源可点击新窗口打开
 6. 移除答案正文内嵌的 `_render_sources` 文本（避免与前端引用块重复），删除无用函数
 7. 验证：后端 py_compile 通过；`npm run build` 通过；Edge headless 截图 + vision 核对气泡区分/排版/引用块三项全部正常
+
+#### 2026-08-03 — 知识库文件预览
+
+**变更内容：**
+1. 上传流程增加 MinIO 存储：`upload_to_kb` 在登记文件记录后将原始字节 `put_object` 到 MinIO（路径 `kb/{kb_id}/{file_id}/{filename}`），写入 `minio_bucket`/`minio_object` 字段；MinIO 失败不阻塞主索引链路
+2. 新增 `GET /api/v1/knowledge/bases/{kb_id}/files/{file_id}/preview` — 按文件类型返回文本/图片预览：
+   - `content_type="text"`：txt/md/docx，复用 `chunker.extract_text` 统一提取（自动编码检测 utf-8/gbk/latin-1）
+   - `content_type="pdf_text"`：PDF 提取文本（pypdf + 扫描版 OCR 兜底）
+   - `content_type="image"`：图片，前端走 `/raw` 端点获取二进制
+3. 新增 `GET /api/v1/knowledge/bases/{kb_id}/files/{file_id}/raw` — 返回原始文件二进制，带正确 Content-Type（图片 `image/*`，txt `text/plain; charset=utf-8`）
+4. 前端 KnowledgeView：文件列表行可点击，弹出 720px 宽预览 modal
+   - 图片：Blob URL 渲染 `<img>`（带 Authorization header 的 fetch）
+   - 文本文件：等宽字体 `<pre>` 展示，PDF 额外标注「PDF 文本提取」badge
+5. CSS：新增 `.file-row` 可点击样式（hover 主色高亮）、`.preview-modal` 弹性布局、`.preview-text` 代码块风格
+6. **2026-08-03 修复** — KnowledgeFile 增加 `text_content` 列（TEXT），上传时调用 `extract_text` 存全文；预览端点优先读此列再回退 MinIO；无内容时提示「旧版本上传的文件请重新上传」
+7. **2026-08-03 修复** — 只有点击文件名才弹出预览（`@click.stop` 在 `.file-name-cell`），整行不再触发；文件名 hover 显示主色下划线
+8. **2026-08-03 修复** — PDF/图片预览改为原始格式：PDF 用 `<iframe>` 浏览器原生 PDF viewer 渲染（`raw` 端点返回 `application/pdf`，不强制 attachment），图片用 `<img>` Blob URL；txt/md/docx 保持文本提取预览
+9. **2026-08-03 新增** — 文件删除功能：
+   - 后端 `DELETE /api/v1/knowledge/bases/{kb_id}/files/{file_id}`：三层删除（向量索引按 source 匹配删除 → MinIO `remove_object` → PostgreSQL 记录删除），任一步失败不阻塞后续
+   - retriever 新增 `delete_documents_by_source`：Milvus `delete(expr)` + Memory 数组过滤 + Chroma `where` 条件删除
+   - 前端文件列表行尾加删除图标按钮（Trash2），点击弹出确认 modal，二次确认后调用 API 并刷新列表

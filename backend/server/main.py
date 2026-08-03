@@ -27,9 +27,18 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     # 初始化数据库表（开发用，生产用 Alembic 迁移）
     try:
-        from backend.storage.postgres.manager import init_db
+        from backend.storage.postgres.manager import init_db, get_engine
         await init_db()
         logger.info("[lifespan] database tables ensured")
+
+        # 增量列迁移（开发阶段快速迭代；生产用 Alembic）
+        from sqlalchemy import text
+        engine = await get_engine()
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "ALTER TABLE knowledge_files ADD COLUMN IF NOT EXISTS text_content TEXT"
+            ))
+        logger.info("[lifespan] incremental migrations applied")
     except Exception as exc:
         logger.warning("[lifespan] database init skipped: %s", exc)
 
