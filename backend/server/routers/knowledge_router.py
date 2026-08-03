@@ -136,6 +136,19 @@ class UploadResponse(BaseModel):
     graph: Optional[dict] = None   # GRAPH_ENABLED 时: {"entities": n, "relations": m}
 
 
+class FilePreviewResponse(BaseModel):
+    file_id: str
+    filename: str
+    file_type: str
+    content_type: str          # "text" | "image" | "pdf_text"
+    text_content: Optional[str] = None
+    # 前端根据 content_type 决定展示方式
+
+
+class FileContentResponse(BaseModel):
+    """二进制文件内容（图片等）直接流式返回，不走 JSON。"""
+
+
 ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
 
@@ -239,6 +252,27 @@ async def upload_to_kb(
         )
         await session.commit()
 
+        # 存入 MinIO 以便后续预览
+        minio_bucket = cfg.MINIO_BUCKET
+        minio_object = f"kb/{kb.id}/{record.id}/{file.filename}"
+        try:
+            from backend.storage.minio.client import get_minio_client
+            import io as std_io
+            client = get_minio_client()
+            client.put_object(
+                bucket_name=minio_bucket,
+                object_name=minio_object,
+                data=std_io.BytesIO(raw),
+                length=len(raw),
+                content_type=file.content_type or "application/octet-stream",
+            )
+            record.minio_bucket = minio_bucket
+            record.minio_object = minio_object
+            await session.flush()
+            logger.info("[knowledge/upload] stored in MinIO: %s/%s", minio_bucket, minio_object)
+        except Exception as exc:
+            logger.warning("[knowledge/upload] MinIO store failed (preview unavailable): %s", exc)
+
         try:
             from app.rag.chunker import parse_and_chunk
             from app.rag.retriever import get_retriever
@@ -249,6 +283,14 @@ async def upload_to_kb(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="File parsed but produced no text chunks.",
                 )
+
+            # 存储全文用于预览（图片跳过——图片的"全文"是 OCR 结果，已在 chunker 内处理）
+            try:
+                from app.rag.chunker import extract_text as _extract_full
+                full_text = _extract_full(raw, file.filename)
+                record.text_content = full_text
+            except Exception as exc:
+                logger.warning("[knowledge/upload] preview text store failed: %s", exc)
 
             texts = [c[0] for c in chunks]
             metas = [c[1] for c in chunks]
@@ -289,3 +331,189 @@ async def upload_to_kb(
             await update_file_status(session, record.id, "failed")
             await session.commit()
             raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}")
+
+
+# ── 文件预览端点 ─────────────────────────────────────────────────────────────
+
+@router.get("/bases/{kb_id}/files/{file_id}/preview", response_model=FilePreviewResponse)
+async def preview_file(
+    kb_id: str,
+    file_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """预览文件内容 — 按文件类型提取文本或返回图片信息。
+
+    content_type 取值:
+      - "text"      : txt/md/docx 等文本格式，text_content 为完整文本
+      - "pdf_text"  : PDF 提取文本，text_content 为逐页文本
+      - "image"     : 图片文件，text_content 为空（前端直接读取 /raw 端点）
+    """
+    from backend.repositories.knowledge_repository import KnowledgeFileRepository
+
+    async with get_session() as session:
+        kb_repo = KnowledgeBaseRepository(session)
+        kb = await kb_repo.get_by_id(uuid.UUID(kb_id))
+        if not kb or kb.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+        file_repo = KnowledgeFileRepository(session)
+        f = await file_repo.get_by_id(uuid.UUID(file_id))
+        if not f or f.knowledge_base_id != kb.id:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        file_type = f.file_type.lower()
+
+        # ── 图片：前端应请求 /raw 端点获取二进制，这里仅返回元信息 ──
+        if file_type in ("png", "jpg", "jpeg", "bmp", "webp"):
+            return FilePreviewResponse(
+                file_id=str(f.id),
+                filename=f.filename,
+                file_type=file_type,
+                content_type="image",
+            )
+
+        # ── 文本格式：优先读 text_content 列（最快），否则从 MinIO 提取 ──
+        text = None
+        if f.text_content:
+            text = f.text_content
+        elif f.minio_bucket and f.minio_object:
+            try:
+                from backend.storage.minio.client import get_minio_client
+                client = get_minio_client()
+                response = client.get_object(f.minio_bucket, f.minio_object)
+                raw = response.read()
+                response.close()
+                response.release_conn()
+                from app.rag.chunker import extract_text
+                text = extract_text(raw, f.filename)
+            except Exception as exc:
+                logger.warning("[preview] MinIO read failed: %s", exc)
+
+        if text is None:
+            raise HTTPException(
+                status_code=404,
+                detail="此文件暂无可预览内容。旧版本上传的文件请重新上传以启用预览。",
+            )
+
+        content_type = "pdf_text" if file_type == "pdf" else "text"
+
+        return FilePreviewResponse(
+            file_id=str(f.id),
+            filename=f.filename,
+            file_type=file_type,
+            content_type=content_type,
+            text_content=text,
+        )
+
+
+@router.get("/bases/{kb_id}/files/{file_id}/raw")
+async def raw_file(
+    kb_id: str,
+    file_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """返回图片文件的原始二进制数据（带正确的 Content-Type）。
+
+    非图片文件也支持，但主要用于前端 <img> 直接引用。
+    """
+    from fastapi.responses import Response
+    from backend.repositories.knowledge_repository import KnowledgeFileRepository
+
+    async with get_session() as session:
+        kb_repo = KnowledgeBaseRepository(session)
+        kb = await kb_repo.get_by_id(uuid.UUID(kb_id))
+        if not kb or kb.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+        file_repo = KnowledgeFileRepository(session)
+        f = await file_repo.get_by_id(uuid.UUID(file_id))
+        if not f or f.knowledge_base_id != kb.id:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        if not f.minio_bucket or not f.minio_object:
+            raise HTTPException(status_code=404, detail="File content not available")
+
+        try:
+            from backend.storage.minio.client import get_minio_client
+            client = get_minio_client()
+            resp = client.get_object(f.minio_bucket, f.minio_object)
+            raw = resp.read()
+            content_type = resp.headers.get("Content-Type", "application/octet-stream")
+            resp.close()
+            resp.release_conn()
+        except Exception as exc:
+            logger.error("[raw] MinIO read failed: %s", exc)
+            raise HTTPException(status_code=404, detail="File not found in storage")
+
+        _mime_map = {
+            "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "bmp": "image/bmp", "webp": "image/webp", "txt": "text/plain; charset=utf-8",
+            "md": "text/plain; charset=utf-8", "pdf": "application/pdf",
+        }
+        mime = _mime_map.get(f.file_type.lower(), content_type)
+
+        # PDF 需要 inline 以便 iframe 渲染，不强制 download
+        from urllib.parse import quote
+        headers = {}
+        if f.file_type.lower() != "pdf":
+            # 非 PDF 显式设置 attachment 防止意外导航（但前端用 blob，这里仅作兜底）
+            safe_name = quote(f.filename.encode("utf-8"))
+            headers["Content-Disposition"] = f'attachment; filename="{safe_name}"'
+
+        return Response(content=raw, media_type=mime, headers=headers)
+
+
+# ── 文件删除端点 ─────────────────────────────────────────────────────────────
+
+@router.delete("/bases/{kb_id}/files/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_file(
+    kb_id: str,
+    file_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """删除知识库文件：向量索引 + MinIO 对象 + PostgreSQL 记录。
+
+    注意：向量删除按 metadata.source 匹配文件名，若同名文件多次上传会全部清除。
+    """
+    from backend.repositories.knowledge_repository import KnowledgeFileRepository
+
+    async with get_session() as session:
+        kb_repo = KnowledgeBaseRepository(session)
+        kb = await kb_repo.get_by_id(uuid.UUID(kb_id))
+        if not kb or kb.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+        file_repo = KnowledgeFileRepository(session)
+        f = await file_repo.get_by_id(uuid.UUID(file_id))
+        if not f or f.knowledge_base_id != kb.id:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        filename = f.filename
+
+        # 1. 删除向量索引（按 source 文件名匹配）
+        try:
+            from app.rag.retriever import get_retriever
+            n = get_retriever().delete_documents_by_source(filename)
+            logger.info("[knowledge/delete] removed %d vector chunks for '%s'", n, filename)
+        except NotImplementedError:
+            logger.warning("[knowledge/delete] vector backend does not support per-file delete")
+        except Exception as exc:
+            logger.error("[knowledge/delete] vector delete failed: %s", exc)
+            # 不阻塞——继续删 MinIO 和 DB
+
+        # 2. 删除 MinIO 对象
+        if f.minio_bucket and f.minio_object:
+            try:
+                from backend.storage.minio.client import get_minio_client
+                client = get_minio_client()
+                client.remove_object(f.minio_bucket, f.minio_object)
+                logger.info("[knowledge/delete] removed MinIO object: %s/%s", f.minio_bucket, f.minio_object)
+            except Exception as exc:
+                logger.warning("[knowledge/delete] MinIO delete failed: %s", exc)
+
+        # 3. 删除 PostgreSQL 记录
+        await file_repo.delete(f)
+        await session.commit()
+
+        logger.info("[knowledge/delete] file '%s' deleted from kb '%s'", filename, kb.name)
+        return None

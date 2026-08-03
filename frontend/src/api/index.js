@@ -35,4 +35,10 @@ export default {
     http.post(url, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }).then((r) => r.data),
+  // 获取二进制数据（PDF/图片），返回 { data: Blob, contentType: string }
+  getBlob: (url) =>
+    http.get(url, { responseType: 'blob' }).then((r) => ({
+      data: r.data,
+      contentType: r.headers['content-type'] || 'application/octet-stream',
+    })),
 }
