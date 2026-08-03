@@ -176,16 +176,29 @@ class MilvusRetriever(BaseRetriever):
         logger.info("[MilvusRetriever] connected to %s:%s", cfg.MILVUS_HOST, cfg.MILVUS_PORT)
 
         col_name = cfg.MILVUS_COLLECTION
+        desired_fields = {"id", "content", "source", "knowledge_base_id", "vector"}
+        if utility.has_collection(col_name):
+            existing = Collection(col_name)
+            existing_names = {f.name for f in existing.schema.fields}
+            if not desired_fields.issubset(existing_names):
+                # schema 不含 knowledge_base_id（旧版 4 字段）→ 重建 collection。
+                # 旧向量无 kb_id 无法回填,由调用方从 PostgreSQL text_content 重建索引。
+                logger.warning(
+                    "[MilvusRetriever] collection '%s' schema outdated (%s), dropping to rebuild with knowledge_base_id",
+                    col_name, sorted(existing_names),
+                )
+                utility.drop_collection(col_name)
         if not utility.has_collection(col_name):
             fields = [
-                FieldSchema(name="id",      dtype=DataType.VARCHAR, max_length=64, is_primary=True),
-                FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=65535),
-                FieldSchema(name="source",  dtype=DataType.VARCHAR, max_length=512),
-                FieldSchema(name="vector",  dtype=DataType.FLOAT_VECTOR, dim=cfg.EMBEDDING_DIMENSION),
+                FieldSchema(name="id",                dtype=DataType.VARCHAR, max_length=64, is_primary=True),
+                FieldSchema(name="content",           dtype=DataType.VARCHAR, max_length=65535),
+                FieldSchema(name="source",            dtype=DataType.VARCHAR, max_length=512),
+                FieldSchema(name="knowledge_base_id", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="vector",            dtype=DataType.FLOAT_VECTOR, dim=cfg.EMBEDDING_DIMENSION),
             ]
             schema = CollectionSchema(fields, description="RAG document store")
             Collection(name=col_name, schema=schema)
-            logger.info("[MilvusRetriever] collection '%s' created", col_name)
+            logger.info("[MilvusRetriever] collection '%s' created (with knowledge_base_id)", col_name)
 
         self._col = Collection(col_name)
         # Ensure index exists
@@ -213,7 +226,8 @@ class MilvusRetriever(BaseRetriever):
 
         ids = [str(uuid.uuid4())[:63] for _ in texts]
         sources = [m.get("source", "") for m in metas]
-        entities = [ids, texts, sources, normed]
+        kb_ids = [str(m.get("knowledge_base_id", "") or "") for m in metas]
+        entities = [ids, texts, sources, kb_ids, normed]
         self._col.insert(entities)
         self._col.flush()
         logger.info("[MilvusRetriever] inserted %d docs", len(texts))
@@ -229,7 +243,7 @@ class MilvusRetriever(BaseRetriever):
             anns_field="vector",
             param={"metric_type": self._METRIC, "params": {"nprobe": 16}},
             limit=top_k,
-            output_fields=["content", "source"],
+            output_fields=["content", "source", "knowledge_base_id"],
         )
         docs: DocList = []
         for hit in results[0]:
@@ -238,7 +252,11 @@ class MilvusRetriever(BaseRetriever):
                 continue
             docs.append({
                 "content": hit.entity.get("content", ""),
-                "metadata": {"source": hit.entity.get("source", ""), "score": score},
+                "metadata": {
+                    "source": hit.entity.get("source", ""),
+                    "knowledge_base_id": hit.entity.get("knowledge_base_id", "") or "",
+                    "score": score,
+                },
             })
         logger.info("[MilvusRetriever] query returned %d docs", len(docs))
         return _unwrap_parent(docs)

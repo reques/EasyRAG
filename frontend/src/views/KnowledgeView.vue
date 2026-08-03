@@ -173,9 +173,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { LibraryBig, Plus, FolderOpen, Upload, FileText, Trash2 } from 'lucide-vue-next'
 import api from '../api'
+
+const route = useRoute()
 
 const kbList = ref([])
 const activeKb = ref(null)
@@ -336,5 +339,33 @@ async function doDelete() {
   }
 }
 
-onMounted(loadKbs)
+// 根据路由 query (?kb=..&file=..) 选中知识库并打开文件预览 — 对话页引用跳转入口
+async function applyRouteQuery() {
+  const kbId = route.query.kb
+  const fileId = route.query.file
+  if (!kbId) return
+  if (!kbList.value.length) {
+    await loadKbs()
+  }
+  const kb = kbList.value.find((k) => k.id === kbId)
+  if (!kb) return
+  // 若已是当前 kb 且文件已加载, 直接复用; 否则重新选中加载文件列表
+  if (activeKb.value?.id !== kb.id) {
+    await selectKb(kb)
+  }
+  if (fileId) {
+    const f = fileList.value.find((x) => x.id === fileId)
+    if (f) openPreview(f)
+  }
+}
+
+onMounted(async () => {
+  await loadKbs()
+  await applyRouteQuery()
+})
+
+// 已在知识库页时, 从对话页再次点击引用(query 变化)也要响应
+watch(() => route.query, () => {
+  if (route.path === '/knowledge') applyRouteQuery()
+})
 </script>

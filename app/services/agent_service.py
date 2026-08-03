@@ -98,6 +98,51 @@ class AgentService:
         logger.info("[agent_service] done in %.2fs", elapsed)
         return self._build_response(final, elapsed)
 
+    # ── 流式路径 (SSE) ────────────────────────────────────────────────────
+    def prepare_context(
+        self,
+        query: str,
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        """同步检索 + 构建生成消息, 为流式生成准备上下文。
+
+        复用 knowledge_retrieval 节点做向量检索(含 file_id 反查), 再按
+        answer_generation 的方式拼装 messages。返回 dict 含:
+          messages  — 可直接喂给 chat_stream 的对话序列
+          sources   — 合并后的引用列表(kb + web), 元素含 file_id/knowledge_base_id
+          intent    — 固定 "knowledge_qa"(流式路径不做完整意图识别)
+        这是同步阻塞调用, 在 async 端点里需用 run_in_executor 包裹。
+        """
+        from app.graph.nodes import knowledge_retrieval
+        from app.prompts.templates import ANSWER_NO_CONTEXT, ANSWER_WITH_CONTEXT
+
+        history = history or []
+        state: Dict[str, Any] = {"query": query, "steps": []}
+        state.update(knowledge_retrieval(state))
+        docs = state.get("retrieved_docs") or []
+
+        sources = list(state.get("kb_sources") or [])
+        sources.extend(state.get("sources") or [])
+
+        messages = [{"role": t["role"], "content": t["content"]} for t in history]
+        if docs:
+            context = "\n\n".join(
+                "[" + str(i + 1) + "] " + d["content"] for i, d in enumerate(docs)
+            )
+            messages.append({
+                "role": "user",
+                "content": ANSWER_WITH_CONTEXT.format(
+                    query=query, context=context, tool_result="N/A"
+                ),
+            })
+        else:
+            messages.append({
+                "role": "user",
+                "content": ANSWER_NO_CONTEXT.format(query=query, tool_result="N/A"),
+            })
+
+        return {"messages": messages, "sources": sources, "intent": "knowledge_qa"}
+
     @staticmethod
     def _build_response(state: Dict[str, Any], elapsed: float) -> Dict[str, Any]:
         docs = state.get("retrieved_docs") or []

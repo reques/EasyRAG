@@ -84,6 +84,94 @@ def task_planning(state):
         }
 
 
+async def lookup_file_ids_async(
+    pairs: List[tuple],
+) -> Dict[tuple, str]:
+    """async 版 file_id 反查 — 在 FastAPI 协程里直接 await(不走 executor)。
+
+    pairs 为 [(knowledge_base_id, source), ...]。返回 {(kb_id, source): file_id}。
+    供 SSE 流式端点在主协程调用, 避免 executor 线程里 asyncio.run 与
+    主线程 async engine 的事件循环冲突。
+    """
+    pairs = [(kb, src) for kb, src in pairs if kb and src]
+    if not pairs:
+        return {}
+    try:
+        import uuid as _uuid
+        from sqlalchemy import select
+        from backend.storage.postgres.manager import get_session
+        from backend.storage.postgres.models_knowledge import KnowledgeFile
+
+        kb_uuids = {_uuid.UUID(kb) for kb, _ in pairs}
+        out: Dict[tuple, str] = {}
+        async with get_session() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        KnowledgeFile.id,
+                        KnowledgeFile.knowledge_base_id,
+                        KnowledgeFile.filename,
+                    ).where(KnowledgeFile.knowledge_base_id.in_(kb_uuids))
+                )
+            ).all()
+            for fid, kb_id, filename in rows:
+                key = (str(kb_id), filename)
+                if key in pairs:
+                    out[key] = str(fid)
+        return out
+    except Exception as exc:
+        logger.warning("[lookup_file_ids_async] failed: %s", exc)
+        return {}
+
+
+def _lookup_file_ids(docs: List[Dict[str, Any]]) -> Dict[tuple, str]:
+    """按 (knowledge_base_id, source) 批量反查 knowledge_files.id。
+
+    检索结果只带 kb_id + 文件名, 前端要跳转到文档详情需要 file_id。
+    一次性查出所有候选 (kb_id, source) 组合, 返回 {(kb_id, source): file_id}。
+    失败时返回空 dict — 引用块退化为纯文本, 不影响主链路。
+    """
+    pairs = {
+        ((d.get("metadata") or {}).get("knowledge_base_id") or "",
+         (d.get("metadata") or {}).get("source") or "")
+        for d in docs
+    }
+    pairs = {(kb, src) for kb, src in pairs if kb and src}
+    if not pairs:
+        return {}
+
+    async def _query() -> Dict[tuple, str]:
+        import uuid as _uuid
+        from sqlalchemy import select
+        from backend.storage.postgres.manager import get_session
+        from backend.storage.postgres.models_knowledge import KnowledgeFile
+
+        kb_uuids = {_uuid.UUID(kb) for kb, _ in pairs}
+        out: Dict[tuple, str] = {}
+        async with get_session() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        KnowledgeFile.id,
+                        KnowledgeFile.knowledge_base_id,
+                        KnowledgeFile.filename,
+                    ).where(KnowledgeFile.knowledge_base_id.in_(kb_uuids))
+                )
+            ).all()
+            for fid, kb_id, filename in rows:
+                key = (str(kb_id), filename)
+                if key in pairs:
+                    out[key] = str(fid)
+        return out
+
+    try:
+        import asyncio
+        return asyncio.run(_query())
+    except Exception as exc:
+        logger.warning("[_lookup_file_ids] failed (refs without file_id): %s", exc)
+        return {}
+
+
 def knowledge_retrieval(state):
     """Node 3: Run RAG retrieval and populate retrieved_docs.
 
@@ -131,7 +219,10 @@ def knowledge_retrieval(state):
             raise EmptyRetrievalError("No documents matched.")
         # 知识库引用透出: 从 retrieved_docs 提取去重后的来源,
         # 与 web_search 的 sources 并列进入最终响应, 供前端渲染引用块。
-        kb_sources: List[Dict[str, str]] = []
+        # 方案 B: 检索结果已带 knowledge_base_id, 据此反查 knowledge_files
+        # 拿到 file_id, 使前端引用可点击跳转到具体文档详情。
+        file_id_map = _lookup_file_ids(docs)
+        kb_sources: List[Dict[str, Any]] = []
         seen: set = set()
         for d in docs:
             meta = d.get("metadata") or {}
@@ -139,12 +230,16 @@ def knowledge_retrieval(state):
             if not src or src in seen:
                 continue
             seen.add(src)
-            kb_sources.append({
+            kb_id = (meta.get("knowledge_base_id") or "").strip()
+            entry: Dict[str, Any] = {
                 "title": src,
                 "url": "",
                 "type": "knowledge_graph" if meta.get("graph") else "kb",
                 "score": round(float(meta.get("score", 0.0)), 4),
-            })
+                "knowledge_base_id": kb_id,
+                "file_id": file_id_map.get((kb_id, src), ""),
+            }
+            kb_sources.append(entry)
         return {
             "retrieved_docs": docs,
             "retrieval_triggered": True,

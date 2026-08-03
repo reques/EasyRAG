@@ -338,3 +338,28 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
    - 后端 `DELETE /api/v1/knowledge/bases/{kb_id}/files/{file_id}`：三层删除（向量索引按 source 匹配删除 → MinIO `remove_object` → PostgreSQL 记录删除），任一步失败不阻塞后续
    - retriever 新增 `delete_documents_by_source`：Milvus `delete(expr)` + Memory 数组过滤 + Chroma `where` 条件删除
    - 前端文件列表行尾加删除图标按钮（Trash2），点击弹出确认 modal，二次确认后调用 API 并刷新列表
+
+#### 2026-08-03 — 知识库引用跳转 + SSE 流式输出
+
+**背景：** 对话回复需要（a）底部引用可点击跳转到具体知识库文档详情；（b）思考回复时逐 token 流式输出而非一次性返回。
+
+**Milvus schema 升级（方案 B，彻底改 schema）：**
+1. `MilvusRetriever` collection 新增 `knowledge_base_id` 字段（VARCHAR 64）；`__init__` 检测到旧版 4 字段 schema 时自动 drop 并重建 5 字段 collection
+2. `add_documents` 写入 kb_id（取自 metadata.knowledge_base_id，上传链路本已 setdefault 注入）；`retrieve` output_fields 带回 kb_id 并填入返回 metadata
+3. 旧数据迁移脚本 `scripts/migrate_milvus_kb_id.py`：触发 schema 重建后，遍历 PostgreSQL `knowledge_files`（status=completed 且有 text_content），按当前 CHUNK_STRATEGY 重新分块并显式写入 kb_id 重建索引；188 个 chunk 全部回填 kb_id 成功
+
+**引用透出 file_id：**
+4. `app/graph/nodes.py` 新增 `_lookup_file_ids`（同步版）+ `lookup_file_ids_async`（async 版）：按 (knowledge_base_id, source) 批量反查 `knowledge_files.id`，`knowledge_retrieval` 节点给每条 kb_source 注入 `knowledge_base_id` + `file_id`
+
+**SSE 流式输出：**
+5. `LLMClient.chat_stream` — async generator，`stream=True` 逐 token yield 增量文本
+6. `AgentService.prepare_context` — 复用 `knowledge_retrieval` 做检索 + 按 answer_generation 方式拼装 messages，返回 {messages, sources, intent}；同步阻塞，供 executor 调用
+7. 后端新增 `POST /api/v1/chat/stream`（SSE）：事件序列 `conversation_id` → 多个 `delta` → `done`(含 sources/intent/elapsed)；检索走 `run_in_executor`，生成走 `chat_stream`，最终答案 + 引用落库与 `/chat/send` 一致
+8. 前端 `api.streamChat` — fetch + ReadableStream 解析 text/event-stream（axios 不支持流式）；ChatView 改为流式渲染：先插空 assistant 消息，delta 逐步追加，「思考中…」仅在等待首个 token 时显示
+9. 前端引用跳转：kb/图谱类型引用且有 file_id 时渲染为可点击链接，`goToSource` 路由跳转 `/knowledge?kb=..&file=..`；KnowledgeView 新增 `applyRouteQuery` 按 query 选中知识库并自动打开文件预览，watch route.query 支持页内再次点击
+
+**修复的既有 bug：**
+10. `LLMClient._call_kwargs` 用 `dict(kw=..., **extra)` 同名键报 `TypeError: multiple values`（标题生成传 temperature/max_tokens 时触发）→ 改为默认值做底 `merged.update(extra)` 覆盖
+11. SSE 端点 executor 线程里 `asyncio.run()` 与主线程 async engine 事件循环冲突（`Future attached to a different loop`）导致 file_id 反查静默失败 → 拆出 `lookup_file_ids_async` 在端点主协程 await 回填
+
+**验证：** `scripts/verify_chat_stream.py` 端到端通过 — 191 个 delta 事件流式到达，done 正常，sources 含正确 `file_id`（4c364425）+ `knowledge_base_id`（73a7f00f）；`vite build` 通过；后端无事件循环报错。
