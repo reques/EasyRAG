@@ -35,9 +35,19 @@
     <div v-if="showUpload" class="modal-overlay" @click.self="closeUpload">
       <div class="modal">
         <h3>上传文档到「{{ activeKb?.name }}」</h3>
-        <label class="file-label">
+        <label
+          class="file-label"
+          :class="{ 'file-label--dragover': dragOver, 'file-label--has-file': uploadFile }"
+          @dragover.prevent="onDragOver"
+          @dragleave.prevent="onDragLeave"
+          @drop.prevent="onDrop"
+        >
           <input type="file" @change="onFileSelect" :disabled="uploading" accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.bmp,.webp" />
-          <span v-if="!uploadFile">点击选择文件 (.txt .md .pdf .docx 图片)</span>
+          <span v-if="!uploadFile" class="file-label-hint">
+            <UploadCloud :size="20" class="file-label-icon" />
+            {{ dragOver ? '松开以上传' : '点击选择或拖拽文件到此处' }}
+            <em>.txt .md .pdf .docx 图片</em>
+          </span>
           <span v-else>📄 {{ uploadFile.name }}<span class="file-size-hint">（{{ formatSize(uploadFile.size) }}）</span></span>
         </label>
 
@@ -193,7 +203,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { LibraryBig, Plus, FolderOpen, Upload, FileText, Trash2 } from 'lucide-vue-next'
+import { LibraryBig, Plus, FolderOpen, Upload, UploadCloud, FileText, Trash2 } from 'lucide-vue-next'
 import api from '../api'
 
 const route = useRoute()
@@ -253,6 +263,7 @@ function closeUpload() {
   stopPolling()
   showUpload.value = false
   uploadMsg.value = ''
+  dragOver.value = false
   if (!uploading.value) {
     uploadPhase.value = 'idle'
     transferProgress.value = 0
@@ -315,6 +326,36 @@ async function selectKb(kb) {
 
 function onFileSelect(e) {
   uploadFile.value = e.target.files[0] || null
+  uploadMsg.value = ''
+}
+
+// ── 拖拽上传 ────────────────────────────────────────────────────────
+const dragOver = ref(false)
+// 与 input accept 和后端 ALLOWED_EXTENSIONS 保持一致
+const ACCEPT_EXTS = ['.txt', '.md', '.pdf', '.docx', '.png', '.jpg', '.jpeg', '.bmp', '.webp']
+
+function onDragOver(e) {
+  if (uploading.value) return
+  dragOver.value = true
+  e.dataTransfer.dropEffect = 'copy'
+}
+
+function onDragLeave() {
+  dragOver.value = false
+}
+
+function onDrop(e) {
+  dragOver.value = false
+  if (uploading.value) return
+  const file = e.dataTransfer?.files?.[0]
+  if (!file) return
+  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
+  if (!ACCEPT_EXTS.includes(ext)) {
+    uploadMsg.value = `❌ 不支持的文件类型 ${ext}，支持 ${ACCEPT_EXTS.join(' ')}`
+    uploadOk.value = false
+    return
+  }
+  uploadFile.value = file
   uploadMsg.value = ''
 }
 
