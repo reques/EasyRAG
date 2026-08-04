@@ -363,3 +363,58 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 11. SSE 端点 executor 线程里 `asyncio.run()` 与主线程 async engine 事件循环冲突（`Future attached to a different loop`）导致 file_id 反查静默失败 → 拆出 `lookup_file_ids_async` 在端点主协程 await 回填
 
 **验证：** `scripts/verify_chat_stream.py` 端到端通过 — 191 个 delta 事件流式到达，done 正常，sources 含正确 `file_id`（4c364425）+ `knowledge_base_id`（73a7f00f）；`vite build` 通过；后端无事件循环报错。
+
+#### 2026-08-04 — 文件上传进度条（两阶段：传输 + 索引）
+
+**背景：** 大文件上传时前端只有一个「上传中…」转圈，真正的耗时在后端解析/embedding/图谱阶段（embedding 是大头），用户无法判断是卡住还是在推进。
+
+**方案 B（选中）：** HTTP 传输真实进度 + 后端索引进度轮询。
+
+**后端：**
+1. `knowledge_files` 表新增 `progress`（Integer 0-100，默认 0）+ `error_message`（Text，nullable），`ALTER TABLE ... IF NOT EXISTS` 迁移已执行
+2. `knowledge_service.update_file_progress(session, file_id, progress, status?, error_message?)` — 每次调用独立 commit，供轮询读取
+3. `POST /knowledge/bases/{id}/upload` 改异步：登记记录 + 存 MinIO 后立即返回 **202** + `status="processing"`；索引链路（解析分块 10% → 存全文 30% → 向量索引 80% → 图谱抽取 → 100%）移入 FastAPI `BackgroundTasks._run_ingestion`，每阶段独立 session 提交进度；失败置 `status=failed` + `error_message`
+4. `FileResponse` 增加 `progress` / `error_message` 字段，前端按此渲染
+5. **顺手修复既有 bug**：`OllamaEmbedder.embed_texts` 一次性把全部 chunk 塞给 `/api/embed`，大文件（数百 chunk）触发 400 → 改为分批 32 条/次请求（`_embed_batch`）
+
+**前端：**
+6. `api.upload(url, formData, onUploadProgress)` 支持 axios 原生传输进度回调
+7. KnowledgeView 上传弹窗加进度条：`uploadPhase` 状态机（transferring → indexing → done/failed），传输阶段显示真实百分比；索引进 `indexing` 后每 1.5s 轮询 `/files` 接口按 `progress` 渲染，轮询同时刷新文件列表（关掉弹窗后台继续，列表里 status-badge 仍可见）
+8. 传输阶段禁止关弹窗（请求会断）；索引阶段可「后台继续」；进度未定态（progress=0）时进度条走呼吸滑动动画；失败时进度条变红并显示 `error_message`
+9. 样式沿用 Airy 变量（--main-500 / --gray-100 / --radius-full），`progress-track` 6px 圆角条
+
+**验证：**
+- 1.5MB 测试文件（1173 chunks）：202 立即返回 → 轮询观测 30% → 80% →（图谱阶段 LLM 503 重试约 4 分钟）→ completed 100%，chunk_count=1173 全部入 Milvus
+- 小文件（8 chunks）状态机：202 in 2.2s → 30% → 80% → 100%，progress 序列单调递增
+- `vite build` 通过（11.13s）
+
+**2026-08-04 追加修复 — upload 接口 PendingRollbackError 500：**
+- 现象：MinIO 不可用时上传直接 500，前端显示「上传失败」且后台任务未启动，DB 无文件记录
+- 根因：`upload_to_kb` 中 MinIO `put_object` 异常被 except 捕获后未 `session.rollback()`，session 进入 PendingRollback 状态；后续 `record.id` 访问触发 expired 属性重载 → `PendingRollbackError` 抛出 500；嵌套原始异常为 MinIO 失败时 record 的 minio 字段 UPDATE 匹配 0 行
+- 修复：commit 后立即取出 `file_id/kb_uuid/filename` 纯值（不再依赖 ORM 属性）；MinIO 失败分支显式 `await session.rollback()`；`put_object` 成功后先 `session.refresh(record)` 再更新 minio 字段走独立短事务
+- 验证：停掉 easyrag-minio 容器上传 → 202 返回、索引 completed；恢复 MinIO 上传 → 202、completed
+
+#### 2026-08-04 — 消息丢失根因修复：executor 线程 DB 连接池污染
+
+**现象：** 用户提问后回答"不见了"——DB 里只有 user 消息，assistant 消息一条都没有；`/chat/send` 间歇 500（FK violation: conversation_id 不存在）。
+
+**根因（区别于此前修的同类 bug 的残留）：** `app/graph/nodes.py` 的 `_lookup_file_ids`（:169）和 `knowledge_retrieval` 内的 `_graph_query`（:208）在 FastAPI `run_in_executor` 的 worker 线程里用 `asyncio.run(...)` 执行协程，协程复用**全局 async engine 的连接池**。连接带着另一个事件循环的 Future 归还池中 → 后续请求拿到毒连接，第一个事务（创建会话+用户消息）静默失效/回滚，第二个独立 session 插 assistant 消息时触发 `ForeignKeyViolationError`。日志中的 `attached to a different loop` 即为污染现场。
+
+**修复：** nodes.py 新增 `_run_with_isolated_engine` / `_run_in_thread_isolated` 封装——executor 线程内的 DB 查询一律用**随用随建、用完 dispose 的独立 engine**（pool_size=1），与主 loop 连接池完全隔离；两处 `asyncio.run(get_session())` 全部改走该封装。
+
+**验证：** 端到端 4 场景全过——① /chat/send 带检索（触发 executor 线程 DB 访问）user+assistant 均落库；② 同会话第二轮累积到 4 条；③ /chat/stream 19 个 delta + done，落库完整；④ stream 后再 send（污染回归检查）200 + 落库正常。测试数据已清理。
+
+#### 2026-08-04 — 流式路径意图识别修复
+
+**现象：** 前端（/chat/stream SSE）发送任何内容，意图识别都返回 knowledge_qa——问候、计算、天气全部被强行走向量检索，回答硬扯民法典。
+
+**根因：** `agent_service.prepare_context` 硬编码 `intent="knowledge_qa"`（注释写明"流式路径不做完整意图识别"），从未调用 `intent_recognition` 节点。LLM 分类器本身是正常的（实测 6 类查询全对），问题只在流式路径绕过了它。
+
+**修复：** `prepare_context` 接入完整意图分流，复用现有 LangGraph 节点：
+1. `intent_recognition` 分类（失败 fallback knowledge_qa，与完整路径一致）
+2. `requires_tool` 或 tool_use → `tool_selection` + `tool_execution`（web_search/calculator/datetime_tool），工具结果注入上下文，web_search 引用合并进 sources
+3. `requires_retrieval` 或 knowledge_qa/complex_task → `knowledge_retrieval` 向量检索
+4. chitchat（requires_retrieval=False）跳过检索直接对话
+返回值新增 `tool_result` 字段，intent 从硬编码改为真实分类结果。
+
+**验证：** 4/4 端到端通过——chitchat(sources=0 正常自我介绍) / tool_use(1+1 calculator) / knowledge_qa(民法典检索+引用) / tool_use(天气 web_search 分流正确, Tavily key 未配走兜底)。

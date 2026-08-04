@@ -124,6 +124,33 @@ async def lookup_file_ids_async(
         return {}
 
 
+# ── executor 线程安全的一次性 DB 访问 ────────────────────────────────────────
+# 背景：knowledge_retrieval / answer_generation 等节点被 FastAPI 端点经
+# run_in_executor 丢到 worker 线程跑同步代码。线程内若 asyncio.run(...) 复用
+# 全局 async engine 的连接池，连接会带着另一个事件循环的 Future 归还池中，
+# 污染后续请求（症状：第一个事务静默失效，随后 FK violation / PendingRollback）。
+# 因此线程内的 DB 查询一律用随用随建的独立 engine，用完即 dispose，
+# 与主 loop 的连接池完全隔离。
+async def _run_with_isolated_engine(coro_fn):
+    """在独立 engine 上执行 coro_fn(session)，返回其结果。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from backend.storage.postgres.manager import DATABASE_URL
+
+    engine = create_async_engine(DATABASE_URL, pool_size=1, max_overflow=0)
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            return await coro_fn(session)
+    finally:
+        await engine.dispose()
+
+
+def _run_in_thread_isolated(coro_fn):
+    """executor 线程里安全执行 async DB 查询：新事件循环 + 独立 engine。"""
+    import asyncio
+    return asyncio.run(_run_with_isolated_engine(coro_fn))
+
+
 def _lookup_file_ids(docs: List[Dict[str, Any]]) -> Dict[tuple, str]:
     """按 (knowledge_base_id, source) 批量反查 knowledge_files.id。
 
@@ -140,33 +167,30 @@ def _lookup_file_ids(docs: List[Dict[str, Any]]) -> Dict[tuple, str]:
     if not pairs:
         return {}
 
-    async def _query() -> Dict[tuple, str]:
+    async def _query(session) -> Dict[tuple, str]:
         import uuid as _uuid
         from sqlalchemy import select
-        from backend.storage.postgres.manager import get_session
         from backend.storage.postgres.models_knowledge import KnowledgeFile
 
         kb_uuids = {_uuid.UUID(kb) for kb, _ in pairs}
         out: Dict[tuple, str] = {}
-        async with get_session() as session:
-            rows = (
-                await session.execute(
-                    select(
-                        KnowledgeFile.id,
-                        KnowledgeFile.knowledge_base_id,
-                        KnowledgeFile.filename,
-                    ).where(KnowledgeFile.knowledge_base_id.in_(kb_uuids))
-                )
-            ).all()
-            for fid, kb_id, filename in rows:
-                key = (str(kb_id), filename)
-                if key in pairs:
-                    out[key] = str(fid)
+        rows = (
+            await session.execute(
+                select(
+                    KnowledgeFile.id,
+                    KnowledgeFile.knowledge_base_id,
+                    KnowledgeFile.filename,
+                ).where(KnowledgeFile.knowledge_base_id.in_(kb_uuids))
+            )
+        ).all()
+        for fid, kb_id, filename in rows:
+            key = (str(kb_id), filename)
+            if key in pairs:
+                out[key] = str(fid)
         return out
 
     try:
-        import asyncio
-        return asyncio.run(_query())
+        return _run_in_thread_isolated(_query)
     except Exception as exc:
         logger.warning("[_lookup_file_ids] failed (refs without file_id): %s", exc)
         return {}
@@ -189,23 +213,20 @@ def knowledge_retrieval(state):
 
         if cfg.GRAPH_ENABLED:
             try:
-                import asyncio
-                from backend.storage.postgres.manager import get_session
                 from backend.services.graph_service import query_related, format_subgraph_for_prompt
 
-                async def _graph_query():
-                    async with get_session() as session:
-                        # 跨知识库全局查询（暂未按会话锁定 kb，待多 kb 路由完善）
-                        import uuid as _uuid
-                        from sqlalchemy import select
-                        from backend.storage.postgres.models_knowledge import KnowledgeBase
-                        kb_ids = (await session.execute(select(KnowledgeBase.id))).scalars().all()
-                        subgraphs = []
-                        for kb_id in kb_ids:
-                            subgraphs.extend(await query_related(session, kb_id, query))
-                        return subgraphs
+                async def _graph_query(session):
+                    # 跨知识库全局查询（暂未按会话锁定 kb，待多 kb 路由完善）
+                    import uuid as _uuid
+                    from sqlalchemy import select
+                    from backend.storage.postgres.models_knowledge import KnowledgeBase
+                    kb_ids = (await session.execute(select(KnowledgeBase.id))).scalars().all()
+                    subgraphs = []
+                    for kb_id in kb_ids:
+                        subgraphs.extend(await query_related(session, kb_id, query))
+                    return subgraphs
 
-                subgraphs = asyncio.run(_graph_query())
+                subgraphs = _run_in_thread_isolated(_graph_query)
                 if subgraphs:
                     docs.append({
                         "content": format_subgraph_for_prompt(subgraphs),
