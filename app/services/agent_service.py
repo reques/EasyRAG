@@ -106,24 +106,51 @@ class AgentService:
     ) -> Dict[str, Any]:
         """同步检索 + 构建生成消息, 为流式生成准备上下文。
 
-        复用 knowledge_retrieval 节点做向量检索(含 file_id 反查), 再按
-        answer_generation 的方式拼装 messages。返回 dict 含:
-          messages  — 可直接喂给 chat_stream 的对话序列
-          sources   — 合并后的引用列表(kb + web), 元素含 file_id/knowledge_base_id
-          intent    — 固定 "knowledge_qa"(流式路径不做完整意图识别)
+        先做意图识别(intent_recognition), 按 intent 分流:
+          chitchat      — 跳过检索, 直接对话
+          tool_use      — 走 tool_selection + tool_execution(web_search/calculator/datetime),
+                          工具结果注入上下文; requires_retrieval 时叠加知识库检索
+          knowledge_qa  — 向量检索(现状)
+          complex_task  — 检索 + 可选工具组合
+        返回 dict 含: messages / sources(含 file_id) / intent / tool_result。
         这是同步阻塞调用, 在 async 端点里需用 run_in_executor 包裹。
         """
-        from app.graph.nodes import knowledge_retrieval
+        from app.graph.nodes import (
+            intent_recognition, knowledge_retrieval, tool_selection, tool_execution,
+        )
         from app.prompts.templates import ANSWER_NO_CONTEXT, ANSWER_WITH_CONTEXT
 
         history = history or []
         state: Dict[str, Any] = {"query": query, "steps": []}
-        state.update(knowledge_retrieval(state))
-        docs = state.get("retrieved_docs") or []
 
-        sources = list(state.get("kb_sources") or [])
-        sources.extend(state.get("sources") or [])
+        # 1. 意图识别(失败时 fallback knowledge_qa, 与完整路径一致)
+        state.update(intent_recognition(state))
+        intent = state.get("intent", "knowledge_qa")
+        logger.info("[prepare_context] intent=%s conf=%.2f", intent, state.get("intent_confidence", 0))
 
+        sources: List[Dict[str, Any]] = []
+        tool_result_text = "N/A"
+
+        # 2. 工具路径: tool_use 或 requires_tool 时执行工具
+        if state.get("requires_tool") or intent == "tool_use":
+            state.update(tool_selection(state))
+            state.update(tool_execution(state))
+            if state.get("tool_triggered") and state.get("tool_result") is not None:
+                tool_result_text = str(state["tool_result"])
+            sources.extend(state.get("sources") or [])  # web_search 的引用
+
+        # 3. 检索路径: 需要检索时做向量检索(chitchat 通常 requires_retrieval=False)
+        docs = []
+        if state.get("requires_retrieval", True) or intent in ("knowledge_qa", "complex_task"):
+            state.update(knowledge_retrieval(state))
+            docs = state.get("retrieved_docs") or []
+            sources.extend(state.get("kb_sources") or [])
+            # knowledge_retrieval 内 web fallback 的 sources 也合并
+            for s in (state.get("sources") or []):
+                if s not in sources:
+                    sources.append(s)
+
+        # 4. 拼装生成消息
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
         if docs:
             context = "\n\n".join(
@@ -132,16 +159,21 @@ class AgentService:
             messages.append({
                 "role": "user",
                 "content": ANSWER_WITH_CONTEXT.format(
-                    query=query, context=context, tool_result="N/A"
+                    query=query, context=context, tool_result=tool_result_text
                 ),
             })
         else:
             messages.append({
                 "role": "user",
-                "content": ANSWER_NO_CONTEXT.format(query=query, tool_result="N/A"),
+                "content": ANSWER_NO_CONTEXT.format(query=query, tool_result=tool_result_text),
             })
 
-        return {"messages": messages, "sources": sources, "intent": "knowledge_qa"}
+        return {
+            "messages": messages,
+            "sources": sources,
+            "intent": intent,
+            "tool_result": state.get("tool_result"),
+        }
 
     @staticmethod
     def _build_response(state: Dict[str, Any], elapsed: float) -> Dict[str, Any]:
