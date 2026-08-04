@@ -321,29 +321,11 @@ async def summarize_conversation(
         if len(msgs) < 2:
             raise HTTPException(status_code=400, detail="Conversation too short to summarize")
 
-        # 取前 2 轮对话生成标题
+        # 取前 2 轮对话生成标题（复用统一的语义化标题函数）
         user_msg = next((m["content"] for m in msgs if m["role"] == "user"), msgs[0]["content"])
         asst_msg = next((m["content"] for m in msgs if m["role"] == "assistant"), msgs[-1]["content"])
 
-        try:
-            from app.llm.client import get_llm_client
-            llm = get_llm_client()
-            summary_prompt = (
-                "用不超过20个字概括这段对话的主题，只返回概括结果，不要加引号或任何额外说明。\n\n"
-                f"用户: {user_msg[:200]}\n"
-                f"助手: {asst_msg[:300]}"
-            )
-            title = llm.chat_sync(
-                [{"role": "user", "content": summary_prompt}],
-                temperature=0.3,
-                max_tokens=50,
-            ).strip().strip('"').strip("'").strip("。").strip("，")
-            if len(title) < 2:
-                title = user_msg[:30]
-        except Exception as exc:
-            logger.warning("[summarize] LLM failed: %s", exc)
-            title = user_msg[:30]
-
+        title = await generate_conversation_title(user_msg, asst_msg)
         conv.title = title
         await session.commit()
         return {"conversation_id": conversation_id, "title": title}
