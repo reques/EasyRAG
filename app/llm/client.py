@@ -42,24 +42,34 @@ class LLMClient:
         self.temperature = temperature if temperature is not None else cfg.LLM_TEMPERATURE
         self.max_tokens = max_tokens or cfg.LLM_MAX_TOKENS
 
+        import httpx
         client_kwargs = dict(
             base_url=base_url or cfg.LLM_BASE_URL,
             api_key=api_key or cfg.LLM_API_KEY,
             timeout=cfg.LLM_TIMEOUT,
             max_retries=cfg.LLM_MAX_RETRIES,
         )
-        self._sync_client = OpenAI(**client_kwargs)
-        self._async_client = AsyncOpenAI(**client_kwargs)
+        self._sync_client = OpenAI(
+            **client_kwargs,
+            http_client=httpx.Client(trust_env=False),
+        )
+        self._async_client = AsyncOpenAI(
+            **client_kwargs,
+            http_client=httpx.AsyncClient(trust_env=False),
+        )
 
     # ── internal helpers ──────────────────────────────────────────────────
 
     def _call_kwargs(self, **extra) -> Dict[str, Any]:
-        return dict(
+        kwargs = dict(
             model=self.model,
-            temperature=self.temperature,
             max_tokens=self.max_tokens,
-            **extra,
         )
+        # temperature 只在调用方未显式传入时才用默认值
+        if "temperature" not in extra:
+            kwargs["temperature"] = self.temperature
+        kwargs.update(extra)
+        return kwargs
 
     @staticmethod
     def _extract_text(response) -> str:
