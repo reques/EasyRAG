@@ -82,6 +82,30 @@ class Settings(BaseSettings):
     CHUNK_STRATEGY: Literal["fixed", "recursive", "markdown", "parent_child"] = "recursive"
     PARENT_CHUNK_SIZE: int = 1500   # parent_child 策略下父块（上下文块）大小
 
+    # ── 增强检索 (阶段 3) ──────────────────────────────────────────────────
+    # 是否启用增强检索（查询分解 × 四路并行 × 图谱融合重排 × 知识块聚类 × 迭代补充）
+    ENHANCED_RETRIEVAL_ENABLED: bool = False
+    # 迭代缺口检测：发现检索不足时自动补充检索（最多2轮）
+    ENHANCED_ITERATIVE_GAP_FILLING: bool = True
+    ENHANCED_MAX_GAP_ROUNDS: int = 2
+    # 融合重排序权重 (α=向量相似度, β=图谱距离, γ=跨路共识, δ=时效性)
+    ENHANCED_FUSION_ALPHA: float = 0.35
+    ENHANCED_FUSION_BETA: float = 0.25
+    ENHANCED_FUSION_GAMMA: float = 0.25
+    ENHANCED_FUSION_DELTA: float = 0.15
+    # 每条路径的最大候选数
+    ENHANCED_TOP_K_PER_PATH: int = 6
+    ENHANCED_FINAL_TOP_K: int = 8
+
+    # ── Reranker (交叉编码器精排) ────────────────────────────────────────
+    RERANKER_TYPE: Literal["disabled", "local", "openai_compatible"] = "disabled"
+    RERANKER_MODEL_PATH: str = "./models/bge-reranker-v2-m3"
+    RERANKER_API_BASE: Optional[str] = None
+    RERANKER_API_KEY: Optional[str] = None
+    RERANKER_MODEL_NAME: str = "bge-reranker-v2-m3"
+    RERANKER_TOP_K: int = 5     # 精排后保留条数
+    RERANKER_MAX_LENGTH: int = 512  # cross-encoder 最大输入长度
+
     # ── Agent / LangGraph ────────────────────────────────────────────────
     AGENT_MAX_ITERATIONS: int = 20   # LangGraph recursion_limit
     MAX_PLAN_STEPS: int = 5          # max sub-tasks per plan

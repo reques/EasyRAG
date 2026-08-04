@@ -29,6 +29,11 @@ class AgentState(TypedDict, total=False):
     # ── RAG ───────────────────────────────────────────────────────────────
     retrieved_docs: List[Dict[str, Any]]  # [{"content":…, "metadata":…}]
     retrieval_triggered: bool
+    # 增强检索 (阶段 3): 结构化检索结果
+    knowledge_blocks: List[Dict[str, Any]]  # 知识块列表
+    query_decomposition: Optional[Dict[str, Any]]  # 查询分解结果
+    gap_rounds: int                    # 迭代补充轮数
+    gap_details: List[Dict[str, Any]]  # 缺口检测详情
 
     # ── Tool ──────────────────────────────────────────────────────────────
     tool_result: Optional[str]          # raw output of tool execution

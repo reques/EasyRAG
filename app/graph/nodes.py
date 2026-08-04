@@ -7,6 +7,7 @@ from app.graph.state import AgentState
 from app.llm.client import get_llm_client
 from app.prompts.templates import (
     ANSWER_NO_CONTEXT, ANSWER_VALIDATION, ANSWER_WITH_CONTEXT,
+    ANSWER_WITH_ENHANCED_CONTEXT, ANSWER_WITH_ENHANCED_NO_CONTEXT,
     FALLBACK_ANSWER, INTENT_RECOGNITION, TASK_PLANNING,
 )
 from app.tools.registry import get_tool_registry
@@ -199,12 +200,103 @@ def _lookup_file_ids(docs: List[Dict[str, Any]]) -> Dict[tuple, str]:
 def knowledge_retrieval(state):
     """Node 3: Run RAG retrieval and populate retrieved_docs.
 
-    阶段 2C: GRAPH_ENABLED 时额外做图谱检索，子图文本作为一条特殊 doc 注入
-    （metadata.graph=True），与向量检索结果并列进入 answer_generation 的上下文。
-    图谱查询是尽力而为的旁路：任何失败都不影响向量检索主链路。
+    当 ENHANCED_RETRIEVAL_ENABLED=True 时使用增强检索引擎（查询分解×四路并行×图谱融合重排×知识块聚类）。
+    否则走原有路径（向量检索 + 可选图谱旁路）。
     """
     query = state["query"]
     logger.info("[knowledge_retrieval] query=%r", query[:80])
+
+    # ── 增强检索路径 ─────────────────────────────────────────────────────
+    if cfg.ENHANCED_RETRIEVAL_ENABLED:
+        return _enhanced_knowledge_retrieval(state)
+
+    # ── 原有检索路径 ─────────────────────────────────────────────────────
+    return _legacy_knowledge_retrieval(state)
+
+
+def _enhanced_knowledge_retrieval(state):
+    """增强检索：查询分解 × 四路并行检索 × 图谱融合重排 × 知识块聚类 × 迭代补充。"""
+    query = state["query"]
+    logger.info("[knowledge_retrieval:enhanced] query=%r", query[:80])
+
+    try:
+        from app.rag.enhanced_retriever import (
+            get_enhanced_retriever,
+            format_blocks_for_prompt,
+            format_flat_for_prompt,
+        )
+
+        retriever = get_enhanced_retriever()
+        result = retriever.retrieve(query)
+
+        # 知识块格式化为上下文
+        if result.knowledge_blocks:
+            context = format_blocks_for_prompt(result.knowledge_blocks)
+        elif result.raw_docs:
+            context = format_flat_for_prompt(result.raw_docs)
+        else:
+            context = ""
+
+        # 构建 retrieved_docs（兼容原有格式）
+        docs = [{
+            "content": d.content,
+            "metadata": {**d.metadata, "score": d.score, "path": d.retrieval_path},
+        } for d in result.raw_docs]
+
+        # 知识块序列化
+        blocks = [{
+            "block_id": b.block_id,
+            "entities": b.entities,
+            "summary": b.summary,
+            "score": b.block_score,
+        } for b in result.knowledge_blocks]
+
+        # 来源提取
+        kb_sources: List[Dict[str, str]] = []
+        seen: set = set()
+        for s in result.sources:
+            title = s.get("title", "")
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            kb_sources.append({
+                "title": title,
+                "url": s.get("url", ""),
+                "type": s.get("type", "kb"),
+                "score": round(s.get("score", 0.0), 4),
+            })
+
+        logger.info(
+            "[knowledge_retrieval:enhanced] %d docs, %d blocks, %d sources",
+            len(docs), len(blocks), len(kb_sources),
+        )
+
+        return {
+            "retrieved_docs": docs,
+            "retrieval_triggered": True,
+            "knowledge_blocks": blocks,
+            "query_decomposition": result.query_decomposition.to_dict(),
+            "gap_rounds": result.gap_rounds,
+            "gap_details": result.gap_details,
+            "kb_sources": kb_sources,
+            "error_message": None,
+            "steps": _append_step(
+                state,
+                "knowledge_retrieval:enhanced -> "
+                + str(len(docs)) + " docs, "
+                + str(len(blocks)) + " blocks"
+            ),
+        }
+
+    except Exception as exc:
+        logger.warning("[knowledge_retrieval:enhanced] failed: %s, falling back to legacy", exc)
+        return _legacy_knowledge_retrieval(state)
+
+
+def _legacy_knowledge_retrieval(state):
+    """原有检索路径：向量检索 + 可选图谱旁路。"""
+    query = state["query"]
+    logger.info("[knowledge_retrieval:legacy] query=%r", query[:80])
     try:
         from app.rag.retriever import get_retriever
         retriever = get_retriever()
@@ -215,18 +307,20 @@ def knowledge_retrieval(state):
             try:
                 from backend.services.graph_service import query_related, format_subgraph_for_prompt
 
-                async def _graph_query(session):
-                    # 跨知识库全局查询（暂未按会话锁定 kb，待多 kb 路由完善）
-                    import uuid as _uuid
-                    from sqlalchemy import select
-                    from backend.storage.postgres.models_knowledge import KnowledgeBase
-                    kb_ids = (await session.execute(select(KnowledgeBase.id))).scalars().all()
-                    subgraphs = []
-                    for kb_id in kb_ids:
-                        subgraphs.extend(await query_related(session, kb_id, query))
-                    return subgraphs
+                async def _graph_query():
+                    async with get_session() as session:
+                        # 跨知识库全局查询（暂未按会话锁定 kb，待多 kb 路由完善）
+                        import uuid as _uuid
+                        from sqlalchemy import select
+                        from backend.storage.postgres.models_knowledge import KnowledgeBase
+                        kb_ids = (await session.execute(select(KnowledgeBase.id))).scalars().all()
+                        subgraphs = []
+                        for kb_id in kb_ids:
+                            subgraphs.extend(await query_related(session, kb_id, query))
+                        return subgraphs
 
-                subgraphs = _run_in_thread_isolated(_graph_query)
+                from app.rag.enhanced_retriever import _run_async_in_thread
+                subgraphs = _run_async_in_thread(_graph_query())
                 if subgraphs:
                     docs.append({
                         "content": format_subgraph_for_prompt(subgraphs),
@@ -400,7 +494,22 @@ def answer_generation(state):
     effective_tool = tool_result or ("Tool failed: " + tool_error if tool_error else "N/A")
     try:
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
-        if docs:
+
+        # 增强检索：使用知识块格式
+        knowledge_blocks = state.get("knowledge_blocks")
+        if knowledge_blocks and docs:
+            from app.rag.enhanced_retriever import format_blocks_for_prompt
+            # 重建知识块对象（从序列化数据）
+            context = format_blocks_for_prompt(
+                _rebuild_blocks(knowledge_blocks, docs)
+            )
+            messages.append({
+                "role": "user",
+                "content": ANSWER_WITH_ENHANCED_CONTEXT.format(
+                    query=query, context=context, tool_result=effective_tool
+                ),
+            })
+        elif docs:
             context = "\n\n".join(
                 "[" + str(i + 1) + "] " + d["content"] for i, d in enumerate(docs)
             )
@@ -510,3 +619,34 @@ def fallback_handler(state):
         "validation_passed": False,
         "steps": _append_step(state, "fallback_handler -> fallback answer generated"),
     }
+
+
+def _rebuild_blocks(block_data: List[Dict[str, Any]], docs: List[Dict[str, Any]]):
+    """从序列化数据重建知识块对象（用于 format_blocks_for_prompt）。"""
+    from app.rag.enhanced_retriever import KnowledgeBlock, CandidateDoc
+
+    blocks = []
+    for b in block_data:
+        block = KnowledgeBlock(
+            block_id=b.get("block_id", ""),
+            entities=b.get("entities", []),
+            summary=b.get("summary", ""),
+            block_score=b.get("score", 0.0),
+        )
+        blocks.append(block)
+
+    # 将 docs 分配到各 block（简化：根据 metadata.path 分配）
+    if blocks:
+        for d in docs:
+            path = d.get("metadata", {}).get("path", "semantic")
+            doc = CandidateDoc(
+                content=d["content"],
+                metadata=d.get("metadata", {}),
+                score=d.get("metadata", {}).get("score", 0.5),
+                retrieval_path=path,
+            )
+            # 分配到第一个 block
+            first_block = blocks[0]
+            first_block.docs.append(doc)
+
+    return blocks

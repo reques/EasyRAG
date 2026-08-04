@@ -181,7 +181,7 @@ class AgentService:
         # 合并知识库引用与 web 搜索引用, 前端统一渲染引用块
         sources = list(state.get("kb_sources") or [])
         sources.extend(state.get("sources") or [])
-        return {
+        response = {
             "query": state.get("query", ""),
             "session_id": state.get("session_id", ""),
             "intent": state.get("intent", "unknown"),
@@ -201,6 +201,15 @@ class AgentService:
             "final_answer": state.get("final_answer") or state.get("draft_answer", ""),
             "elapsed_seconds": round(elapsed, 3),
         }
+        # 增强检索附加字段
+        if state.get("knowledge_blocks"):
+            response["knowledge_blocks"] = state["knowledge_blocks"]
+        if state.get("query_decomposition"):
+            response["query_decomposition"] = state["query_decomposition"]
+        if state.get("gap_rounds"):
+            response["gap_rounds"] = state["gap_rounds"]
+            response["gap_details"] = state.get("gap_details") or []
+        return response
 
 
 _service: Optional[AgentService] = None

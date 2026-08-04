@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.logger import get_logger
 from backend.storage.postgres.models_knowledge import KnowledgeEntity, KnowledgeRelation
+from app.rag.graph_cache import graph_cache
 
 logger = get_logger(__name__)
 cfg = get_settings()
@@ -79,6 +80,12 @@ async def extract_graph_from_chunks(
                 description=(e.get("description") or "")[:1024],
                 source_chunks=chunk_ref,
             ))
+            graph_cache.upsert_entity(
+                name=name,
+                entity_type=(e.get("type") or "concept"),
+                description=(e.get("description") or ""),
+                kb_id=str(kb_id),
+            )
             total_entities += 1
 
         for r in relations[:20]:
@@ -94,6 +101,12 @@ async def extract_graph_from_chunks(
                 relation_type=rel[:128],
                 description=(r.get("description") or "")[:1024],
             ))
+            graph_cache.add_relation(
+                source=src,
+                target=tgt,
+                relation_type=rel,
+                description=(r.get("description") or ""),
+            )
             total_relations += 1
 
     logger.info(
