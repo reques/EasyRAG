@@ -44,6 +44,9 @@ export const useChatStore = defineStore('chat', () => {
     if (!activeConversationId.value) {
       selectConversation(convId)
     }
+    // 新会话标题由后端后台协程生成（LLM 语义摘要），SSE done 时可能未完成，
+    // 延迟 3s 再刷一次让语义化标题就位，替换掉创建时的默认 "New Conversation"
+    setTimeout(() => loadConversations(), 3000)
   }
 
   return {

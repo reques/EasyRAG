@@ -894,6 +894,17 @@ button { cursor: pointer; }
 .file-label:hover { border-color: var(--main-500); background: var(--main-30); color: var(--main-color); }
 .file-label input[type="file"] { display: none; }
 
+/* 拖拽上传态 */
+.file-label--dragover {
+  border-color: var(--main-500);
+  background: var(--main-30);
+  color: var(--main-color);
+  border-style: solid;
+}
+.file-label-hint { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.file-label-icon { color: var(--main-500); }
+.file-label-hint em { font-style: normal; font-size: 12px; color: var(--gray-500); }
+
 /* ── 文件预览弹窗 ────────────────────────────────────────────────────── */
 .preview-modal {
   width: 720px;
