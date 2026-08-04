@@ -1165,12 +1165,21 @@ class EnhancedRetriever:
 
     @staticmethod
     def _extract_sources(docs: List[CandidateDoc]) -> List[Dict[str, Any]]:
-        """从候选文档提取去重的来源列表。"""
+        """从候选文档提取去重的来源列表。
+
+        过滤掉内部标记来源（knowledge_graph / knowledge_graph_reverse / knowledge_graph_chain），
+        只保留真实的文件来源。
+        """
+        _INTERNAL_SOURCES = {
+            "knowledge_graph", "knowledge_graph_reverse",
+            "knowledge_graph_chain", "knowledge_graph",
+        }
         sources: List[Dict[str, Any]] = []
         seen: set = set()
         for doc in docs:
             src = (doc.metadata.get("source") or "").strip()
-            if not src or src in seen:
+            # 跳过内部来源标记
+            if not src or src in seen or src in _INTERNAL_SOURCES:
                 continue
             seen.add(src)
             sources.append({
@@ -1179,6 +1188,7 @@ class EnhancedRetriever:
                 "type": doc.metadata.get("type", "kb"),
                 "score": round(doc.score, 4),
                 "retrieval_path": doc.retrieval_path,
+                "knowledge_base_id": doc.metadata.get("knowledge_base_id", ""),
             })
         return sources
 
