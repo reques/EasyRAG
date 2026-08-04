@@ -85,6 +85,10 @@ class KnowledgeFile(Base):
     status: Mapped[str] = mapped_column(
         String(32), default="pending", nullable=False
     )  # pending / processing / completed / failed
+    # 处理进度 0-100（后台索引任务推进时更新，供前端进度条轮询）
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 失败原因（status=failed 时记录，便于前端展示）
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

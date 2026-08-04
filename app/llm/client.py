@@ -152,6 +152,35 @@ class LLMClient:
         text = await self.chat(messages, **extra)
         return self._parse_json(text)
 
+    async def chat_stream(
+        self,
+        messages: List[Dict[str, str]],
+        **extra,
+    ):
+        """Async streaming chat — 逐 token yield 增量文本。
+
+        用于 SSE 端点把 LLM 输出实时推给前端, 避免一次性等待完整回复。
+        用法::
+
+            async for delta in client.chat_stream(messages):
+                ...  # delta 为本次新增的文本片段
+        """
+        try:
+            logger.debug("LLM stream call | model=%s | msgs=%d", self.model, len(messages))
+            stream = await self._async_client.chat.completions.create(
+                messages=messages, stream=True, **self._call_kwargs(**extra)
+            )
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+        except APITimeoutError as exc:
+            raise LLMTimeoutError("LLM request timed out") from exc
+        except (RateLimitError, APIConnectionError) as exc:
+            raise LLMClientError(f"LLM API error: {exc}") from exc
+
 
 # Module-level singleton (lazy)
 _default_client: Optional[LLMClient] = None

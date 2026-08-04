@@ -150,6 +150,152 @@ async def send_message(
     )
 
 
+@router.post("/stream")
+async def send_message_stream(
+    req: ChatRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """流式对话 — SSE 逐 token 推送 Agent 回复, 结束时推送引用块。
+
+    事件序列:
+      data: {"type": "conversation_id", "conversation_id": "..."}
+      data: {"type": "delta", "content": "<增量文本>"}   (多次)
+      data: {"type": "done", "sources": [...], "intent": "...", "elapsed_seconds": 1.23}
+      data: {"type": "error", "detail": "..."}           (仅出错时)
+
+    设计: 检索(同步)用 run_in_executor 跑, 生成用 LLM chat_stream 流式,
+    最终答案 + 引用落库与 /chat/send 保持一致。
+    """
+    import asyncio
+    from fastapi.responses import StreamingResponse
+
+    start = time.perf_counter()
+
+    async with get_session() as session:
+        # 获取或创建会话
+        if req.conversation_id:
+            conv = await get_conversation(session, uuid.UUID(req.conversation_id))
+            if not conv or conv.user_id != current_user.id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Conversation not found",
+                )
+            conv_id = conv.id
+            is_new = False
+        else:
+            conv = await create_conversation(session, current_user.id)
+            conv_id = conv.id
+            is_new = True
+
+        await add_message(session, conv_id, "user", req.query)
+        await session.commit()
+        db_history = await get_conversation_history(session, conv_id)
+
+    async def event_gen():
+        from app.services.agent_service import get_agent_service
+        from app.llm.client import get_llm_client
+
+        loop = asyncio.get_event_loop()
+        agent = get_agent_service()
+
+        def _sse(payload: dict) -> str:
+            return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+        yield _sse({"type": "conversation_id", "conversation_id": str(conv_id)})
+
+        # 1. 同步检索准备上下文(阻塞, 放 executor)
+        try:
+            ctx = await loop.run_in_executor(
+                None, agent.prepare_context, req.query, db_history
+            )
+        except Exception as exc:
+            logger.error("[chat/stream] prepare_context error: %s", exc)
+            yield _sse({"type": "error", "detail": f"检索失败: {exc}"})
+            return
+
+        # 1b. 主协程里 async 反查 file_id 并回填到引用(executor 线程里
+        #     asyncio.run 会与主线程 async engine 冲突, 故在此统一补齐)。
+        try:
+            from app.graph.nodes import lookup_file_ids_async
+            pairs = [
+                (s.get("knowledge_base_id", ""), s.get("title", ""))
+                for s in ctx["sources"]
+                if s.get("type") in ("kb", "knowledge_graph")
+            ]
+            fid_map = await lookup_file_ids_async(pairs)
+            for s in ctx["sources"]:
+                key = (s.get("knowledge_base_id", ""), s.get("title", ""))
+                if key in fid_map:
+                    s["file_id"] = fid_map[key]
+        except Exception as exc:
+            logger.warning("[chat/stream] file_id backfill failed: %s", exc)
+
+        # 2. 流式生成
+        answer_parts: list[str] = []
+        try:
+            llm = get_llm_client()
+            async for delta in llm.chat_stream(ctx["messages"]):
+                answer_parts.append(delta)
+                yield _sse({"type": "delta", "content": delta})
+        except Exception as exc:
+            logger.error("[chat/stream] generation error: %s", exc)
+            yield _sse({"type": "error", "detail": f"生成失败: {exc}"})
+            return
+
+        answer = "".join(answer_parts).strip()
+        elapsed = round(time.perf_counter() - start, 3)
+
+        # 3. 落库助手回复(含引用)
+        try:
+            async with get_session() as session:
+                meta = json.dumps({
+                    "intent": ctx["intent"],
+                    "sources": ctx["sources"],
+                }, ensure_ascii=False)
+                await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
+                await session.commit()
+        except Exception as exc:
+            logger.warning("[chat/stream] persist answer failed: %s", exc)
+
+        # 4. 新会话自动起标题(尽力而为, 不阻塞)
+        if is_new and answer:
+            try:
+                summary_prompt = (
+                    "用不超过20个字概括这段对话的主题,只返回概括结果,不要加引号或任何额外说明。\n\n"
+                    f"用户: {req.query.strip()[:200]}\n"
+                    f"助手: {answer[:300]}"
+                )
+                title = (await get_llm_client().chat(
+                    [{"role": "user", "content": summary_prompt}],
+                    temperature=0.3, max_tokens=50,
+                )).strip().strip('"').strip("'").strip("。").strip(",")
+                if len(title) >= 2:
+                    async with get_session() as session:
+                        c = await get_conversation(session, conv_id)
+                        if c:
+                            c.title = title
+                            await session.commit()
+            except Exception as exc:
+                logger.warning("[chat/stream] title gen failed: %s", exc)
+
+        yield _sse({
+            "type": "done",
+            "sources": ctx["sources"],
+            "intent": ctx["intent"],
+            "elapsed_seconds": elapsed,
+        })
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/conversations", response_model=list[ConversationSummary])
 async def list_conversations(
     current_user: User = Depends(get_current_user),

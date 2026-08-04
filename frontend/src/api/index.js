@@ -31,9 +31,10 @@ export default {
   get: (url, params) => http.get(url, { params }).then((r) => r.data),
   post: (url, data) => http.post(url, data).then((r) => r.data),
   delete: (url) => http.delete(url).then((r) => r.data),
-  upload: (url, formData) =>
+  upload: (url, formData, onUploadProgress) =>
     http.post(url, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      ...(onUploadProgress ? { onUploadProgress } : {}),
     }).then((r) => r.data),
   // 获取二进制数据（PDF/图片），返回 { data: Blob, contentType: string }
   getBlob: (url) =>
@@ -41,4 +42,52 @@ export default {
       data: r.data,
       contentType: r.headers['content-type'] || 'application/octet-stream',
     })),
+
+  // SSE 流式对话：fetch + ReadableStream 逐事件回调。
+  // axios 不支持流式响应, 这里用原生 fetch 读 text/event-stream。
+  // onEvent(payload) 每个 SSE data 事件回调一次, payload 为解析后的 JSON。
+  async streamChat(url, body, onEvent) {
+    const token = localStorage.getItem('token')
+    const resp = await fetch(`/api/v1${url}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    })
+    if (resp.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/login'
+      throw new Error('Unauthorized')
+    }
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '')
+      throw new Error(text || `HTTP ${resp.status}`)
+    }
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    // SSE 事件以 \n\n 分隔, 逐行解析 "data: {...}"
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        for (const line of rawEvent.split('\n')) {
+          if (line.startsWith('data:')) {
+            const data = line.slice(5).trim()
+            if (!data) continue
+            try {
+              onEvent(JSON.parse(data))
+            } catch { /* 忽略非 JSON 行 */ }
+          }
+        }
+      }
+    }
+  },
 }
