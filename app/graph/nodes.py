@@ -197,6 +197,31 @@ def _lookup_file_ids(docs: List[Dict[str, Any]]) -> Dict[tuple, str]:
         return {}
 
 
+def _lookup_file_ids_by_filename(filenames: List[str]) -> Dict[str, str]:
+    """按文件名反查 file_id — 增强检索路径专用。
+
+    enhanced_retriever 返回的 sources 只有 filename 没有 kb_id，
+    遍历所有 knowledge_files 按 filename 匹配，返回 {filename: file_id}。
+    """
+    if not filenames:
+        return {}
+
+    async def _query(session) -> Dict[str, str]:
+        from sqlalchemy import select
+        from backend.storage.postgres.models_knowledge import KnowledgeFile
+        rows = (await session.execute(
+            select(KnowledgeFile.id, KnowledgeFile.filename)
+            .where(KnowledgeFile.filename.in_(filenames))
+        )).all()
+        return {filename: str(fid) for fid, filename in rows}
+
+    try:
+        return _run_in_thread_isolated(_query)
+    except Exception as exc:
+        logger.warning("[_lookup_file_ids_by_filename] failed: %s", exc)
+        return {}
+
+
 def knowledge_retrieval(state):
     """Node 3: Run RAG retrieval and populate retrieved_docs.
 
@@ -264,7 +289,17 @@ def _enhanced_knowledge_retrieval(state):
                 "url": s.get("url", ""),
                 "type": s.get("type", "kb"),
                 "score": round(s.get("score", 0.0), 4),
+                "knowledge_base_id": s.get("knowledge_base_id", ""),
             })
+
+        # 反查 file_id，使前端引用可点击
+        if kb_sources:
+            try:
+                file_id_map = _lookup_file_ids_by_filename([s["title"] for s in kb_sources])
+                for s in kb_sources:
+                    s["file_id"] = file_id_map.get(s["title"], "")
+            except Exception as exc:
+                logger.debug("[knowledge_retrieval:enhanced] file_id lookup failed: %s", exc)
 
         logger.info(
             "[knowledge_retrieval:enhanced] %d docs, %d blocks, %d sources",

@@ -118,7 +118,10 @@ class AgentService:
         from app.graph.nodes import (
             intent_recognition, knowledge_retrieval, tool_selection, tool_execution,
         )
-        from app.prompts.templates import ANSWER_NO_CONTEXT, ANSWER_WITH_CONTEXT
+        from app.prompts.templates import (
+            ANSWER_NO_CONTEXT, ANSWER_WITH_CONTEXT,
+            ANSWER_WITH_ENHANCED_CONTEXT,
+        )
 
         history = history or []
         state: Dict[str, Any] = {"query": query, "steps": []}
@@ -152,7 +155,18 @@ class AgentService:
 
         # 4. 拼装生成消息
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
-        if docs:
+        knowledge_blocks = state.get("knowledge_blocks")
+        if knowledge_blocks and docs:
+            from app.rag.enhanced_retriever import format_blocks_for_prompt
+            from app.graph.nodes import _rebuild_blocks
+            context = format_blocks_for_prompt(_rebuild_blocks(knowledge_blocks, docs))
+            messages.append({
+                "role": "user",
+                "content": ANSWER_WITH_ENHANCED_CONTEXT.format(
+                    query=query, context=context, tool_result=tool_result_text
+                ),
+            })
+        elif docs:
             context = "\n\n".join(
                 "[" + str(i + 1) + "] " + d["content"] for i, d in enumerate(docs)
             )
