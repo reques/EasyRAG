@@ -118,7 +118,7 @@ EasyRAG/
         ├── routers/
         │   ├── auth_router.py     #   POST /auth/register, /auth/login
         │   ├── chat_router.py     #   POST /chat/send, POST /chat/stream (SSE), GET /chat/conversations
-        │   ├── knowledge_router.py    # CRUD /knowledge/bases + upload + /graph
+        │   ├── knowledge_router.py    # CRUD /knowledge/bases + upload(202异步+progress轮询) + /graph
         │   └── evaluation_router.py   # [2D] POST/GET /evaluation/runs
         └── utils/
             └── auth_middleware.py #   get_current_user (JWT 依赖注入)

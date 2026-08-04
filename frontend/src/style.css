@@ -407,13 +407,12 @@ button { cursor: pointer; }
 .chat-view:has(.chat-input--center) .chat-messages.is-empty { flex: 0 0 auto; }
 .chat-view:has(.chat-input--center) .chat-input--center { flex: 0 0 auto; }
 
-/* 头部: 轻分隔线 */
+/* 头部: 无分隔线（Airy 留白风格，靠间距分区） */
 .chat-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 22px;
-  border-bottom: 1px solid var(--gray-100);
   flex-shrink: 0;
 }
 .chat-header h2 {
@@ -803,6 +802,41 @@ button { cursor: pointer; }
 .status-badge.pending { background: var(--color-warning-50); color: var(--color-warning-900); }
 .status-badge.processing { background: var(--color-info-50); color: var(--color-info-700); }
 .status-badge.failed { background: var(--color-error-50); color: var(--color-error-700); }
+
+/* ── 上传进度条（传输 + 索引两阶段） ────────────────────────────────── */
+.file-size-hint { color: var(--gray-500); font-size: 12px; }
+
+.upload-progress { margin: 14px 0 4px; }
+.upload-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--gray-600);
+  margin-bottom: 6px;
+}
+.progress-track {
+  height: 6px;
+  background: var(--gray-100);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--main-500);
+  border-radius: var(--radius-full);
+  transition: width .3s ease;
+}
+.progress-fill.failed { background: var(--color-error-500); }
+/* 索引进度未上报时的呼吸动画（不确定态） */
+.progress-fill.indeterminate {
+  width: 40% !important;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  0%   { margin-left: 0; }
+  50%  { margin-left: 60%; }
+  100% { margin-left: 0; }
+}
 
 /* ── Modal(真实浮层才用阴影) ─────────────────────────────────────────── */
 .modal-overlay {

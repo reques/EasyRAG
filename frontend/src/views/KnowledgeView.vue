@@ -32,19 +32,37 @@
     </div>
 
     <!-- 文件上传弹窗 -->
-    <div v-if="showUpload" class="modal-overlay" @click.self="showUpload = false">
+    <div v-if="showUpload" class="modal-overlay" @click.self="closeUpload">
       <div class="modal">
         <h3>上传文档到「{{ activeKb?.name }}」</h3>
         <label class="file-label">
-          <input type="file" @change="onFileSelect" accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.bmp,.webp" />
+          <input type="file" @change="onFileSelect" :disabled="uploading" accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.bmp,.webp" />
           <span v-if="!uploadFile">点击选择文件 (.txt .md .pdf .docx 图片)</span>
-          <span v-else>📄 {{ uploadFile.name }}</span>
+          <span v-else>📄 {{ uploadFile.name }}<span class="file-size-hint">（{{ formatSize(uploadFile.size) }}）</span></span>
         </label>
+
+        <!-- 进度条：传输阶段 + 索引阶段 -->
+        <div v-if="uploading || uploadPhase !== 'idle'" class="upload-progress">
+          <div class="upload-progress-label">
+            <span>{{ progressLabel }}</span>
+            <span>{{ displayProgress }}%</span>
+          </div>
+          <div class="progress-track">
+            <div
+              class="progress-fill"
+              :class="{ indeterminate: uploadPhase === 'indexing' && indexProgress === 0, failed: uploadPhase === 'failed' }"
+              :style="{ width: displayProgress + '%' }"
+            ></div>
+          </div>
+        </div>
+
         <p v-if="uploadMsg" :class="uploadOk ? 'auth-success' : 'auth-error'">{{ uploadMsg }}</p>
         <div class="modal-actions">
-          <button @click="showUpload = false; uploadMsg = ''" class="btn-secondary">关闭</button>
+          <button @click="closeUpload" :disabled="uploading && uploadPhase === 'transferring'" class="btn-secondary">
+            {{ uploading ? '后台继续' : '关闭' }}
+          </button>
           <button @click="doUpload" :disabled="!uploadFile || uploading" class="btn-primary-sm">
-            {{ uploading ? '上传中…' : '上传并索引' }}
+            {{ uploading ? '处理中…' : '上传并索引' }}
           </button>
         </div>
       </div>
@@ -173,7 +191,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { LibraryBig, Plus, FolderOpen, Upload, FileText, Trash2 } from 'lucide-vue-next'
 import api from '../api'
@@ -198,6 +216,53 @@ const uploadFile = ref(null)
 const uploading = ref(false)
 const uploadMsg = ref('')
 const uploadOk = ref(false)
+// 进度条状态: idle | transferring | indexing | done | failed
+const uploadPhase = ref('idle')
+const transferProgress = ref(0)   // HTTP 传输进度 0-100（真实，axios 回调）
+const indexProgress = ref(0)      // 后端索引进度 0-100（轮询 /files 接口）
+let pollTimer = null
+
+const displayProgress = computed(() => {
+  if (uploadPhase.value === 'transferring') return transferProgress.value
+  if (uploadPhase.value === 'indexing') return Math.max(indexProgress.value, 5)
+  if (uploadPhase.value === 'done') return 100
+  if (uploadPhase.value === 'failed') return 100
+  return 0
+})
+
+const progressLabel = computed(() => {
+  switch (uploadPhase.value) {
+    case 'transferring': return '上传文件中…'
+    case 'indexing': return indexProgress.value > 0 ? '索引中（解析/向量化/图谱）…' : '排队等待索引…'
+    case 'done': return '完成'
+    case 'failed': return '索引失败'
+    default: return ''
+  }
+})
+
+function formatSize(bytes) {
+  if (!bytes && bytes !== 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function closeUpload() {
+  // 传输阶段不允许关（关了请求也断了）；索引阶段可关，后台继续，文件列表里仍能看到进度
+  if (uploading.value && uploadPhase.value === 'transferring') return
+  stopPolling()
+  showUpload.value = false
+  uploadMsg.value = ''
+  if (!uploading.value) {
+    uploadPhase.value = 'idle'
+    transferProgress.value = 0
+    indexProgress.value = 0
+  }
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+}
 
 // 预览
 const showPreview = ref(false)
@@ -258,20 +323,64 @@ async function doUpload() {
   uploading.value = true
   uploadMsg.value = ''
   uploadOk.value = false
+  uploadPhase.value = 'transferring'
+  transferProgress.value = 0
+  indexProgress.value = 0
+
+  const kbId = activeKb.value.id
   try {
     const fd = new FormData()
     fd.append('file', uploadFile.value)
-    const res = await api.upload(`/knowledge/bases/${activeKb.value.id}/upload`, fd)
-    uploadMsg.value = `✅ 上传成功，索引了 ${res.indexed} 个块`
-    uploadOk.value = true
-    uploadFile.value = null
-    await selectKb(activeKb.value)
+    // 202 Accepted：服务器已收到文件，索引进后台
+    await api.upload(`/knowledge/bases/${kbId}/upload`, fd, (e) => {
+      if (e.total) transferProgress.value = Math.round((e.loaded / e.total) * 100)
+    })
+
+    // 传输完成 → 进入索引阶段，开始轮询
+    uploadPhase.value = 'indexing'
+    await pollIndexing(kbId)
   } catch (e) {
+    uploadPhase.value = 'failed'
     uploadMsg.value = `❌ ${e.response?.data?.detail || '上传失败'}`
     uploadOk.value = false
-  } finally {
     uploading.value = false
   }
+}
+
+// 轮询文件列表，跟踪最新那个 processing 文件的 progress，直到 completed/failed
+async function pollIndexing(kbId) {
+  stopPolling()
+  return new Promise((resolve) => {
+    pollTimer = setInterval(async () => {
+      try {
+        const files = await api.get(`/knowledge/bases/${kbId}/files`)
+        fileList.value = files  // 同步刷新表格，关掉弹窗也能看到进度
+        // 找最新一个非终态文件（本次上传的那个）
+        const target = files.find((f) => f.status === 'processing' || f.status === 'pending')
+        if (target) {
+          indexProgress.value = target.progress ?? 0
+          return  // 继续轮询
+        }
+        // 没有 processing 文件了 → 找最新文件看终态
+        stopPolling()
+        const latest = files[0]
+        if (latest?.status === 'failed') {
+          uploadPhase.value = 'failed'
+          uploadMsg.value = `❌ 索引失败：${latest.error_message || '未知错误'}`
+          uploadOk.value = false
+        } else {
+          uploadPhase.value = 'done'
+          uploadMsg.value = `✅ 上传成功，索引了 ${latest?.chunk_count ?? 0} 个块`
+          uploadOk.value = true
+          uploadFile.value = null
+        }
+        uploading.value = false
+        resolve()
+      } catch {
+        // 轮询失败（网络抖动）不打断，下一轮再试
+      }
+    }, 1500)
+  })
 }
 
 async function openPreview(f) {

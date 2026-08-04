@@ -31,9 +31,10 @@ export default {
   get: (url, params) => http.get(url, { params }).then((r) => r.data),
   post: (url, data) => http.post(url, data).then((r) => r.data),
   delete: (url) => http.delete(url).then((r) => r.data),
-  upload: (url, formData) =>
+  upload: (url, formData, onUploadProgress) =>
     http.post(url, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      ...(onUploadProgress ? { onUploadProgress } : {}),
     }).then((r) => r.data),
   // 获取二进制数据（PDF/图片），返回 { data: Blob, contentType: string }
   getBlob: (url) =>
