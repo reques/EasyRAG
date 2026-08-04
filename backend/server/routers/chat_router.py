@@ -18,6 +18,7 @@ from backend.services.chat_service import (
     get_conversation_history,
     list_user_conversations,
     get_conversation,
+    generate_conversation_title,
 )
 from backend.storage.postgres.manager import get_session
 from backend.server.utils.auth_middleware import get_current_user
@@ -100,28 +101,9 @@ async def send_message(
         logger.error("[chat/send] agent error: %s", exc)
         answer = f"处理请求时发生错误: {exc}"
 
-    # 自动设置会话标题（首次对话时用 LLM 生成摘要）
+    # 自动设置会话标题（首次对话时用 LLM 生成语义摘要）
     if is_new and req.query.strip() and answer.strip():
-        try:
-            from app.llm.client import get_llm_client
-            llm = get_llm_client()
-            summary_prompt = (
-                "用不超过20个字概括这段对话的主题，只返回概括结果，不要加引号或任何额外说明。\n\n"
-                f"用户: {req.query.strip()[:200]}\n"
-                f"助手: {answer.strip()[:300]}"
-            )
-            title = llm.chat_sync(
-                [{"role": "user", "content": summary_prompt}],
-                temperature=0.3,
-                max_tokens=50,
-            ).strip().strip('"').strip("'").strip("。").strip("，")
-            # 兜底：如果 LLM 返回太短或失败，用原始截断
-            if len(title) < 2:
-                title = req.query.strip()[:30]
-        except Exception as exc:
-            logger.warning("[chat/send] title generation failed, using fallback: %s", exc)
-            title = req.query.strip()[:30]
-
+        title = await generate_conversation_title(req.query, answer)
         async with get_session() as session:
             conv = await get_conversation(session, conv_id)
             if conv:
@@ -257,33 +239,29 @@ async def send_message_stream(
         except Exception as exc:
             logger.warning("[chat/stream] persist answer failed: %s", exc)
 
-        # 4. 新会话自动起标题(尽力而为, 不阻塞)
-        if is_new and answer:
-            try:
-                summary_prompt = (
-                    "用不超过20个字概括这段对话的主题,只返回概括结果,不要加引号或任何额外说明。\n\n"
-                    f"用户: {req.query.strip()[:200]}\n"
-                    f"助手: {answer[:300]}"
-                )
-                title = (await get_llm_client().chat(
-                    [{"role": "user", "content": summary_prompt}],
-                    temperature=0.3, max_tokens=50,
-                )).strip().strip('"').strip("'").strip("。").strip(",")
-                if len(title) >= 2:
-                    async with get_session() as session:
-                        c = await get_conversation(session, conv_id)
-                        if c:
-                            c.title = title
-                            await session.commit()
-            except Exception as exc:
-                logger.warning("[chat/stream] title gen failed: %s", exc)
-
         yield _sse({
             "type": "done",
             "sources": ctx["sources"],
             "intent": ctx["intent"],
             "elapsed_seconds": elapsed,
         })
+
+        # 4. 新会话标题生成 — 在 done 之后的后台协程里做，不阻塞 SSE 流。
+        #    LLM 生成语义化标题(非原文截取)，前端下次轮询会话列表时即可见。
+        if is_new and answer:
+            async def _gen_title():
+                try:
+                    title = await generate_conversation_title(req.query, answer)
+                    async with get_session() as session:
+                        c = await get_conversation(session, conv_id)
+                        if c:
+                            c.title = title
+                            await session.commit()
+                    logger.info("[chat/stream] title generated: %s", title)
+                except Exception as exc:
+                    logger.warning("[chat/stream] title gen failed: %s", exc)
+
+            asyncio.get_event_loop().create_task(_gen_title())
 
     return StreamingResponse(
         event_gen(),
