@@ -1,15 +1,5 @@
 <template>
   <div class="chat-view">
-    <!-- 顶栏 -->
-    <header class="chat-header">
-      <h2><MessageSquare :size="16" /> 智能对话</h2>
-      <div class="header-actions">
-        <button @click="newConversation" class="btn-secondary">
-          <MessageCirclePlus :size="14" /> 新对话
-        </button>
-      </div>
-    </header>
-
     <!-- 消息列表 -->
     <div class="chat-messages" ref="msgContainer" :class="{ 'is-empty': messages.length === 0 && !sending }">
       <div class="chat-column">
@@ -19,7 +9,13 @@
           <p>基于知识库与联网搜索，为你解答</p>
         </div>
 
-        <div v-for="(msg, i) in messages" :key="i" :class="['message', msg.role]">
+        <template v-for="(msg, i) in messages" :key="i">
+          <!-- 等待首 token 时的空 assistant 占位不渲染，由下方「思考中」气泡代替，
+               避免空灰条 + 思考中两个框同时出现 -->
+          <div
+            v-if="!(sending && msg.role === 'assistant' && !msg.content && i === messages.length - 1)"
+            :class="['message', msg.role]"
+          >
           <div class="message-body">
             <div class="message-text" v-html="renderContent(msg.content)"></div>
             <!-- 知识库 / 检索引用块 -->
@@ -49,7 +45,8 @@
               <span v-if="msg.meta.elapsed">耗时: {{ msg.meta.elapsed }}s</span>
             </div>
           </div>
-        </div>
+          </div>
+        </template>
 
         <!-- 仅当正在等待首个 token(最后一条 assistant 还没内容)时显示思考中 -->
         <div v-if="sending && !lastAssistantHasContent" class="message assistant">
@@ -83,7 +80,7 @@ import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
-import { MessageSquare, MessageCirclePlus, ArrowUp, BookOpen } from 'lucide-vue-next'
+import { ArrowUp, BookOpen } from 'lucide-vue-next'
 import api from '../api'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
@@ -208,10 +205,6 @@ async function send() {
     scrollBottom()
     nextTick(() => inputEl.value?.focus())
   }
-}
-
-function newConversation() {
-  chatStore.startNewConversation()
 }
 
 onActivated(() => {
