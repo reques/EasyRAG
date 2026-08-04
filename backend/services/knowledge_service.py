@@ -76,3 +76,23 @@ async def update_file_status(
     if f:
         f.status = status
         await session.flush()
+
+
+async def update_file_progress(
+    session: AsyncSession,
+    file_id: uuid.UUID,
+    progress: int,
+    status: Optional[str] = None,
+    error_message: Optional[str] = None,
+) -> None:
+    """更新文件处理进度（后台索引任务用）。每次调用独立提交，供轮询读取。"""
+    repo = KnowledgeFileRepository(session)
+    f = await repo.get_by_id(file_id)
+    if not f:
+        return
+    f.progress = max(0, min(100, progress))
+    if status is not None:
+        f.status = status
+    if error_message is not None:
+        f.error_message = error_message
+    await session.commit()

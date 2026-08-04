@@ -84,6 +84,118 @@ def task_planning(state):
         }
 
 
+async def lookup_file_ids_async(
+    pairs: List[tuple],
+) -> Dict[tuple, str]:
+    """async 版 file_id 反查 — 在 FastAPI 协程里直接 await(不走 executor)。
+
+    pairs 为 [(knowledge_base_id, source), ...]。返回 {(kb_id, source): file_id}。
+    供 SSE 流式端点在主协程调用, 避免 executor 线程里 asyncio.run 与
+    主线程 async engine 的事件循环冲突。
+    """
+    pairs = [(kb, src) for kb, src in pairs if kb and src]
+    if not pairs:
+        return {}
+    try:
+        import uuid as _uuid
+        from sqlalchemy import select
+        from backend.storage.postgres.manager import get_session
+        from backend.storage.postgres.models_knowledge import KnowledgeFile
+
+        kb_uuids = {_uuid.UUID(kb) for kb, _ in pairs}
+        out: Dict[tuple, str] = {}
+        async with get_session() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        KnowledgeFile.id,
+                        KnowledgeFile.knowledge_base_id,
+                        KnowledgeFile.filename,
+                    ).where(KnowledgeFile.knowledge_base_id.in_(kb_uuids))
+                )
+            ).all()
+            for fid, kb_id, filename in rows:
+                key = (str(kb_id), filename)
+                if key in pairs:
+                    out[key] = str(fid)
+        return out
+    except Exception as exc:
+        logger.warning("[lookup_file_ids_async] failed: %s", exc)
+        return {}
+
+
+# ── executor 线程安全的一次性 DB 访问 ────────────────────────────────────────
+# 背景：knowledge_retrieval / answer_generation 等节点被 FastAPI 端点经
+# run_in_executor 丢到 worker 线程跑同步代码。线程内若 asyncio.run(...) 复用
+# 全局 async engine 的连接池，连接会带着另一个事件循环的 Future 归还池中，
+# 污染后续请求（症状：第一个事务静默失效，随后 FK violation / PendingRollback）。
+# 因此线程内的 DB 查询一律用随用随建的独立 engine，用完即 dispose，
+# 与主 loop 的连接池完全隔离。
+async def _run_with_isolated_engine(coro_fn):
+    """在独立 engine 上执行 coro_fn(session)，返回其结果。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from backend.storage.postgres.manager import DATABASE_URL
+
+    engine = create_async_engine(DATABASE_URL, pool_size=1, max_overflow=0)
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            return await coro_fn(session)
+    finally:
+        await engine.dispose()
+
+
+def _run_in_thread_isolated(coro_fn):
+    """executor 线程里安全执行 async DB 查询：新事件循环 + 独立 engine。"""
+    import asyncio
+    return asyncio.run(_run_with_isolated_engine(coro_fn))
+
+
+def _lookup_file_ids(docs: List[Dict[str, Any]]) -> Dict[tuple, str]:
+    """按 (knowledge_base_id, source) 批量反查 knowledge_files.id。
+
+    检索结果只带 kb_id + 文件名, 前端要跳转到文档详情需要 file_id。
+    一次性查出所有候选 (kb_id, source) 组合, 返回 {(kb_id, source): file_id}。
+    失败时返回空 dict — 引用块退化为纯文本, 不影响主链路。
+    """
+    pairs = {
+        ((d.get("metadata") or {}).get("knowledge_base_id") or "",
+         (d.get("metadata") or {}).get("source") or "")
+        for d in docs
+    }
+    pairs = {(kb, src) for kb, src in pairs if kb and src}
+    if not pairs:
+        return {}
+
+    async def _query(session) -> Dict[tuple, str]:
+        import uuid as _uuid
+        from sqlalchemy import select
+        from backend.storage.postgres.models_knowledge import KnowledgeFile
+
+        kb_uuids = {_uuid.UUID(kb) for kb, _ in pairs}
+        out: Dict[tuple, str] = {}
+        rows = (
+            await session.execute(
+                select(
+                    KnowledgeFile.id,
+                    KnowledgeFile.knowledge_base_id,
+                    KnowledgeFile.filename,
+                ).where(KnowledgeFile.knowledge_base_id.in_(kb_uuids))
+            )
+        ).all()
+        for fid, kb_id, filename in rows:
+            key = (str(kb_id), filename)
+            if key in pairs:
+                out[key] = str(fid)
+        return out
+
+    try:
+        return _run_in_thread_isolated(_query)
+    except Exception as exc:
+        logger.warning("[_lookup_file_ids] failed (refs without file_id): %s", exc)
+        return {}
+
+
 def knowledge_retrieval(state):
     """Node 3: Run RAG retrieval and populate retrieved_docs.
 
@@ -101,23 +213,20 @@ def knowledge_retrieval(state):
 
         if cfg.GRAPH_ENABLED:
             try:
-                import asyncio
-                from backend.storage.postgres.manager import get_session
                 from backend.services.graph_service import query_related, format_subgraph_for_prompt
 
-                async def _graph_query():
-                    async with get_session() as session:
-                        # 跨知识库全局查询（暂未按会话锁定 kb，待多 kb 路由完善）
-                        import uuid as _uuid
-                        from sqlalchemy import select
-                        from backend.storage.postgres.models_knowledge import KnowledgeBase
-                        kb_ids = (await session.execute(select(KnowledgeBase.id))).scalars().all()
-                        subgraphs = []
-                        for kb_id in kb_ids:
-                            subgraphs.extend(await query_related(session, kb_id, query))
-                        return subgraphs
+                async def _graph_query(session):
+                    # 跨知识库全局查询（暂未按会话锁定 kb，待多 kb 路由完善）
+                    import uuid as _uuid
+                    from sqlalchemy import select
+                    from backend.storage.postgres.models_knowledge import KnowledgeBase
+                    kb_ids = (await session.execute(select(KnowledgeBase.id))).scalars().all()
+                    subgraphs = []
+                    for kb_id in kb_ids:
+                        subgraphs.extend(await query_related(session, kb_id, query))
+                    return subgraphs
 
-                subgraphs = asyncio.run(_graph_query())
+                subgraphs = _run_in_thread_isolated(_graph_query)
                 if subgraphs:
                     docs.append({
                         "content": format_subgraph_for_prompt(subgraphs),
@@ -131,7 +240,10 @@ def knowledge_retrieval(state):
             raise EmptyRetrievalError("No documents matched.")
         # 知识库引用透出: 从 retrieved_docs 提取去重后的来源,
         # 与 web_search 的 sources 并列进入最终响应, 供前端渲染引用块。
-        kb_sources: List[Dict[str, str]] = []
+        # 方案 B: 检索结果已带 knowledge_base_id, 据此反查 knowledge_files
+        # 拿到 file_id, 使前端引用可点击跳转到具体文档详情。
+        file_id_map = _lookup_file_ids(docs)
+        kb_sources: List[Dict[str, Any]] = []
         seen: set = set()
         for d in docs:
             meta = d.get("metadata") or {}
@@ -139,12 +251,16 @@ def knowledge_retrieval(state):
             if not src or src in seen:
                 continue
             seen.add(src)
-            kb_sources.append({
+            kb_id = (meta.get("knowledge_base_id") or "").strip()
+            entry: Dict[str, Any] = {
                 "title": src,
                 "url": "",
                 "type": "knowledge_graph" if meta.get("graph") else "kb",
                 "score": round(float(meta.get("score", 0.0)), 4),
-            })
+                "knowledge_base_id": kb_id,
+                "file_id": file_id_map.get((kb_id, src), ""),
+            }
+            kb_sources.append(entry)
         return {
             "retrieved_docs": docs,
             "retrieval_triggered": True,

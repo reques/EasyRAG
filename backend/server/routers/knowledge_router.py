@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,10 @@ from backend.services.knowledge_service import (
     list_kb_files,
     update_file_status,
 )
-from backend.repositories.knowledge_repository import KnowledgeBaseRepository
+from backend.repositories.knowledge_repository import (
+    KnowledgeBaseRepository,
+    KnowledgeFileRepository,
+)
 from backend.storage.postgres.manager import get_session
 from backend.server.utils.auth_middleware import get_current_user
 from backend.storage.postgres.models_user import User
@@ -50,6 +53,8 @@ class FileResponse(BaseModel):
     char_count: int
     status: str
     created_at: str
+    progress: int = 0
+    error_message: Optional[str] = None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -124,6 +129,8 @@ async def list_files(
                 char_count=f.char_count,
                 status=f.status,
                 created_at=f.created_at.isoformat() if f.created_at else "",
+                progress=f.progress,
+                error_message=f.error_message,
             )
             for f in files
         ]
@@ -134,6 +141,7 @@ class UploadResponse(BaseModel):
     indexed: int
     message: str
     graph: Optional[dict] = None   # GRAPH_ENABLED 时: {"entities": n, "relations": m}
+    status: str = "completed"      # 异步模式: 立即返回 "processing"
 
 
 class FilePreviewResponse(BaseModel):
@@ -210,17 +218,18 @@ async def get_kb_graph(
         )
 
 
-@router.post("/bases/{kb_id}/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/bases/{kb_id}/upload", response_model=UploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_to_kb(
     kb_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     strategy: str = Form(default="", description="覆盖分块策略: fixed/recursive/markdown/parent_child"),
     current_user: User = Depends(get_current_user),
 ):
-    """上传文件到指定知识库：解析分块 → 向量索引 → 落库文件记录。
+    """上传文件到指定知识库：立即登记记录 + 存 MinIO，索引放后台任务。
 
-    复用旧 /kb/upload 的解析与索引链路，额外在 PostgreSQL 中登记文件，
-    使 GET /knowledge/bases/{id}/files 能列出已上传文件。
+    返回 202 + file_id，前端轮询 GET /bases/{id}/files 按 status/progress
+    渲染进度条，直到 status=completed / failed。
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided.")
@@ -242,7 +251,7 @@ async def upload_to_kb(
         if not kb or kb.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="Knowledge base not found")
 
-        # 先登记文件记录（pending），索引完成后更新状态
+        # 登记文件记录（pending → 后台任务推进 progress）
         record = await add_file_record(
             session,
             kb_id=kb.id,
@@ -251,10 +260,14 @@ async def upload_to_kb(
             char_count=len(raw),
         )
         await session.commit()
+        # commit 后立即取出纯值，避免后续异常时访问 expired/回滚 session 上的 ORM 属性
+        file_id = record.id
+        kb_uuid = kb.id
+        filename = file.filename
 
-        # 存入 MinIO 以便后续预览
+        # 存入 MinIO 以便后续预览（同步完成，失败不阻塞索引）
         minio_bucket = cfg.MINIO_BUCKET
-        minio_object = f"kb/{kb.id}/{record.id}/{file.filename}"
+        minio_object = f"kb/{kb_uuid}/{file_id}/{filename}"
         try:
             from backend.storage.minio.client import get_minio_client
             import io as std_io
@@ -266,71 +279,108 @@ async def upload_to_kb(
                 length=len(raw),
                 content_type=file.content_type or "application/octet-stream",
             )
+            # put_object 成功后单独一个短事务更新 minio 字段
+            await session.refresh(record)
             record.minio_bucket = minio_bucket
             record.minio_object = minio_object
-            await session.flush()
+            await session.commit()
             logger.info("[knowledge/upload] stored in MinIO: %s/%s", minio_bucket, minio_object)
         except Exception as exc:
+            # 必须 rollback：否则 session 进入 PendingRollback 状态，
+            # 后续任何 ORM 属性访问都会抛 PendingRollbackError → 500
+            await session.rollback()
             logger.warning("[knowledge/upload] MinIO store failed (preview unavailable): %s", exc)
 
-        try:
-            from app.rag.chunker import parse_and_chunk
-            from app.rag.retriever import get_retriever
+    # 后台任务：解析分块 → 向量索引 → 图谱抽取，分阶段更新 progress
+    background_tasks.add_task(
+        _run_ingestion, file_id, kb_uuid, raw, filename, strategy or None
+    )
 
-            chunks = parse_and_chunk(raw=raw, filename=file.filename, strategy=strategy or None)
-            if not chunks:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="File parsed but produced no text chunks.",
+    return UploadResponse(
+        file_id=str(file_id),
+        indexed=0,
+        message=f"File '{filename}' accepted, indexing in background.",
+        status="processing",
+    )
+
+
+async def _run_ingestion(
+    file_id: uuid.UUID,
+    kb_id: uuid.UUID,
+    raw: bytes,
+    filename: str,
+    strategy: Optional[str],
+) -> None:
+    """后台索引任务：每阶段独立 session 提交进度，供前端轮询。"""
+    from backend.services.knowledge_service import update_file_progress
+
+    try:
+        # 阶段 1: 解析分块 (10%)
+        async with get_session() as s:
+            await update_file_progress(s, file_id, 10, status="processing")
+
+        from app.rag.chunker import parse_and_chunk
+        chunks = parse_and_chunk(raw=raw, filename=filename, strategy=strategy)
+        if not chunks:
+            async with get_session() as s:
+                await update_file_progress(
+                    s, file_id, 100, status="failed",
+                    error_message="文件解析后没有产生文本块",
                 )
+            return
 
-            # 存储全文用于预览（图片跳过——图片的"全文"是 OCR 结果，已在 chunker 内处理）
-            try:
-                from app.rag.chunker import extract_text as _extract_full
-                full_text = _extract_full(raw, file.filename)
-                record.text_content = full_text
-            except Exception as exc:
-                logger.warning("[knowledge/upload] preview text store failed: %s", exc)
-
-            texts = [c[0] for c in chunks]
-            metas = [c[1] for c in chunks]
-            for m in metas:
-                m.setdefault("knowledge_base_id", str(kb.id))
-
-            n = get_retriever().add_documents(texts, metas)
-
-            record.chunk_count = n
-            await update_file_status(session, record.id, "completed")
-
-            # 阶段 2C: 图谱抽取（GRAPH_ENABLED 时，失败不阻塞主链路）
-            graph_stats = None
-            if cfg.GRAPH_ENABLED:
+        # 阶段 2: 存储全文用于预览 (30%)
+        async with get_session() as s:
+            repo = KnowledgeFileRepository(s)
+            f = await repo.get_by_id(file_id)
+            if f:
                 try:
-                    from backend.services.graph_service import extract_graph_from_chunks
-                    graph_stats = await extract_graph_from_chunks(
-                        session, kb.id, chunks, file.filename,
-                    )
-                    logger.info("[knowledge/upload] graph: %s", graph_stats)
+                    from app.rag.chunker import extract_text as _extract_full
+                    f.text_content = _extract_full(raw, filename)
                 except Exception as exc:
-                    logger.warning("[knowledge/upload] graph extraction failed: %s", exc)
+                    logger.warning("[ingestion] preview text store failed: %s", exc)
+                await update_file_progress(s, file_id, 30)
 
-            await session.commit()
+        # 阶段 3: 向量索引 (30% → 80%，embedding 是最耗时阶段)
+        from app.rag.retriever import get_retriever
+        texts = [c[0] for c in chunks]
+        metas = [c[1] for c in chunks]
+        for m in metas:
+            m.setdefault("knowledge_base_id", str(kb_id))
 
-            return UploadResponse(
-                file_id=str(record.id),
-                indexed=n,
-                message=f"Successfully indexed {n} chunks from '{file.filename}'.",
-                graph=graph_stats,
-            )
-        except HTTPException:
-            await update_file_status(session, record.id, "failed")
-            await session.commit()
-            raise
-        except Exception as exc:
-            logger.error("[knowledge/upload] error: %s", exc)
-            await update_file_status(session, record.id, "failed")
-            await session.commit()
-            raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}")
+        n = get_retriever().add_documents(texts, metas)
+
+        async with get_session() as s:
+            repo = KnowledgeFileRepository(s)
+            f = await repo.get_by_id(file_id)
+            if f:
+                f.chunk_count = n
+            await update_file_progress(s, file_id, 80)
+
+        # 阶段 4: 图谱抽取 (80% → 100%，GRAPH_ENABLED 时)
+        if cfg.GRAPH_ENABLED:
+            try:
+                from backend.services.graph_service import extract_graph_from_chunks
+                async with get_session() as s:
+                    await extract_graph_from_chunks(s, kb_id, chunks, filename)
+                    await s.commit()
+            except Exception as exc:
+                logger.warning("[ingestion] graph extraction failed: %s", exc)
+
+        async with get_session() as s:
+            await update_file_progress(s, file_id, 100, status="completed")
+        logger.info("[ingestion] completed: %s (%d chunks)", filename, n)
+
+    except Exception as exc:
+        logger.error("[ingestion] failed: %s — %s", filename, exc)
+        try:
+            async with get_session() as s:
+                await update_file_progress(
+                    s, file_id, 100, status="failed",
+                    error_message=str(exc)[:500],
+                )
+        except Exception:
+            logger.exception("[ingestion] failed to persist error status")
 
 
 # ── 文件预览端点 ─────────────────────────────────────────────────────────────

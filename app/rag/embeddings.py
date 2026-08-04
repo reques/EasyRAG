@@ -97,6 +97,16 @@ class OllamaEmbedder(BaseEmbedder):
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
+        # 分批请求：Ollama /api/embed 对单次批量大小有限制，
+        # 大文件数百个 chunk 一次性 POST 会 400。每批 32 条是安全值。
+        BATCH = 32
+        all_vectors: List[List[float]] = []
+        for start in range(0, len(texts), BATCH):
+            batch = texts[start:start + BATCH]
+            all_vectors.extend(self._embed_batch(batch))
+        return all_vectors
+
+    def _embed_batch(self, texts: List[str]) -> List[List[float]]:
         try:
             resp = self._requests.post(
                 f"{self._base_url}/api/embed",

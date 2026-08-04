@@ -117,8 +117,8 @@ EasyRAG/
         ├── seed.py                #   管理员种子脚本
         ├── routers/
         │   ├── auth_router.py     #   POST /auth/register, /auth/login
-        │   ├── chat_router.py     #   POST /chat/send, GET /chat/conversations
-        │   ├── knowledge_router.py    # CRUD /knowledge/bases + upload + /graph
+        │   ├── chat_router.py     #   POST /chat/send, POST /chat/stream (SSE), GET /chat/conversations
+        │   ├── knowledge_router.py    # CRUD /knowledge/bases + upload(202异步+progress轮询) + /graph
         │   └── evaluation_router.py   # [2D] POST/GET /evaluation/runs
         └── utils/
             └── auth_middleware.py #   get_current_user (JWT 依赖注入)
@@ -189,6 +189,7 @@ EasyRAG/
 | 方法 | 路径 | 认证 |
 |------|------|------|
 | POST | `/api/v1/chat/send` | JWT |
+| POST | `/api/v1/chat/stream` (SSE 流式) | JWT |
 | GET | `/api/v1/chat/conversations` | JWT |
 | GET | `/api/v1/chat/conversations/{id}/history` | JWT |
 
