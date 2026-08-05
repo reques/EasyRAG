@@ -330,3 +330,23 @@ async def summarize_conversation(
         conv.title = title
         await session.commit()
         return {"conversation_id": conversation_id, "title": title}
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation_endpoint(
+    conversation_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """删除整个会话及其所有消息（级联删除）。验证会话归属当前用户。"""
+    from backend.services.chat_service import delete_conversation
+
+    async with get_session() as session:
+        deleted = await delete_conversation(
+            session, uuid.UUID(conversation_id), current_user.id
+        )
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found",
+            )
+    return {"conversation_id": conversation_id, "deleted": True}

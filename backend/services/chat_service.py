@@ -86,7 +86,7 @@ async def get_conversation_history(
     msgs = await msg_repo.list_by_conversation(conversation_id)
     out: List[dict] = []
     for m in msgs:
-        item: dict = {"role": m.role, "content": m.content}
+        item: dict = {"id": m.id, "role": m.role, "content": m.content}
         raw = getattr(m, "metadata_json", None)
         if raw:
             try:
@@ -185,3 +185,20 @@ async def generate_conversation_title(query: str, answer: str) -> str:
     except Exception as exc:
         logger.warning("[title] generation failed, fallback: %s", exc)
         return _fallback_title(query)
+
+
+async def delete_conversation(
+    session: AsyncSession, conversation_id: uuid.UUID, user_id: uuid.UUID
+) -> bool:
+    """删除整个会话（级联删除其所有消息）。验证会话归属当前用户。
+
+    Message.conversation_id 外键带 ondelete="CASCADE"，且 ORM relationship
+    带 cascade="all, delete-orphan"，删除 Conversation 即级联删除消息。
+    """
+    conv = await get_conversation(session, conversation_id)
+    if not conv or conv.user_id != user_id:
+        return False
+
+    await session.delete(conv)
+    await session.commit()
+    return True
