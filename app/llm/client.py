@@ -182,13 +182,30 @@ class LLMClient:
             raise LLMClientError(f"LLM API error: {exc}") from exc
 
 
-# Module-level singleton (lazy)
-_default_client: Optional[LLMClient] = None
+# Module-level singletons (lazy, per-tier)
+_tier_clients: Dict[str, LLMClient] = {}
 
 
-def get_llm_client() -> LLMClient:
-    """Return the process-level default LLM client (created once)."""
-    global _default_client
-    if _default_client is None:
-        _default_client = LLMClient()
-    return _default_client
+def get_llm_client(tier: str = "main") -> LLMClient:
+    """Return the process-level LLM client for the given tier (created once per tier).
+
+    tier="main" — 主模型（默认），用于 ReAct 推理、答案生成等核心任务。
+    tier="fast" — 快速模型，用于标题生成/意图识别/记忆提取等辅助任务。
+                  未配置 LLM_FAST_* 时回退到主模型（不影响现有行为）。
+
+    分级接口为阶段 1 引入, 本期所有调用点仍用 main; 后续成本优化时按需切 fast。
+    """
+    cfg = get_settings()
+    if tier == "fast" and not cfg.LLM_FAST_MODEL:
+        tier = "main"  # fast 未配置 → 回退主模型
+    if tier not in _tier_clients:
+        if tier == "fast":
+            _tier_clients[tier] = LLMClient(
+                base_url=cfg.LLM_FAST_BASE_URL or cfg.LLM_BASE_URL,
+                api_key=cfg.LLM_FAST_API_KEY or cfg.LLM_API_KEY,
+                model=cfg.LLM_FAST_MODEL,
+            )
+            logger.info("[llm] fast tier client created: model=%s", cfg.LLM_FAST_MODEL)
+        else:
+            _tier_clients[tier] = LLMClient()
+    return _tier_clients[tier]
