@@ -15,6 +15,7 @@ from app.core.logger import get_logger
 from backend.services.chat_service import (
     create_conversation,
     add_message,
+    get_compressed_history,
     get_conversation_history,
     list_user_conversations,
     get_conversation,
@@ -82,8 +83,8 @@ async def send_message(
         await add_message(session, conv_id, "user", req.query)
         await session.commit()
 
-        # 加载完整对话历史（含刚保存的用户消息）
-        db_history = await get_conversation_history(session, conv_id)
+        # 加载对话历史（情景记忆压缩：有 summary 时 = 摘要+最近N轮，否则完整历史）
+        db_history = await get_compressed_history(session, conv_id)
 
     # =====================================================================
     # 调用 LangGraph Agent，传入 DB 中的对话历史
@@ -171,7 +172,7 @@ async def send_message_stream(
 
         await add_message(session, conv_id, "user", req.query)
         await session.commit()
-        db_history = await get_conversation_history(session, conv_id)
+        db_history = await get_compressed_history(session, conv_id)
 
     async def event_gen():
         from app.services.agent_service import get_agent_service
@@ -188,7 +189,7 @@ async def send_message_stream(
         # 1. 同步检索准备上下文(阻塞, 放 executor)
         try:
             ctx = await loop.run_in_executor(
-                None, agent.prepare_context, req.query, db_history
+                None, agent.prepare_context, req.query, db_history, current_user.id
             )
         except Exception as exc:
             logger.error("[chat/stream] prepare_context error: %s", exc)
@@ -329,3 +330,23 @@ async def summarize_conversation(
         conv.title = title
         await session.commit()
         return {"conversation_id": conversation_id, "title": title}
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation_endpoint(
+    conversation_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """删除整个会话及其所有消息（级联删除）。验证会话归属当前用户。"""
+    from backend.services.chat_service import delete_conversation
+
+    async with get_session() as session:
+        deleted = await delete_conversation(
+            session, uuid.UUID(conversation_id), current_user.id
+        )
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found",
+            )
+    return {"conversation_id": conversation_id, "deleted": True}

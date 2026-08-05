@@ -50,6 +50,23 @@ async def add_message(
         conv.updated_at = datetime.now(timezone.utc)
         await session.flush()
 
+    # 情景记忆: 消息数达 10 的倍数时增量压缩会话摘要（仅 assistant 落库后触发,
+    # 一轮 = user+assistant 两条, 避免每条都算）
+    if role == "assistant" and conv:
+        try:
+            from app.memory.manager import maybe_update_summary
+            await maybe_update_summary(session, conversation_id)
+        except Exception as exc:
+            logger.warning("[chat] summary trigger failed: %s", exc)
+
+    # 语义记忆: 用户消息含触发词时提取事实（偏好/身份/明确要求）
+    if role == "user" and conv:
+        try:
+            from app.memory.manager import extract_and_store_fact
+            await extract_and_store_fact(session, conv.user_id, content, conversation_id)
+        except Exception as exc:
+            logger.warning("[chat] fact extraction failed: %s", exc)
+
     return msg
 
 
@@ -69,7 +86,7 @@ async def get_conversation_history(
     msgs = await msg_repo.list_by_conversation(conversation_id)
     out: List[dict] = []
     for m in msgs:
-        item: dict = {"role": m.role, "content": m.content}
+        item: dict = {"id": m.id, "role": m.role, "content": m.content}
         raw = getattr(m, "metadata_json", None)
         if raw:
             try:
@@ -77,6 +94,36 @@ async def get_conversation_history(
             except Exception:
                 pass
         out.append(item)
+    return out
+
+
+async def get_compressed_history(
+    session: AsyncSession, conversation_id: uuid.UUID
+) -> List[dict]:
+    """情景记忆压缩: 有 summary 的会话返回 [summary system 消息 + 最近 N 轮]。
+
+    长对话不再塞全部历史——摘要承载远期上下文, 最近消息保留细节。
+    无 summary 时返回完整历史（行为与 get_conversation_history 一致）。
+    """
+    from app.memory.manager import RECENT_TURNS_KEPT
+
+    conv_repo = ConversationRepository(session)
+    conv = await conv_repo.get_by_id(conversation_id)
+    full = await get_conversation_history(session, conversation_id)
+
+    if not conv or not conv.summary:
+        return full
+
+    # 只在"压缩真的更短"时才用压缩版（短会话 summary + 最近N轮反而更长, 不值得）
+    # 一轮 = user+assistant 两条, 取 2*N 条
+    recent = full[-(RECENT_TURNS_KEPT * 2):]
+    if len(full) <= RECENT_TURNS_KEPT * 2:
+        return full  # 全部历史本就在窗口内, 无需压缩
+    out: List[dict] = [{
+        "role": "system",
+        "content": f"以下是本次对话到目前为止的内容摘要：\n{conv.summary}",
+    }]
+    out.extend(recent)
     return out
 
 
@@ -138,3 +185,20 @@ async def generate_conversation_title(query: str, answer: str) -> str:
     except Exception as exc:
         logger.warning("[title] generation failed, fallback: %s", exc)
         return _fallback_title(query)
+
+
+async def delete_conversation(
+    session: AsyncSession, conversation_id: uuid.UUID, user_id: uuid.UUID
+) -> bool:
+    """删除整个会话（级联删除其所有消息）。验证会话归属当前用户。
+
+    Message.conversation_id 外键带 ondelete="CASCADE"，且 ORM relationship
+    带 cascade="all, delete-orphan"，删除 Conversation 即级联删除消息。
+    """
+    conv = await get_conversation(session, conversation_id)
+    if not conv or conv.user_id != user_id:
+        return False
+
+    await session.delete(conv)
+    await session.commit()
+    return True
