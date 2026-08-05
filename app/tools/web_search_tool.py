@@ -145,3 +145,24 @@ def web_search(
         raise ToolExecutionError(f"Failed to parse Tavily response: {exc}") from exc
 
     return _format_results(data, max_results)
+
+
+# ── 插件导出（discover_tools 自动注册）─────────────────────────────────────
+from app.tools.registry import ToolDefinition
+
+
+def _check() -> bool:
+    # web_search 依赖 Tavily API key，未配置则不可用（不出现在 schema/react prompt）
+    return bool(cfg.TAVILY_API_KEY)
+
+
+TOOL = ToolDefinition(
+    name="web_search",
+    description="Search the web for current/real-time information: news, weather, recent events, prices, or anything not in the knowledge base. Returns titles, URLs and content snippets.",
+    fn=lambda query, max_results=None, **_: web_search(query=query, max_results=max_results),
+    arg_schema={
+        "query": ("string", "The search query, e.g. 'latest AI news today'", True),
+        "max_results": ("number", "Max results to return (1-10, default 5)", False),
+    },
+    check_fn=_check,
+)

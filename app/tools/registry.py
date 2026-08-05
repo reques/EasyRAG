@@ -24,6 +24,17 @@ class ToolDefinition:
     fn: Callable[..., str]
     # {arg_name: (python_type_str, description, is_required)}
     arg_schema: Dict[str, Tuple[str, str, bool]] = field(default_factory=dict)
+    # 工具可用性自检：返回 False 的工具不出现在 schema/react prompt，invoke 时拒绝
+    check_fn: Optional[Callable[[], bool]] = None
+
+    def is_available(self) -> bool:
+        """工具是否可用（check_fn 通过）。None 表示总是可用。"""
+        if self.check_fn is None:
+            return True
+        try:
+            return bool(self.check_fn())
+        except Exception:
+            return False
 
 
 class ToolRegistry:
@@ -41,8 +52,11 @@ class ToolRegistry:
             raise ToolNotFoundError(name, "tool not registered")
         return self._tools[name]
 
-    def list_names(self) -> List[str]:
-        return list(self._tools.keys())
+    def list_names(self, available_only: bool = True) -> List[str]:
+        """Return tool names. available_only=True 时只含 check_fn 通过的工具。"""
+        if not available_only:
+            return list(self._tools.keys())
+        return [t.name for t in self._tools.values() if t.is_available()]
 
     def invoke(self, name: str, **kwargs: Any) -> str:
         """Execute a registered tool by name.
@@ -56,9 +70,13 @@ class ToolRegistry:
 
         Raises:
             ToolNotFoundError:   Tool not registered.
-            ToolExecutionError:  Tool raised an error during execution.
+            ToolExecutionError:  Tool unavailable (check_fn failed) or raised during execution.
         """
         tool = self.get(name)
+        if not tool.is_available():
+            raise ToolExecutionError(
+                f"Tool '{name}' is not available (check_fn failed — missing config or dependency)"
+            )
         logger.info("Invoking tool '%s' with args: %s", name, kwargs)
         try:
             result = tool.fn(**kwargs)
@@ -72,9 +90,11 @@ class ToolRegistry:
             ) from exc
 
     def to_llm_schema(self) -> List[Dict[str, Any]]:
-        """Return a list of tool descriptions in OpenAI function-call format."""
+        """Return a list of tool descriptions in OpenAI function-call format (仅可用工具)."""
         schema = []
         for tool in self._tools.values():
+            if not tool.is_available():
+                continue
             properties: Dict[str, Any] = {}
             required_args: List[str] = []
             for arg_name, (type_str, desc, is_req) in tool.arg_schema.items():
@@ -95,6 +115,18 @@ class ToolRegistry:
             })
         return schema
 
+    def to_react_prompt(self) -> str:
+        """生成 ReAct reasoning prompt 用的工具描述文本（仅含可用工具）。"""
+        lines = []
+        for t in self._tools.values():
+            if not t.is_available():
+                continue
+            args = ", ".join(
+                f"{k}: {v[0]}" for k, v in t.arg_schema.items()
+            ) or "无参数"
+            lines.append(f"- {t.name}: {t.description}（参数: {args}）")
+        return "\n".join(lines) or "（无可用工具）"
+
 
 # ── Default registry singleton ─────────────────────────────────────────────
 
@@ -110,55 +142,35 @@ def get_tool_registry() -> ToolRegistry:
 
 
 def _build_default_registry() -> ToolRegistry:
-    from app.tools.calculator import calculator
-    from app.tools.datetime_tool import datetime_tool
-    from app.tools.text_tool import text_tool
+    """通过自动发现构建注册表：扫描 app/tools/ 下所有模块，注册导出
+    TOOL（ToolDefinition 实例）的模块。新增工具 = 放一个模块进去并导出 TOOL，
+    无需修改任何现有代码。"""
+    reg = discover_tools()
+    logger.info("Tool registry initialised with tools: %s", reg.list_names())
+    return reg
+
+
+def discover_tools() -> ToolRegistry:
+    """扫描 app/tools/ 下所有模块，注册带 TOOL 全局变量的 ToolDefinition。
+
+    跳过 registry / __init__ 等非工具模块。模块需导出:
+        TOOL = ToolDefinition(name=..., description=..., fn=..., arg_schema=..., check_fn=...)
+    """
+    import importlib
+    import pkgutil
+    import app.tools as tools_pkg
 
     reg = ToolRegistry()
-
-    reg.register(ToolDefinition(
-        name="calculator",
-        description="Evaluate a safe mathematical expression and return the numeric result.",
-        fn=lambda expression, **_: calculator(expression),
-        arg_schema={
-            "expression": ("string", "Math expression to evaluate, e.g. '(12+34)*2'", True),
-        },
-    ))
-
-    reg.register(ToolDefinition(
-        name="datetime_tool",
-        description="Return the current date and time, optionally formatted.",
-        fn=lambda fmt=None, tz="local", timestamp=None, **_: datetime_tool(
-            fmt=fmt, tz=tz, timestamp=timestamp
-        ),
-        arg_schema={
-            "fmt": ("string", "strftime format, e.g. '%Y-%m-%d'", False),
-            "tz": ("string", "'local' or 'utc'", False),
-            "timestamp": ("number", "Unix timestamp in seconds (optional)", False),
-        },
-    ))
-
-    reg.register(ToolDefinition(
-        name="text_tool",
-        description="Perform text processing: word_count, char_count, sentence_count, clean, uppercase, lowercase, reverse, extract_numbers, stats.",
-        fn=lambda operation, text, **_: text_tool(operation=operation, text=text),
-        arg_schema={
-            "operation": ("string", "One of: word_count | char_count | sentence_count | clean | uppercase | lowercase | reverse | extract_numbers | stats", True),
-            "text": ("string", "Input text to process", True),
-        },
-    ))
-
-    from app.tools.web_search_tool import web_search
-
-    reg.register(ToolDefinition(
-        name="web_search",
-        description="Search the web for current/real-time information: news, weather, recent events, prices, or anything not in the knowledge base. Returns titles, URLs and content snippets.",
-        fn=lambda query, max_results=None, **_: web_search(query=query, max_results=max_results),
-        arg_schema={
-            "query": ("string", "The search query, e.g. 'latest AI news today'", True),
-            "max_results": ("number", "Max results to return (1-10, default 5)", False),
-        },
-    ))
-
-    logger.info("Tool registry initialised with tools: %s", reg.list_names())
+    for info in pkgutil.iter_modules(tools_pkg.__path__):
+        if info.name in ("registry", "__init__"):
+            continue
+        try:
+            mod = importlib.import_module(f"app.tools.{info.name}")
+        except Exception as exc:
+            logger.warning("[discover_tools] failed to import app.tools.%s: %s", info.name, exc)
+            continue
+        tool = getattr(mod, "TOOL", None)
+        if isinstance(tool, ToolDefinition):
+            reg.register(tool)
+            logger.debug("[discover_tools] registered %s from %s", tool.name, info.name)
     return reg

@@ -65,3 +65,26 @@ def days_between(date1: str, date2: str, fmt: str = "%Y-%m-%d") -> str:
         return f"Days between {date1} and {date2}: {delta}"
     except ValueError as exc:
         raise ToolExecutionError(f"Invalid date format: {exc}") from exc
+
+
+# ── 插件导出（discover_tools 自动注册）─────────────────────────────────────
+from app.tools.registry import ToolDefinition
+
+
+def _check() -> bool:
+    return True  # datetime 无外部依赖，总是可用
+
+
+TOOL = ToolDefinition(
+    name="datetime_tool",
+    description="Return the current date and time, optionally formatted.",
+    fn=lambda fmt=None, tz="local", timestamp=None, **_: datetime_tool(
+        fmt=fmt, tz=tz, timestamp=timestamp
+    ),
+    arg_schema={
+        "fmt": ("string", "strftime format, e.g. '%Y-%m-%d'", False),
+        "tz": ("string", "'local' or 'utc'", False),
+        "timestamp": ("number", "Unix timestamp in seconds (optional)", False),
+    },
+    check_fn=_check,
+)

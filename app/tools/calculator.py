@@ -105,3 +105,22 @@ def calculator(expression: str) -> str:
         raise ToolExecutionError("Division by zero.")
     except Exception as exc:
         raise ToolExecutionError(f"Failed to evaluate '{expression}': {exc}") from exc
+
+
+# ── 插件导出（discover_tools 自动注册）─────────────────────────────────────
+from app.tools.registry import ToolDefinition
+
+
+def _check() -> bool:
+    return True  # calculator 无外部依赖，总是可用
+
+
+TOOL = ToolDefinition(
+    name="calculator",
+    description="Evaluate a safe mathematical expression and return the numeric result.",
+    fn=lambda expression, **_: calculator(expression),
+    arg_schema={
+        "expression": ("string", "Math expression to evaluate, e.g. '(12+34)*2'", True),
+    },
+    check_fn=_check,
+)
