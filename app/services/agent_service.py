@@ -103,6 +103,7 @@ class AgentService:
         self,
         query: str,
         history: Optional[List[Dict[str, str]]] = None,
+        user_id=None,
     ) -> Dict[str, Any]:
         """同步检索 + 构建生成消息, 为流式生成准备上下文。
 
@@ -113,6 +114,7 @@ class AgentService:
           knowledge_qa  — 向量检索(现状)
           complex_task  — 检索 + 可选工具组合
         返回 dict 含: messages / sources(含 file_id) / intent / tool_result。
+        user_id 传入时注入用户 facts（语义记忆）到 system prompt。
         这是同步阻塞调用, 在 async 端点里需用 run_in_executor 包裹。
         """
         from app.graph.nodes import (
@@ -124,7 +126,7 @@ class AgentService:
         )
 
         history = history or []
-        state: Dict[str, Any] = {"query": query, "steps": []}
+        state: Dict[str, Any] = {"query": query, "steps": [], "user_id": user_id}
 
         # 1. 意图识别(失败时 fallback knowledge_qa, 与完整路径一致)
         state.update(intent_recognition(state))
@@ -153,8 +155,29 @@ class AgentService:
                 if s not in sources:
                     sources.append(s)
 
-        # 4. 拼装生成消息
+        # 4. 拼装生成消息（语义记忆: 注入用户 facts 到 system prompt）
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
+
+        # 语义记忆注入: 跨会话用户事实（偏好/身份/历史结论）
+        # prepare_context 在 executor 线程跑, DB 查询走隔离 engine 避免连接池污染
+        user_id = state.get("user_id")
+        if user_id:
+            try:
+                from app.graph.nodes import _run_in_thread_isolated
+
+                async def _fetch_facts(s):
+                    from app.memory.manager import get_user_facts
+                    return await get_user_facts(s, user_id)
+
+                facts = _run_in_thread_isolated(_fetch_facts)
+                if facts:
+                    messages.insert(0, {
+                        "role": "system",
+                        "content": "关于这位用户的已知信息：\n" + "\n".join(f"- {f}" for f in facts),
+                    })
+            except Exception as exc:
+                logger.warning("[prepare_context] user facts inject failed: %s", exc)
+
         knowledge_blocks = state.get("knowledge_blocks")
         if knowledge_blocks and docs:
             from app.rag.enhanced_retriever import format_blocks_for_prompt
