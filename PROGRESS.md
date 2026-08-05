@@ -418,3 +418,31 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 返回值新增 `tool_result` 字段，intent 从硬编码改为真实分类结果。
 
 **验证：** 4/4 端到端通过——chitchat(sources=0 正常自我介绍) / tool_use(1+1 calculator) / knowledge_qa(民法典检索+引用) / tool_use(天气 web_search 分流正确, Tavily key 未配走兜底)。
+
+#### 2026-08-05 — 阶段 1：Agent 内核重构（静态 DAG → 可编排 Agent）
+
+**背景：** 此前 workflow.py 是写死的 LangGraph 静态 DAG（意图→检索/工具→生成→校验），所有请求走同一路径，Agent 只是 RAG 的附属品。本阶段升级为可编排 Agent 内核。Spec: `docs/specs/2026-08-04-agent-core-react-design.md`，Plan: `docs/plans/2026-08-04-agent-core-react.md`。
+
+**关键决策（brainstorming 澄清）：** ① 保留 LangGraph，StateGraph 改循环图（不重写调度器）；② ReAct 与快速路径并存（简单问答走快路径，复杂任务进 ReAct）；③ 先用现有模型，留分级接口。
+
+**A. 工具插件化（Task 1, b6c0e18）：**
+- `ToolDefinition` 加 `check_fn` 可用性自检；`list_names/to_llm_schema/to_react_prompt` 只含可用工具，invoke 拦截不可用
+- `discover_tools()` 扫 `app/tools/` 自动注册导出 `TOOL` 的模块——新工具放模块即插即用，替换硬编码注册
+- 4 个现有工具改造为插件格式；web_search 的 check_fn 检查 TAVILY_API_KEY
+
+**B. ReAct 循环子图（Task 2, 3123dde）：**
+- 新增 `agent_reasoning` 节点：LLM 每轮读 query+history+observations+工具描述，输出 JSON 决定 action（tool 调用 / final_answer），实现真正的思考→行动→观察→再思考
+- `tool_execution` 支持 ReAct 分支：从 pending_tool 取工具，结果追加到 observations，循环回 agent_reasoning；`_retry` 标记处理推理失败自我修正（连续 3 次→fallback）；步数耗尽（AGENT_MAX_ITERATIONS）强制回答
+- 分流：complex_task 或置信度<0.6 → use_react → agent_reasoning；其余走现有快速路径
+- 新增 REACT_REASONING prompt、route_after_reasoning 路由、AgentState 加 observations/pending_tool/use_react/react_iterations
+
+**C. 结构化记忆（Task 3, a05ab5c）：**
+- 工作记忆：现有 AgentState（不动）
+- 情景记忆：conversations.summary 字段，每 10 轮 LLM 增量压缩；`get_compressed_history` 用「摘要+最近10轮」替代全部历史（仅长会话生效，短会话不超窗口原样返回）
+- 语义记忆：新增 user_facts 表 + app/memory/manager；规则触发（记住/我喜欢/我是等关键词）LLM 提取事实存储；prepare_context 注入 system prompt（executor 线程走 _run_in_thread_isolated 独立 engine 防连接池污染）
+
+**D. 模型分级接口（Task 4, 1542904）：**
+- config 加 LLM_FAST_BASE_URL/API_KEY/MODEL（Optional，默认 None）
+- `get_llm_client(tier="main"|"fast")`：fast 未配置回退主模型；配置后独立 fast client（per-tier 单例缓存）。本期所有调用点仍用 main，接口留好。
+
+**验证：** 4 个新 verify 脚本全绿（tool_plugin 15/15、react_loop 19/19、memory_layers 14/14、model_tiers 13/13）；message_persistence 15/16（唯一 FAIL 是清理检查——DB 有 6 条旧真实会话数据不该删，功能 15 项全过）；快速路径 4 类意图回归通过。
