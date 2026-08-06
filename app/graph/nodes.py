@@ -20,14 +20,68 @@ def _append_step(state, msg):
     return steps
 
 
-def intent_recognition(state):
-    """Node 1: Classify user intent and set routing flags."""
-    query = state["query"]
-    logger.info("[intent_recognition] query=%r", query[:80])
-    client = get_llm_client()
-    prompt = INTENT_RECOGNITION.format(query=query)
+def _format_history_for_prompt(history: List[Dict[str, str]], max_turns: int = 4) -> str:
+    """把最近几轮对话压缩成分类器可读的一行一行文本。"""
+    if not history:
+        return "（无历史对话）"
+    recent = history[-(max_turns * 2):]
+    lines = []
+    for t in recent:
+        role = "用户" if t.get("role") == "user" else "助手"
+        content = (t.get("content") or "").strip().replace("\n", " ")
+        lines.append(f"{role}: {content[:120]}")
+    return "\n".join(lines) if lines else "（无历史对话）"
+
+
+# 短指代词触发 query 重写。消息含这些特征且很短时，大概率依赖上文。
+_FOLLOWUP_HINTS = ("呢", "那", "它", "他", "她", "这", "那", "还有", "再", "呢？", "吗", "怎么样", "如何")
+
+
+def _needs_rewrite(query: str, history: List[Dict[str, str]]) -> bool:
+    """判断是否需要结合历史做指代消解。只有存在历史时才可能改写。"""
+    if not history:
+        return False
+    q = query.strip()
+    if len(q) <= 12:  # 很短 → 大概率是追问
+        return True
+    return any(h in q for h in _FOLLOWUP_HINTS) and len(q) <= 30
+
+
+def rewrite_query_with_history(query: str, history: List[Dict[str, str]]) -> str:
+    """结合历史把追问改写成自包含问题。失败或无历史时返回原 query。"""
+    if not _needs_rewrite(query, history):
+        return query
     try:
-        data = client.chat_json_sync([{"role": "user", "content": prompt}])
+        client = get_llm_client(tier="fast")
+        from app.prompts.templates import QUERY_REWRITE
+        prompt = QUERY_REWRITE.format(
+            history=_format_history_for_prompt(history),
+            query=query,
+        )
+        rewritten = client.chat_sync(
+            [{"role": "user", "content": prompt}], temperature=0.0
+        ).strip().strip('"').strip("'").strip()
+        # 防御：改写结果为空或反而更长/更怪 → 用原句
+        if rewritten and 0 < len(rewritten) <= 200:
+            logger.info("[query_rewrite] %r -> %r", query[:40], rewritten[:60])
+            return rewritten
+    except Exception as exc:
+        logger.warning("[query_rewrite] failed, use original: %s", exc)
+    return query
+
+
+def intent_recognition(state):
+    """Node 1: Classify user intent and set routing flags. 带历史上下文。"""
+    query = state["query"]
+    history = state.get("history") or []
+    logger.info("[intent_recognition] query=%r history_turns=%d", query[:80], len(history) // 2)
+    client = get_llm_client(tier="fast")
+    prompt = INTENT_RECOGNITION.format(
+        history=_format_history_for_prompt(history),
+        query=query,
+    )
+    try:
+        data = client.chat_json_sync([{"role": "user", "content": prompt}], temperature=0.0)
         intent = str(data.get("intent", "knowledge_qa"))
         confidence = float(data.get("confidence", 0.8))
         requires_retrieval = bool(data.get("requires_retrieval", True))
