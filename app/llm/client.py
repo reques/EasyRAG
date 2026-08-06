@@ -101,19 +101,33 @@ class LLMClient:
         messages: List[Dict[str, str]],
         **extra,
     ) -> str:
-        """Synchronous chat completion. Returns the assistant text."""
-        try:
-            logger.debug("LLM sync call | model=%s | msgs=%d", self.model, len(messages))
-            resp = self._sync_client.chat.completions.create(
-                messages=messages, **self._call_kwargs(**extra)
-            )
-            text = self._extract_text(resp)
-            logger.debug("LLM response length=%d", len(text))
-            return text
-        except APITimeoutError as exc:
-            raise LLMTimeoutError("LLM request timed out") from exc
-        except (RateLimitError, APIConnectionError) as exc:
-            raise LLMClientError(f"LLM API error: {exc}") from exc
+        """Synchronous chat completion. Returns the assistant text.
+
+        Auto-retries once with backoff on empty response (API 偶发空返回).
+        """
+        import time as _time
+        for attempt in range(2):
+            try:
+                logger.debug("LLM sync call | model=%s | msgs=%d | attempt=%d",
+                             self.model, len(messages), attempt + 1)
+                resp = self._sync_client.chat.completions.create(
+                    messages=messages, **self._call_kwargs(**extra)
+                )
+                text = self._extract_text(resp)
+                logger.debug("LLM response length=%d", len(text))
+                if text.strip():
+                    return text
+                # 空响应：重试
+                if attempt == 0:
+                    logger.warning("LLM returned empty, retrying after 1.5s backoff")
+                    _time.sleep(1.5)
+                    continue
+                return text  # 两次都空，返回空字符串
+            except APITimeoutError as exc:
+                raise LLMTimeoutError("LLM request timed out") from exc
+            except (RateLimitError, APIConnectionError) as exc:
+                raise LLMClientError(f"LLM API error: {exc}") from exc
+        return ""  # unreachable, placate type checkers
 
     def chat_json_sync(
         self,
