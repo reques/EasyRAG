@@ -367,9 +367,9 @@ class Orchestrator:
             answer = self.llm.chat_sync(
                 [{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=4096,
+                max_tokens=16384,
             )
-            steps.append("LLM 汇总完成")
+            steps.append(f"LLM 汇总完成 ({len(answer)} chars)")
             return answer
         except Exception as exc:
             logger.warning("[orchestrator] synthesize failed, fallback concat: %s", exc)

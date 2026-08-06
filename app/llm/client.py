@@ -73,7 +73,15 @@ class LLMClient:
 
     @staticmethod
     def _extract_text(response) -> str:
-        return response.choices[0].message.content or ""
+        text = response.choices[0].message.content or ""
+        finish_reason = getattr(response.choices[0], "finish_reason", None)
+        if finish_reason == "length" and text:
+            logger.warning(
+                "LLM response truncated by token limit! finish_reason=length, "
+                "response_length=%d chars. Consider raising max_tokens.",
+                len(text),
+            )
+        return text
 
     @staticmethod
     def _parse_json(text: str) -> Any:
