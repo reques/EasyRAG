@@ -219,38 +219,174 @@ async def send_message_stream(
             use_multi = AgentService._should_use_multi(req.query, db_history)
 
         if use_multi:
-            # ── 多智能体路径：Orchestrator + 状态透传 ─────────────────────────
+            # ── 多智能体路径：Orchestrator + 状态实时透传 ────────────────────
             try:
                 from app.agents.orchestrator import get_orchestrator
 
                 orchestrator = get_orchestrator()
 
-                # 状态队列：orchestrator 回调 → SSE 事件
-                status_queue: list[dict] = []
+                # 状态实时透传：orchestrator 在 executor 线程跑，通过线程安全队列
+                # 把每一步状态桥接回事件循环, SSE 逐步推给前端 — 复杂任务不再黑盒等待。
+                import queue as _q
+
+                status_queue: "_q.Queue" = _q.Queue()
+                status_list: list[dict] = []  # 完整状态列表，供落库
+                _ORCH_SENTINEL = object()
 
                 def _on_status(step: str, detail: str):
-                    status_queue.append({"step": step, "detail": detail})
+                    ev = {"step": step, "detail": detail}
+                    status_list.append(ev)
+                    status_queue.put({"type": "status", **ev})
+
+                # 收集 worker 中间产出，落库时与汇总结果拼接成完整答案
+                worker_outputs: list[dict] = []
+
+                def _on_worker_done(report):
+                    # Worker 完成 → 推送子任务产出（边执行边输出中间结果）
+                    content = report.detail or report.summary or ""
+                    if report.status == "error":
+                        content = f"⚠️ 子任务 {report.task_id} 执行失败：{report.error or '未知错误'}"
+                    if not content.strip():
+                        content = f"（子任务 {report.task_id} 无产出）"
+                    worker_outputs.append({
+                        "task_id": report.task_id,
+                        "worker": report.worker_name,
+                        "content": content,
+                    })
+                    status_queue.put({
+                        "type": "worker_output",
+                        "task_id": report.task_id,
+                        "worker": report.worker_name,
+                        "content": content,
+                    })
 
                 # 在 executor 里跑 orchestrator（同步 LLM 调用）
+                # return_synthesize_payload=True：synthesize 交给主事件循环流式生成
                 def _run_orch():
-                    return orchestrator.run(
-                        req.query, history=db_history, status_callback=_on_status
-                    )
+                    try:
+                        return orchestrator.run(
+                            req.query,
+                            history=db_history,
+                            status_callback=_on_status,
+                            worker_done_callback=_on_worker_done,
+                            return_synthesize_payload=True,
+                        )
+                    finally:
+                        status_queue.put(_ORCH_SENTINEL)
 
-                result = await loop.run_in_executor(None, _run_orch)
+                orch_future = loop.run_in_executor(None, _run_orch)
+
+                # 边等 orchestrator 边 drain 队列, 实时推状态和子任务产出
+                result = None
+                while True:
+                    try:
+                        ev = await loop.run_in_executor(None, status_queue.get, True, 0.1)
+                    except Exception:
+                        ev = None  # queue.Empty 超时 → 检查 future
+                    if ev is _ORCH_SENTINEL:
+                        break
+                    if ev is not None:
+                        ev_type = ev.get("type", "status")
+                        if ev_type == "worker_output":
+                            # 子任务产出：推 delta 让前端实时渲染中间结果
+                            yield _sse({
+                                "type": "worker_output",
+                                "task_id": ev["task_id"],
+                                "worker": ev["worker"],
+                                "content": ev["content"],
+                            })
+                        else:
+                            yield _sse({"type": "status", "step": ev["step"], "detail": ev["detail"]})
+                    if orch_future.done() and status_queue.empty():
+                        break
+                # drain 残留
+                while not status_queue.empty():
+                    ev = status_queue.get_nowait()
+                    if ev is _ORCH_SENTINEL:
+                        continue
+                    ev_type = ev.get("type", "status")
+                    if ev_type == "worker_output":
+                        yield _sse({
+                            "type": "worker_output",
+                            "task_id": ev["task_id"],
+                            "worker": ev["worker"],
+                            "content": ev["content"],
+                        })
+                    else:
+                        yield _sse({"type": "status", "step": ev["step"], "detail": ev["detail"]})
+
+                try:
+                    result = orch_future.result()
+                except Exception as exc:
+                    logger.error("[chat/stream] orchestrator future error: %s", exc)
+                    yield _sse({"type": "status", "step": "fallback", "detail": "多智能体失败，回退单 Agent"})
+                    result = None
 
                 # 拆解器判定单一意图 → 回退单 Agent 快速路径（走下面的 single 分支）
-                if result.get("degenerate_to_single"):
+                if result and result.get("degenerate_to_single"):
                     yield _sse({"type": "status", "step": "fallback", "detail": "单一意图，走快速路径"})
-                else:
-                    # 先 flush 累积的状态事件
-                    for st in status_queue:
-                        yield _sse({"type": "status", **st})
+                elif result:
+                    # ── 流式汇总：在主事件循环里用 chat_stream 逐 token 整合 ──
+                    payload = result.get("synthesize_payload")
+                    answer = ""  # 汇总部分
+                    if payload:
+                        reports = payload["reports"]
+                        # 多任务：LLM 流式整合；单任务成功：直接用该任务产出（已推过，避免重复）
+                        ok_reports = [r for r in reports if r.ok()]
+                        if len(ok_reports) == 1 and not payload["final_inst"]:
+                            answer = ok_reports[0].detail or ok_reports[0].summary
+                        elif not ok_reports:
+                            answer = "所有子任务执行失败，无法生成回答。"
+                            yield _sse({"type": "delta", "content": answer})
+                        else:
+                            combined = "\n\n".join(
+                                f"## {r.task_id} ({r.worker_name})\n{r.detail or r.summary}"
+                                for r in ok_reports
+                            )
+                            prompt = (
+                                f"用户原始查询：{payload['query']}\n\n"
+                                f"各子任务产出：\n{combined}\n\n"
+                                f"汇总要求：{payload['final_inst'] or '综合各子任务结果，给出完整、连贯的回答。'}"
+                            )
+                            try:
+                                llm = get_llm_client()
+                                # 综合回答前推分隔标题（前端 m.content 已有各子任务产出）
+                                if len(worker_outputs) > 1:
+                                    yield _sse({"type": "delta", "content": "\n\n---\n**综合回答：**\n\n"})
+                                parts: list[str] = []
+                                async for chunk in llm.chat_stream(
+                                    [{"role": "user", "content": prompt}]
+                                ):
+                                    parts.append(chunk)
+                                    yield _sse({"type": "delta", "content": chunk})
+                                answer = "".join(parts).strip()
+                                if not answer:
+                                    # 流式整合空响应 → 回退用 combined 作为答案
+                                    logger.warning("[chat/stream] synthesize stream empty, fallback combined")
+                                    answer = combined
+                                    yield _sse({"type": "delta", "content": combined})
+                            except Exception as exc:
+                                logger.error("[chat/stream] synthesize stream failed: %s", exc)
+                                answer = combined
+                                yield _sse({"type": "delta", "content": combined})
+                    else:
+                        # 无 payload（兼容旧路径，理论上 return_synthesize_payload=True 时不会到这）
+                        answer = result.get("final_answer", "")
+                        if answer:
+                            yield _sse({"type": "delta", "content": answer})
 
-                    answer = result.get("final_answer", "")
-                    # multi 模式没有逐 token 流，一次性给 delta
-                    if answer:
-                        yield _sse({"type": "delta", "content": answer})
+                    # 完整答案 = worker 中间产出 + 汇总结果（与前端实时渲染的内容一致）
+                    # 单任务场景：worker_output 已推送过产出，answer 即该产出 → 不重复拼接
+                    multi_task = len(worker_outputs) > 1
+                    if multi_task:
+                        mid = "".join(
+                            f"\n\n---\n**子任务 {w['task_id']}（{w['worker']}）产出：**\n\n{w['content']}"
+                            for w in worker_outputs
+                        )
+                        full_answer = mid.lstrip("\n") + "\n\n---\n**综合回答：**\n\n" + answer
+                    else:
+                        # 单任务：worker_output 已推送产出，answer 与其相同或为空
+                        full_answer = worker_outputs[0]["content"] if worker_outputs else answer
 
                     elapsed = round(time.perf_counter() - start, 3)
 
@@ -260,10 +396,12 @@ async def send_message_stream(
                             meta = json.dumps({
                                 "intent": result.get("intent", "multi_agent"),
                                 "sources": result.get("sources", []),
-                                "steps": result.get("steps", []),
+                                # status_list 是 {step, detail} 对象数组，前端可直接渲染；
+                                # result["steps"] 是 orchestrator 内部字符串日志，格式不兼容
+                                "steps": status_list,
                                 "execution_mode": result.get("execution_mode", ""),
                             }, ensure_ascii=False)
-                            await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
+                            await add_message(session, conv_id, "assistant", full_answer, metadata_json=meta)
                             await session.commit()
                     except Exception as exc:
                         logger.warning("[chat/stream] multi persist failed: %s", exc)
@@ -272,6 +410,7 @@ async def send_message_stream(
                         "type": "done",
                         "sources": result.get("sources", []),
                         "intent": result.get("intent", "multi_agent"),
+                        "steps": status_list,
                         "elapsed_seconds": elapsed,
                         "execution_mode": result.get("execution_mode", ""),
                     })
@@ -303,9 +442,13 @@ async def send_message_stream(
         import queue as _queue
         step_queue: "_queue.Queue" = _queue.Queue()
         _SENTINEL = object()
+        # 收集本轮全部状态步骤，随 meta 落库（历史加载时恢复思考过程）
+        collected_steps: list[dict] = []
 
         def _on_step(step: str, detail: str = ""):
-            step_queue.put({"type": "status", "step": step, "detail": detail})
+            ev = {"step": step, "detail": detail}
+            collected_steps.append(ev)
+            step_queue.put({"type": "status", **ev})
 
         def _prepare():
             try:
@@ -406,6 +549,7 @@ async def send_message_stream(
                 meta = json.dumps({
                     "intent": ctx["intent"],
                     "sources": ctx["sources"],
+                    "steps": collected_steps,
                 }, ensure_ascii=False)
                 await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
                 await session.commit()
@@ -416,6 +560,7 @@ async def send_message_stream(
             "type": "done",
             "sources": ctx["sources"],
             "intent": ctx["intent"],
+            "steps": collected_steps,
             "elapsed_seconds": elapsed,
         })
 
