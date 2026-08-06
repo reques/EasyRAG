@@ -44,7 +44,7 @@ class CodeWorker(BaseWorker):
                 },
             ]
 
-            answer = self._chat(messages, temperature=0.3, max_tokens=4096)
+            answer = self._chat(messages, temperature=0.3, max_tokens=8192)
             steps.append(f"LLM 生成完成，回答长度 {len(answer)} 字符")
 
             # 提取代码块

@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = Field(default="«redacted:sk-…»", alias="DEEPSEEK_API_KEY")
     LLM_MODEL: str = "deepseek-chat"
     LLM_TEMPERATURE: float = 0.0
-    LLM_MAX_TOKENS: int = 2048
+    LLM_MAX_TOKENS: int = 8192
     LLM_TIMEOUT: int = 60          # seconds
     LLM_MAX_RETRIES: int = 2
 

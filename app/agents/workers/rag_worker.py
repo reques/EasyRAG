@@ -67,7 +67,7 @@ class RagWorker(BaseWorker):
             ]
 
             # 4. LLM 生成
-            answer = self._chat(messages, temperature=0.3, max_tokens=4096)
+            answer = self._chat(messages, temperature=0.3, max_tokens=8192)
             steps.append(f"LLM 生成完成，回答长度 {len(answer)} 字符")
 
             return WorkerReport(
