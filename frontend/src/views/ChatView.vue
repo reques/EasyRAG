@@ -29,10 +29,10 @@
                 <ChevronRight v-else :size="14" />
               </div>
               <div v-show="msg.stepsExpanded" class="status-steps">
-                <div v-for="(st, si) in msg.steps" :key="si" class="status-step" :class="{ active: si === msg.steps.length - 1 && msg.stepsLoading }">
+                <div v-for="(stRaw, si) in msg.steps" :key="si" class="status-step" :class="{ active: si === msg.steps.length - 1 && msg.stepsLoading }">
                   <span class="step-dot"></span>
-                  <span class="step-name">{{ stepLabel(st.step) }}</span>
-                  <span class="step-detail">{{ st.detail }}</span>
+                  <span class="step-name">{{ stepLabel(normalizeStep(stRaw).step) }}</span>
+                  <span class="step-detail">{{ normalizeStep(stRaw).detail }}</span>
                 </div>
               </div>
             </div>
@@ -163,6 +163,13 @@ function stepLabel(key) {
   return STEP_LABELS[key] || key
 }
 
+// 兼容旧数据：早期版本 meta.steps 存的是 orchestrator 内部字符串日志
+// （如 "orchestrator 接收查询: ..."），直接渲染成步骤名
+function normalizeStep(st) {
+  if (typeof st === 'string') return { step: '', detail: st }
+  return st
+}
+
 // 流式进行中: 最后一条 assistant 消息是否已开始收到内容
 const lastAssistantHasContent = computed(() => {
   const last = messages.value[messages.value.length - 1]
@@ -198,12 +205,15 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   if (newId) {
     try {
       const res = await api.get(`/chat/conversations/${newId}/history`)
-      // 历史消息 meta 中持久化了 sources，重载时还原引用块
+      // 历史消息 meta 中持久化了 sources 和 steps，重载时还原引用块 + 思考过程
       messages.value = (res.messages || []).map(m => ({
         role: m.role,
         content: m.content,
         sources: m.meta?.sources || [],
         meta: m.meta?.intent ? { intent: m.meta.intent } : null,
+        steps: m.meta?.steps || [],
+        stepsExpanded: true,
+        stepsLoading: false,
       }))
       scrollBottom()
     } catch { /* 忽略 */ }
@@ -243,6 +253,13 @@ async function send() {
         const m = messages.value[msgIndex]
         messages.value[msgIndex] = { ...m, steps: [...(m.steps || []), st] }
         scrollBottom()
+      } else if (ev.type === 'worker_output') {
+        // 子任务产出：作为中间结果追加到消息内容，边执行边输出
+        const m = messages.value[msgIndex]
+        const header = `\n\n---\n**子任务 ${ev.task_id}（${ev.worker}）产出：**\n\n`
+        m.content += header + ev.content
+        messages.value[msgIndex] = { ...m }
+        scrollBottom()
       } else if (ev.type === 'delta') {
         // 触发响应式更新: 替换数组元素
         const m = messages.value[msgIndex]
@@ -255,6 +272,8 @@ async function send() {
           ...m,
           sources: ev.sources || [],
           meta: { intent: ev.intent, elapsed: ev.elapsed_seconds },
+          // 兜底：流式中断时 status 事件可能不全，用 done 携带的完整 steps 补齐
+          steps: (ev.steps && ev.steps.length) ? ev.steps : (m.steps || []),
           stepsLoading: false,
         }
       } else if (ev.type === 'error') {

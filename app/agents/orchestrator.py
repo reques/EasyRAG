@@ -90,11 +90,19 @@ class Orchestrator:
         query: str,
         history: Optional[List[Dict[str, str]]] = None,
         status_callback=None,
+        worker_done_callback=None,
+        return_synthesize_payload: bool = False,
     ) -> Dict[str, Any]:
         """执行多智能体编排，返回与单 Agent 兼容的响应格式。
 
         status_callback: 可选回调 fn(step, detail)，在关键步骤时调用，
                          供 SSE 流式端点透传状态事件到前端。
+        worker_done_callback: 可选回调 fn(report: WorkerReport)，每个 Worker
+                         完成时调用，供 SSE 实时推送子任务产出（边执行边输出）。
+        return_synthesize_payload: True 时跳过 LLM 汇总，在 result 中返回
+                         synthesize_payload（含 query/reports/final_inst），
+                         由调用方（chat_router）在主事件循环中流式整合——
+                         避免 executor 线程里 asyncio.run 调异步流式与主 loop 冲突。
         """
         start = time.perf_counter()
         steps = [f"orchestrator 接收查询: {query[:80]}"]
@@ -104,6 +112,13 @@ class Orchestrator:
             if status_callback:
                 try:
                     status_callback(step, detail)
+                except Exception:
+                    pass
+
+        def _worker_done(report):
+            if worker_done_callback:
+                try:
+                    worker_done_callback(report)
                 except Exception:
                     pass
 
@@ -138,12 +153,23 @@ class Orchestrator:
 
             # 2. 派发
             _status("dispatch", f"正在派发 {len(briefs)} 个子任务...")
-            reports = self._dispatch(briefs, exec_mode, steps)
+            reports = self._dispatch(briefs, exec_mode, steps, _worker_done)
             _status("dispatch_done", f"派发完成，{sum(1 for r in reports if r.ok())} 成功")
 
             # 3. 汇总
             _status("synthesize", "正在汇总结果...")
-            final_answer = self._synthesize(query, reports, final_inst, steps)
+            if return_synthesize_payload:
+                # 调用方（chat_router）负责流式汇总，这里只打包 payload
+                synthesize_payload = {
+                    "query": query,
+                    "reports": reports,
+                    "final_inst": final_inst,
+                }
+                final_answer = ""  # 由调用方流式生成
+                steps.append("跳过内部汇总，交由调用方流式生成")
+            else:
+                final_answer = self._synthesize(query, reports, final_inst, steps)
+                synthesize_payload = None
             _status("synthesize_done", "汇总完成")
 
             elapsed = time.perf_counter() - start
@@ -156,6 +182,7 @@ class Orchestrator:
             return {
                 "query": query,
                 "final_answer": final_answer,
+                "synthesize_payload": synthesize_payload,
                 "intent": "multi_agent",
                 "intent_confidence": 1.0,
                 "retrieval_triggered": any(r.worker_name == "rag" for r in reports),
@@ -235,15 +262,15 @@ class Orchestrator:
 
     # ── 派发 ─────────────────────────────────────────────────────────────────
     def _dispatch(
-        self, briefs: List[TaskBrief], exec_mode: str, steps: List[str]
+        self, briefs: List[TaskBrief], exec_mode: str, steps: List[str], on_worker_done=None
     ) -> List[WorkerReport]:
-        """按模式派发任务到 Worker。"""
+        """按模式派发任务到 Worker。on_worker_done: 每个 Worker 完成时回调。"""
         if exec_mode == "parallel":
-            return self._dispatch_parallel(briefs, steps)
-        return self._dispatch_sequential(briefs, steps)
+            return self._dispatch_parallel(briefs, steps, on_worker_done)
+        return self._dispatch_sequential(briefs, steps, on_worker_done)
 
     def _dispatch_sequential(
-        self, briefs: List[TaskBrief], steps: List[str]
+        self, briefs: List[TaskBrief], steps: List[str], on_worker_done=None
     ) -> List[WorkerReport]:
         """顺序派发，前序产出注入后续 brief.context。"""
         reports: List[WorkerReport] = []
@@ -269,11 +296,16 @@ class Orchestrator:
             reports.append(report)
             artifact_store[brief.task_id] = report
             steps.append(f"{brief.task_id} <- {report.status} ({len(report.summary)} chars)")
+            if on_worker_done:
+                try:
+                    on_worker_done(report)
+                except Exception:
+                    pass
 
         return reports
 
     def _dispatch_parallel(
-        self, briefs: List[TaskBrief], steps: List[str]
+        self, briefs: List[TaskBrief], steps: List[str], on_worker_done=None
     ) -> List[WorkerReport]:
         """并行派发（ThreadPoolExecutor 真并发）。"""
         reports: List[WorkerReport] = []
@@ -296,18 +328,27 @@ class Orchestrator:
                     steps.append(
                         f"{brief.task_id} <- {report.status} ({len(report.summary)} chars)"
                     )
+                    if on_worker_done:
+                        try:
+                            on_worker_done(report)
+                        except Exception:
+                            pass
                 except Exception as exc:
                     logger.error("[orchestrator] parallel task %s failed: %s", brief.task_id, exc)
-                    reports.append(
-                        WorkerReport(
-                            task_id=brief.task_id,
-                            worker_name=brief.worker_hint,
-                            status="error",
-                            error=str(exc),
-                            steps=[f"parallel ERROR: {exc}"],
-                        )
+                    err_report = WorkerReport(
+                        task_id=brief.task_id,
+                        worker_name=brief.worker_hint,
+                        status="error",
+                        error=str(exc),
+                        steps=[f"parallel ERROR: {exc}"],
                     )
+                    reports.append(err_report)
                     steps.append(f"{brief.task_id} <- error ({exc})")
+                    if on_worker_done:
+                        try:
+                            on_worker_done(err_report)
+                        except Exception:
+                            pass
 
         # 按原任务序恢复
         order = {b.task_id: i for i, b in enumerate(briefs)}
