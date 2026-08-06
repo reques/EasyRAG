@@ -13,10 +13,29 @@
           <!-- 等待首 token 时的空 assistant 占位不渲染，由下方「思考中」气泡代替，
                避免空灰条 + 思考中两个框同时出现 -->
           <div
-            v-if="!(sending && msg.role === 'assistant' && !msg.content && i === messages.length - 1)"
+            v-if="!(sending && msg.role === 'assistant' && !msg.content && !msg.steps?.length && i === messages.length - 1)"
             :class="['message', msg.role]"
           >
           <div class="message-body">
+            <!-- 思考过程：绑定在该条消息上，渲染在答案上方，不被下一轮覆盖 -->
+            <div v-if="msg.steps && msg.steps.length" class="status-panel">
+              <div class="status-header" @click="msg.stepsExpanded = !msg.stepsExpanded">
+                <span class="status-title">
+                  <Loader2 v-if="msg.stepsLoading" :size="14" class="spin" />
+                  <CheckCircle2 v-else :size="14" />
+                  思考过程
+                </span>
+                <ChevronDown v-if="msg.stepsExpanded" :size="14" />
+                <ChevronRight v-else :size="14" />
+              </div>
+              <div v-show="msg.stepsExpanded" class="status-steps">
+                <div v-for="(st, si) in msg.steps" :key="si" class="status-step" :class="{ active: si === msg.steps.length - 1 && msg.stepsLoading }">
+                  <span class="step-dot"></span>
+                  <span class="step-name">{{ stepLabel(st.step) }}</span>
+                  <span class="step-detail">{{ st.detail }}</span>
+                </div>
+              </div>
+            </div>
             <div class="message-text" v-html="renderContent(msg.content)"></div>
             <!-- 知识库 / 检索引用块 -->
             <div v-if="msg.sources && msg.sources.length" class="message-sources">
@@ -48,8 +67,8 @@
           </div>
         </template>
 
-        <!-- 仅当正在等待首个 token(最后一条 assistant 还没内容)时显示思考中 -->
-        <div v-if="sending && !lastAssistantHasContent" class="message assistant">
+        <!-- 思考中占位：还没有任何状态步骤时的等待气泡（有步骤后由消息内面板接管） -->
+        <div v-if="sending && statusSteps.length === 0 && !lastAssistantHasContent" class="message assistant">
           <div class="message-body">
             <div class="message-text typing">思考中<span>.</span><span>.</span><span>.</span></div>
           </div>
@@ -81,7 +100,7 @@ import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
-import { ArrowUp, BookOpen } from 'lucide-vue-next'
+import { ArrowUp, BookOpen, ChevronDown, ChevronRight, Loader2, CheckCircle2 } from 'lucide-vue-next'
 import api from '../api'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
@@ -115,6 +134,34 @@ const sending = ref(false)
 const conversationId = ref(null)
 const msgContainer = ref(null)
 const inputEl = ref(null)
+
+// 状态步骤面板（思考过程时间线）
+// statusSteps 只是当前轮次的缓冲——status 事件实时落到当前 assistant 消息的
+// msg.steps 上（随消息保留，渲染在答案上方，不会被下一轮清空覆盖）
+const statusSteps = ref([])
+
+// 把后端步骤 key 映射为友好的阶段名
+const STEP_LABELS = {
+  understand: '理解问题',
+  understand_done: '问题理解',
+  intent: '识别意图',
+  intent_done: '意图',
+  tool: '调用工具',
+  tool_done: '工具结果',
+  retrieve: '检索知识库',
+  retrieve_done: '检索完成',
+  generate: '生成回答',
+  decompose: '拆解任务',
+  decompose_done: '拆解完成',
+  dispatch: '派发子任务',
+  dispatch_done: '派发完成',
+  synthesize: '汇总结果',
+  synthesize_done: '汇总完成',
+  fallback: '回退',
+}
+function stepLabel(key) {
+  return STEP_LABELS[key] || key
+}
 
 // 流式进行中: 最后一条 assistant 消息是否已开始收到内容
 const lastAssistantHasContent = computed(() => {
@@ -173,11 +220,15 @@ async function send() {
 
   messages.value.push({ role: 'user', content: text })
   // 先插入一条空的 assistant 消息, 流式 delta 逐步填充其 content
-  messages.value.push({ role: 'assistant', content: '', sources: [], meta: null })
+  // steps: 本轮思考过程（绑定在这条消息上，不会被下一轮覆盖）
+  messages.value.push({ role: 'assistant', content: '', sources: [], meta: null, steps: [], stepsExpanded: true, stepsLoading: true })
   const msgIndex = messages.value.length - 1
   scrollBottom()
 
   let gotError = ''
+  // 重置当前轮次的状态缓冲
+  statusSteps.value = []
+
   try {
     await api.streamChat('/chat/stream', {
       query: text,
@@ -185,6 +236,13 @@ async function send() {
     }, (ev) => {
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
+      } else if (ev.type === 'status') {
+        // 状态事件：落到当前 assistant 消息的 steps（随消息保留）
+        const st = { step: ev.step, detail: ev.detail }
+        statusSteps.value.push(st)
+        const m = messages.value[msgIndex]
+        messages.value[msgIndex] = { ...m, steps: [...(m.steps || []), st] }
+        scrollBottom()
       } else if (ev.type === 'delta') {
         // 触发响应式更新: 替换数组元素
         const m = messages.value[msgIndex]
@@ -197,6 +255,7 @@ async function send() {
           ...m,
           sources: ev.sources || [],
           meta: { intent: ev.intent, elapsed: ev.elapsed_seconds },
+          stepsLoading: false,
         }
       } else if (ev.type === 'error') {
         gotError = ev.detail || '生成失败'
@@ -205,7 +264,7 @@ async function send() {
 
     if (gotError) {
       const m = messages.value[msgIndex]
-      messages.value[msgIndex] = { ...m, content: m.content || `❌ ${gotError}` }
+      messages.value[msgIndex] = { ...m, content: m.content || `❌ ${gotError}`, stepsLoading: false }
     }
     // 刷新侧边栏列表
     await chatStore.refreshAfterSend(conversationId.value)
@@ -214,6 +273,7 @@ async function send() {
     messages.value[msgIndex] = {
       ...m,
       content: m.content || `❌ 请求失败: ${e.message}`,
+      stepsLoading: false,
     }
   } finally {
     sending.value = false

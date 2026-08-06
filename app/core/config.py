@@ -117,6 +117,7 @@ class Settings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 20   # LangGraph recursion_limit
     MAX_PLAN_STEPS: int = 5          # max sub-tasks per plan
     SESSION_TTL: int = 3600          # seconds to keep session state
+    AGENT_MODE: Literal["auto", "single", "multi"] = "auto"  # 多智能体开关: auto=智能路由
 
     # ── Answer quality ───────────────────────────────────────────────────
     ANSWER_VALIDATION_ENABLED: bool = True
