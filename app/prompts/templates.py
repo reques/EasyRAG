@@ -78,6 +78,31 @@ Keep each sub-task concise (one action). Maximum 5 sub-tasks.
 """
 )
 
+# ── ReAct Reasoning ───────────────────────────────────────────────────────────
+
+REACT_REASONING = PromptTemplate(
+    """你是一个采用 ReAct（推理+行动）模式的智能体。根据用户问题、对话历史和过往观察，决定下一步行动。
+
+可用工具:
+{tools}
+
+过往观察（按时间顺序）:
+{observations}
+
+用户问题: {query}
+
+规则:
+1. 先思考（thought），再决定行动（action）
+2. 如果需要调用工具获取信息，action.type 设为 "tool" 并给出 tool_name 和 args
+3. 如果已有足够信息回答，action.type 设为 "final_answer" 并给出完整答案
+4. 只输出合法 JSON，不要任何其他文字、解释或 markdown 代码块
+
+输出格式（二选一）:
+{{"thought": "...", "action": {{"type": "tool", "tool_name": "...", "args": {{...}}}}}}
+{{"thought": "...", "action": {{"type": "final_answer", "answer": "..."}}}}
+"""
+)
+
 # ── Answer Generation (with context) ─────────────────────────────────────────
 
 ANSWER_WITH_CONTEXT = PromptTemplate(

@@ -13,10 +13,12 @@ from app.graph import nodes
 from app.graph.router import (
     route_after_intent,
     route_after_planning,
+    route_after_reasoning,
     route_after_retrieval,
     route_after_tool_execution,
     route_after_generation,
     route_after_validation,
+    AGENT_REASONING,
     INTENT_RECOGNITION,
     TASK_PLANNING,
     KNOWLEDGE_RETRIEVAL,
@@ -35,7 +37,12 @@ def build_graph():
 
     Graph topology:
         intent_recognition
-            |--(complex_task)--> task_planning --> [retrieval | tool_selection | generation]
+            |--(use_react: complex_task / 低置信度)--> agent_reasoning <─┐
+            |                                              │  │          │
+            |                              final_answer ───┘  └─ tool ───┘ (循环)
+            |                                              │
+            |                                              ▼
+            |                                       answer_validation
             |--(tool_use)-------> tool_selection --> tool_execution --> answer_generation
             |--(knowledge_qa)---> knowledge_retrieval --> answer_generation
             |--(chitchat)-------> answer_generation
@@ -54,6 +61,7 @@ def build_graph():
     graph.add_node(ANSWER_GENERATION,   nodes.answer_generation)
     graph.add_node(ANSWER_VALIDATION,   nodes.answer_validation)
     graph.add_node(FALLBACK_HANDLER,    nodes.fallback_handler)
+    graph.add_node(AGENT_REASONING,     nodes.agent_reasoning)
 
     # ── Entry point ───────────────────────────────────────────────────────
     graph.set_entry_point(INTENT_RECOGNITION)
@@ -63,11 +71,24 @@ def build_graph():
         INTENT_RECOGNITION,
         route_after_intent,
         {
+            AGENT_REASONING:     AGENT_REASONING,
             TASK_PLANNING:       TASK_PLANNING,
             TOOL_SELECTION:      TOOL_SELECTION,
             KNOWLEDGE_RETRIEVAL: KNOWLEDGE_RETRIEVAL,
             ANSWER_GENERATION:   ANSWER_GENERATION,
             FALLBACK_HANDLER:    FALLBACK_HANDLER,
+        },
+    )
+
+    # ReAct 循环: agent_reasoning -> tool_execution -> agent_reasoning (循环)
+    #            agent_reasoning -> answer_validation (final_answer)
+    graph.add_conditional_edges(
+        AGENT_REASONING,
+        route_after_reasoning,
+        {
+            TOOL_EXECUTION:    TOOL_EXECUTION,
+            ANSWER_VALIDATION: ANSWER_VALIDATION,
+            FALLBACK_HANDLER:  FALLBACK_HANDLER,
         },
     )
 
@@ -97,7 +118,10 @@ def build_graph():
     graph.add_conditional_edges(
         TOOL_EXECUTION,
         route_after_tool_execution,
-        {ANSWER_GENERATION: ANSWER_GENERATION},
+        {
+            AGENT_REASONING:   AGENT_REASONING,
+            ANSWER_GENERATION: ANSWER_GENERATION,
+        },
     )
 
     graph.add_conditional_edges(

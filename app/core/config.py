@@ -35,12 +35,19 @@ class Settings(BaseSettings):
 
     # ── LLM ──────────────────────────────────────────────────────────────
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"
-    LLM_API_KEY: str = Field(default="sk-placeholder", alias="DEEPSEEK_API_KEY")
+    LLM_API_KEY: str = Field(default="«redacted:sk-…»", alias="DEEPSEEK_API_KEY")
     LLM_MODEL: str = "deepseek-chat"
     LLM_TEMPERATURE: float = 0.0
     LLM_MAX_TOKENS: int = 2048
     LLM_TIMEOUT: int = 60          # seconds
     LLM_MAX_RETRIES: int = 2
+
+    # ── LLM 快速模型（分级接口，阶段 1）─────────────────────────────────────
+    # 辅助任务（标题生成/意图识别/记忆提取等）可用更快/更便宜的模型。
+    # 未配置时 fast tier 回退到主模型，不影响现有行为。
+    LLM_FAST_BASE_URL: Optional[str] = None   # 默认回退 LLM_BASE_URL
+    LLM_FAST_API_KEY: Optional[str] = None    # 默认回退 LLM_API_KEY
+    LLM_FAST_MODEL: Optional[str] = None      # 默认回退 LLM_MODEL
 
     # ── Embedding ────────────────────────────────────────────────────────
     # EMBEDDING_TYPE: "local"=SentenceTransformers | "openai_compatible"=HTTP API | "ollama"=本地Ollama

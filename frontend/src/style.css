@@ -334,7 +334,7 @@ button { cursor: pointer; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.conv-item .btn-summarize {
+.conv-item .btn-conv-menu {
   opacity: 0;
   background: none;
   border: none;
@@ -346,8 +346,43 @@ button { cursor: pointer; }
   transition: opacity .15s ease, color .15s ease, background-color .15s ease;
   flex-shrink: 0;
 }
-.conv-item:hover .btn-summarize { opacity: 1; }
-.conv-item .btn-summarize:hover { color: var(--main-color); background: var(--main-30); }
+.conv-item:hover .btn-conv-menu { opacity: 1; }
+.conv-item .btn-conv-menu:hover { color: var(--gray-900); background: var(--gray-100); }
+
+/* ── 会话「⋯」弹出菜单 ───────────────────────────────────────────── */
+.conv-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+}
+.conv-menu {
+  position: fixed;
+  min-width: 128px;
+  background: var(--gray-0);
+  border: 1px solid var(--gray-150);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px var(--shadow-1), 0 2px 8px var(--shadow-0);
+  padding: 4px;
+  z-index: 201;
+}
+.conv-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--gray-800);
+  cursor: pointer;
+  transition: background-color .15s ease;
+}
+.conv-menu-item:hover { background: var(--gray-50); }
+.conv-menu-item:disabled { opacity: .45; cursor: not-allowed; }
+.conv-menu-item.danger { color: var(--color-error-500); }
+.conv-menu-item.danger:hover { background: var(--color-error-50); }
 .conv-empty { color: var(--gray-500); font-size: 13px; padding: 16px 10px; }
 
 /* ── 侧边栏底部用户区 ────────────────────────────────────────────────── */

@@ -8,7 +8,7 @@ from app.llm.client import get_llm_client
 from app.prompts.templates import (
     ANSWER_NO_CONTEXT, ANSWER_VALIDATION, ANSWER_WITH_CONTEXT,
     ANSWER_WITH_ENHANCED_CONTEXT, ANSWER_WITH_ENHANCED_NO_CONTEXT,
-    FALLBACK_ANSWER, INTENT_RECOGNITION, TASK_PLANNING,
+    FALLBACK_ANSWER, INTENT_RECOGNITION, REACT_REASONING, TASK_PLANNING,
 )
 from app.tools.registry import get_tool_registry
 logger = get_logger(__name__)
@@ -35,6 +35,8 @@ def intent_recognition(state):
         tool_name = data.get("tool_name") or None
         tool_args = data.get("tool_args") or {}
         logger.info("[intent_recognition] intent=%s conf=%.2f", intent, confidence)
+        # ReAct 分流: complex_task 或低置信度 → 走 ReAct 循环子图, 其余走快速路径
+        use_react = intent == "complex_task" or confidence < 0.6
         return {
             "intent": intent,
             "intent_confidence": confidence,
@@ -42,7 +44,8 @@ def intent_recognition(state):
             "requires_tool": requires_tool,
             "tool_name": tool_name,
             "tool_args": tool_args,
-            "steps": _append_step(state, "intent_recognition -> " + intent),
+            "use_react": use_react,
+            "steps": _append_step(state, "intent_recognition -> " + intent + (" [react]" if use_react else "")),
         }
     except Exception as exc:
         logger.warning("[intent_recognition] failed: %s", exc)
@@ -82,6 +85,83 @@ def task_planning(state):
             "requires_retrieval": True,
             "requires_tool": False,
             "steps": _append_step(state, "task_planning -> error, single task"),
+        }
+
+
+def agent_reasoning(state):
+    """ReAct 推理节点: LLM 决定下一步是调工具还是给最终答案。
+
+    每轮读取 query + history + observations（过往行动-观察序列）+ 可用工具描述,
+    输出 JSON 决定 action:
+      - action.type="tool"         → 写 pending_tool, 路由到 tool_execution
+      - action.type="final_answer" → 写 draft_answer, 路由到 answer_validation
+    非法 JSON / 未知工具 → 记为失败 observation 让 LLM 自我修正, 连续 3 次 → fallback。
+    达 AGENT_MAX_ITERATIONS → 强制基于现有观察生成答案。
+    """
+    query = state["query"]
+    observations = state.get("observations") or []
+    iterations = state.get("react_iterations", 0)
+    max_iter = cfg.AGENT_MAX_ITERATIONS or 5
+    logger.info("[agent_reasoning] iter=%d/%d obs=%d", iterations, max_iter, len(observations))
+
+    # 步数耗尽 → 强制基于现有观察给答案
+    if iterations >= max_iter:
+        obs_text = "\n".join(str(o.get("result", "")) for o in observations if o.get("tool") != "_error") or "（无有效观察）"
+        return {
+            "draft_answer": f"基于已有信息：\n{obs_text[:600]}",
+            "react_iterations": iterations + 1,
+            "steps": _append_step(state, "agent_reasoning -> max iterations, forced answer"),
+        }
+
+    client = get_llm_client()
+    registry = get_tool_registry()
+    obs_text = "\n".join(
+        f"{i+1}. 思考: {o.get('thought','')} | 工具: {o.get('tool','')} | 结果: {str(o.get('result',''))[:200]}"
+        for i, o in enumerate(observations)
+    ) or "（暂无观察）"
+    prompt = REACT_REASONING.format(
+        tools=registry.to_react_prompt(),
+        observations=obs_text,
+        query=query,
+    )
+    try:
+        data = client.chat_json_sync([{"role": "user", "content": prompt}])
+        action = data.get("action") or {}
+        thought = str(data.get("thought", ""))
+        if action.get("type") == "final_answer":
+            return {
+                "draft_answer": str(action.get("answer", "")),
+                "react_iterations": iterations + 1,
+                "steps": _append_step(state, f"agent_reasoning iter{iterations} -> final_answer"),
+            }
+        # tool 调用
+        tool_name = action.get("tool_name")
+        if tool_name not in registry.list_names():
+            raise ValueError(f"unknown or unavailable tool: {tool_name}")
+        return {
+            "pending_tool": {"tool_name": tool_name, "args": action.get("args") or {}, "thought": thought},
+            "observations": list(observations),
+            "react_iterations": iterations + 1,
+            "steps": _append_step(state, f"agent_reasoning iter{iterations} -> tool:{tool_name}"),
+        }
+    except Exception as exc:
+        logger.warning("[agent_reasoning] failed: %s", exc)
+        new_obs = list(observations)
+        new_obs.append({"thought": "", "tool": "_error", "args": {},
+                        "result": f"推理失败: {exc}。请输出合法 JSON。"})
+        errors = sum(1 for o in new_obs if o.get("tool") == "_error")
+        if errors >= 3:
+            return {
+                "is_fallback": True,
+                "error_message": "ReAct 推理连续失败",
+                "react_iterations": iterations + 1,
+                "steps": _append_step(state, "agent_reasoning -> 3 failures, fallback"),
+            }
+        return {
+            "observations": new_obs,
+            "react_iterations": iterations + 1,
+            "pending_tool": {"tool_name": "_retry", "args": {}},
+            "steps": _append_step(state, f"agent_reasoning iter{iterations} -> retry after error"),
         }
 
 
@@ -469,7 +549,61 @@ def tool_selection(state):
 
 
 def tool_execution(state):
-    """Node 5: Execute selected tool and capture result."""
+    """Node 5: Execute selected tool and capture result.
+
+    ReAct 模式（state["use_react"]）: 从 pending_tool 取工具, 执行结果追加到
+    observations（含 thought/tool/args/result）, 循环回 agent_reasoning。
+    快速路径: 从 tool_name/tool_args 取（现状）, 只写 tool_result。
+    pending_tool.tool_name == "_retry" 时跳过执行直接循环（推理失败重试）。
+    """
+    use_react = state.get("use_react", False)
+    registry = get_tool_registry()
+
+    # ── ReAct 分支 ────────────────────────────────────────────────────────
+    if use_react:
+        pending = state.get("pending_tool") or {}
+        tool_name = pending.get("tool_name")
+        tool_args = pending.get("args") or {}
+        thought = pending.get("thought", "")
+        observations = list(state.get("observations") or [])
+        logger.info("[tool_execution/react] tool=%s", tool_name)
+
+        # 推理失败重试标记: 不执行工具, 直接循环回 reasoning
+        if tool_name == "_retry":
+            return {
+                "observations": observations,
+                "pending_tool": None,
+                "steps": _append_step(state, "tool_execution/react -> retry loop"),
+            }
+
+        try:
+            result = registry.invoke(tool_name, **tool_args)
+            observations.append({"thought": thought, "tool": tool_name, "args": tool_args, "result": result})
+            update: Dict[str, Any] = {
+                "observations": observations,
+                "pending_tool": None,
+                "tool_result": result,
+                "tool_triggered": True,
+                "tool_error": None,
+                "steps": _append_step(state, f"tool_execution/react -> {tool_name} OK"),
+            }
+            if tool_name == "web_search":
+                from app.tools.web_search_tool import extract_sources
+                update["sources"] = extract_sources(result)
+            return update
+        except Exception as exc:
+            logger.error("[tool_execution/react] failed: %s", exc)
+            observations.append({"thought": thought, "tool": tool_name, "args": tool_args,
+                                 "result": f"工具执行失败: {exc}"})
+            return {
+                "observations": observations,
+                "pending_tool": None,
+                "tool_triggered": True,
+                "tool_error": str(exc),
+                "steps": _append_step(state, f"tool_execution/react -> {tool_name} FAILED"),
+            }
+
+    # ── 快速路径分支（现状）─────────────────────────────────────────────
     tool_name = state.get("tool_name")
     tool_args = state.get("tool_args") or {}
     logger.info("[tool_execution] tool=%s", tool_name)

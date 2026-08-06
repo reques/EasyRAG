@@ -21,6 +21,7 @@ TOOL_EXECUTION      = "tool_execution"
 ANSWER_GENERATION   = "answer_generation"
 ANSWER_VALIDATION   = "answer_validation"
 FALLBACK_HANDLER    = "fallback_handler"
+AGENT_REASONING     = "agent_reasoning"
 END                 = "__end__"
 
 
@@ -28,6 +29,10 @@ def route_after_intent(state: AgentState) -> str:
     """Dispatch after intent classification."""
     if state.get("error_message") and not state.get("intent"):
         return FALLBACK_HANDLER
+    # ReAct 循环子图: complex_task / 低置信度优先走 agent_reasoning
+    if state.get("use_react"):
+        logger.info("[router] after_intent -> agent_reasoning (use_react)")
+        return AGENT_REASONING
     intent = state.get("intent", "knowledge_qa")
     logger.info("[router] after_intent -> %s", intent)
     if intent == "complex_task":
@@ -37,6 +42,22 @@ def route_after_intent(state: AgentState) -> str:
     if intent == "knowledge_qa":
         return KNOWLEDGE_RETRIEVAL
     return ANSWER_GENERATION  # chitchat / unknown
+
+
+def route_after_reasoning(state: AgentState) -> str:
+    """ReAct 推理后: 有待执行工具 -> tool_execution, 有 draft_answer -> validation,
+    推理连续失败(is_fallback) -> fallback_handler。"""
+    if state.get("is_fallback") or state.get("error_message"):
+        return FALLBACK_HANDLER
+    if state.get("draft_answer"):
+        logger.info("[router] after_reasoning -> answer_validation (final_answer)")
+        return ANSWER_VALIDATION
+    if state.get("pending_tool"):
+        logger.info("[router] after_reasoning -> tool_execution")
+        return TOOL_EXECUTION
+    # 无 pending 也无 answer（不应出现）→ fallback
+    logger.warning("[router] after_reasoning: no pending_tool & no draft_answer -> fallback")
+    return FALLBACK_HANDLER
 
 
 def route_after_planning(state: AgentState) -> str:
@@ -62,7 +83,10 @@ def route_after_retrieval(state: AgentState) -> str:
 
 
 def route_after_tool_execution(state: AgentState) -> str:
-    """After tool execution always proceed to generation."""
+    """After tool execution: ReAct 模式循环回 agent_reasoning, 快速路径进 generation。"""
+    if state.get("use_react"):
+        logger.info("[router] after_tool_execution -> agent_reasoning (react loop)")
+        return AGENT_REASONING
     return ANSWER_GENERATION
 
 

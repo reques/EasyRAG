@@ -1,6 +1,6 @@
 # EasyRAG 项目架构总览
 
-> 最后更新：2026-08-03 | 当前阶段：阶段 1+2 完成，前端已重构为 Yuxi 设计语言，新增文件预览
+> 最后更新：2026-08-05 | 当前阶段：阶段 1 Agent 内核重构完成——ReAct 循环子图 + 工具插件化 + 分层记忆 + 模型分级接口；阶段 1+2 后端/前端已完成
 
 ---
 
@@ -69,17 +69,19 @@ EasyRAG/
 │   │   ├── ocr.py                 #   [2B] RapidOCR 图片/扫描版 PDF 文字识别
 │   │   ├── retriever.py           #   检索引擎 (Memory/Milvus/Chroma + _unwrap_parent 父子块还原)
 │   │   └── vector_store.py        #   [旧] 向量库抽象（已迁移到 retriever）
-│   ├── graph/                     # LangGraph 工作流
-│   │   ├── state.py               #   AgentState 共享状态
-│   │   ├── nodes.py               #   8 个节点函数
-│   │   ├── router.py              #   6 个条件路由函数
-│   │   └── workflow.py            #   图组装 + 编译
-│   ├── tools/                     # 工具调用
-│   │   ├── registry.py            #   工具注册中心 (calculator/datetime/text/web_search)
-│   │   ├── calculator.py          #   安全计算器
-│   │   ├── datetime_tool.py       #   日期时间工具
-│   │   ├── text_tool.py           #   文本处理工具
-│   │   └── web_search_tool.py     #   Tavily 联网搜索 (含 SOURCES 来源块提取)
+│   ├── graph/                     # LangGraph 工作流（ReAct 循环子图 + 快速路径并存）
+│   │   ├── state.py               #   AgentState 共享状态（含 ReAct: observations/pending_tool/use_react）
+│   │   ├── nodes.py               #   9 个节点函数（8 原有 + agent_reasoning ReAct 推理）
+│   │   ├── router.py              #   7 个条件路由函数（+ route_after_reasoning 循环路由）
+│   │   └── workflow.py            #   图组装 + 编译（agent_reasoning ↔ tool_execution 循环边）
+│   ├── memory/                    # 分层记忆（阶段 1）
+│   │   └── manager.py             #   情景摘要压缩（每10轮）+ 语义 user_facts 存取/规则提取
+│   ├── tools/                     # 工具调用（插件化：discover_tools 自动发现）
+│   │   ├── registry.py            #   工具注册中心（check_fn 自检 + 自动发现 + to_react_prompt）
+│   │   ├── calculator.py          #   安全计算器（导出 TOOL 插件）
+│   │   ├── datetime_tool.py       #   日期时间工具（导出 TOOL 插件）
+│   │   ├── text_tool.py           #   文本处理工具（导出 TOOL 插件）
+│   │   └── web_search_tool.py     #   Tavily 联网搜索（导出 TOOL 插件, check_fn 验 key）
 │   ├── prompts/                   # Prompt 模板
 │   │   └── templates.py           #   6 个 Prompt 模板
 │   ├── services/                  # 服务层

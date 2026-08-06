@@ -54,3 +54,9 @@ class AgentState(TypedDict, total=False):
     steps: List[str]                    # human-readable log of each node visited
     error_message: Optional[str]        # set by fallback_handler
     is_fallback: bool                   # True when fallback path was taken
+
+    # ── ReAct 循环 ────────────────────────────────────────────────────────
+    use_react: bool                     # 是否走 ReAct 循环子图（complex_task / 低置信度）
+    observations: List[Dict[str, Any]]  # [{thought, tool, args, result}] 行动-观察序列
+    pending_tool: Optional[Dict[str, Any]]  # agent_reasoning 选中的待执行工具
+    react_iterations: int               # 当前 ReAct 轮数（上限 AGENT_MAX_ITERATIONS）

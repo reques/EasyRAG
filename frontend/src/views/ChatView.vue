@@ -66,6 +66,7 @@
           placeholder="输入你的问题，Enter 发送…"
           rows="1"
           ref="inputEl"
+          @input="autoResize"
         ></textarea>
         <button @click="send" :disabled="!input.trim() || sending" class="btn-send" title="发送">
           <ArrowUp :size="16" />
@@ -108,6 +109,7 @@ function goToSource(s) {
     query: { kb: s.knowledge_base_id, file: s.file_id },
   })
 }
+
 const input = ref('')
 const sending = ref(false)
 const conversationId = ref(null)
@@ -126,6 +128,18 @@ function scrollBottom() {
       msgContainer.value.scrollTop = msgContainer.value.scrollHeight
     }
   })
+}
+
+// 输入框随内容自动撑高（超单行时），上限由 CSS max-height 控制
+function autoResize() {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+}
+
+function resetInputHeight() {
+  if (inputEl.value) inputEl.value.style.height = 'auto'
 }
 
 // ── 监听会话切换，从 DB 加载历史 ─────────────────────────────────
@@ -154,6 +168,7 @@ async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
   input.value = ''
+  resetInputHeight()
   sending.value = true
 
   messages.value.push({ role: 'user', content: text })

@@ -78,3 +78,23 @@ def text_tool(operation: str, text: str, **kwargs: Any) -> str:
         )
         return result
     raise ToolExecutionError(f"Unhandled operation: {op}")
+
+
+# ── 插件导出（discover_tools 自动注册）─────────────────────────────────────
+from app.tools.registry import ToolDefinition
+
+
+def _check() -> bool:
+    return True  # text_tool 无外部依赖，总是可用
+
+
+TOOL = ToolDefinition(
+    name="text_tool",
+    description="Perform text processing: word_count, char_count, sentence_count, clean, uppercase, lowercase, reverse, extract_numbers, stats.",
+    fn=lambda operation, text, **_: text_tool(operation=operation, text=text),
+    arg_schema={
+        "operation": ("string", "One of: word_count | char_count | sentence_count | clean | uppercase | lowercase | reverse | extract_numbers | stats", True),
+        "text": ("string", "Input text to process", True),
+    },
+    check_fn=_check,
+)
