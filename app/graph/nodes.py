@@ -530,14 +530,21 @@ def answer_generation(state):
     try:
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
 
-        # 增强检索：使用知识块格式
+        # 增强检索：使用知识块格式（截断保护：防止超大 context 导致 LLM 返回空）
         knowledge_blocks = state.get("knowledge_blocks")
         if knowledge_blocks and docs:
             from app.rag.enhanced_retriever import format_blocks_for_prompt
-            # 重建知识块对象（从序列化数据）
             context = format_blocks_for_prompt(
                 _rebuild_blocks(knowledge_blocks, docs)
             )
+            # 截断保护：context 超过 8000 字符时截断，避免 LLM 因 prompt 过长返回空
+            MAX_CONTEXT_CHARS = 8000
+            if len(context) > MAX_CONTEXT_CHARS:
+                logger.warning(
+                    "[answer_generation] context too long (%d chars), truncating to %d",
+                    len(context), MAX_CONTEXT_CHARS,
+                )
+                context = context[:MAX_CONTEXT_CHARS] + "\n\n[... context truncated ...]"
             messages.append({
                 "role": "user",
                 "content": ANSWER_WITH_ENHANCED_CONTEXT.format(
@@ -568,7 +575,22 @@ def answer_generation(state):
         # in-place before giving up, so the user doesn't hit a fallback.
         if not draft.strip():
             logger.warning("[answer_generation] empty draft, retrying once")
-            draft = client.chat_sync(messages)
+            # 如果用的是增强检索格式且答案为空，回退到传统平铺格式重试
+            if knowledge_blocks and docs:
+                flat_context = "\n\n".join(
+                    "[" + str(i + 1) + "] " + d["content"] for i, d in enumerate(docs)
+                )
+                fallback_msg = {
+                    "role": "user",
+                    "content": ANSWER_WITH_CONTEXT.format(
+                        query=query, context=flat_context, tool_result=effective_tool
+                    ),
+                }
+                retry_messages = messages[:-1] + [fallback_msg]
+                logger.info("[answer_generation] retrying with flat context (%d chars)", len(flat_context))
+                draft = client.chat_sync(retry_messages)
+            else:
+                draft = client.chat_sync(messages)
             logger.info("[answer_generation] retry draft length=%d", len(draft))
 
         if not draft.strip():

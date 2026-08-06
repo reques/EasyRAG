@@ -160,6 +160,14 @@ class AgentService:
             from app.rag.enhanced_retriever import format_blocks_for_prompt
             from app.graph.nodes import _rebuild_blocks
             context = format_blocks_for_prompt(_rebuild_blocks(knowledge_blocks, docs))
+            # 截断保护：防止超大 context 导致 LLM 流式输出为空
+            MAX_CONTEXT_CHARS = 8000
+            if len(context) > MAX_CONTEXT_CHARS:
+                logger.warning(
+                    "[prepare_context] context too long (%d chars), truncating to %d",
+                    len(context), MAX_CONTEXT_CHARS,
+                )
+                context = context[:MAX_CONTEXT_CHARS] + "\n\n[... context truncated ...]"
             messages.append({
                 "role": "user",
                 "content": ANSWER_WITH_ENHANCED_CONTEXT.format(

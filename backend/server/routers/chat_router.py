@@ -101,6 +101,28 @@ async def send_message(
         logger.error("[chat/send] agent error: %s", exc)
         answer = f"处理请求时发生错误: {exc}"
 
+    # 兜底：Agent 返回空答案时，用 LLM 直接生成（跳过检索）
+    if not answer.strip():
+        logger.warning("[chat/send] agent returned empty answer, fallback to direct LLM")
+        try:
+            from app.llm.client import get_llm_client
+            llm = get_llm_client()
+            fallback_answer = llm.chat_sync([{
+                "role": "user",
+                "content": (
+                    f"请简要回答以下问题（200字以内）：\n\n{req.query}\n\n"
+                    "如果问题涉及法律条款，请引用具体法条编号。"
+                ),
+            }])
+            if fallback_answer and fallback_answer.strip():
+                answer = fallback_answer
+                logger.info("[chat/send] direct LLM fallback succeeded (%d chars)", len(fallback_answer))
+            else:
+                answer = "抱歉，模型暂时无法生成回答，请稍后重试或简化问题。"
+        except Exception as fb_exc:
+            logger.error("[chat/send] direct LLM fallback failed: %s", fb_exc)
+            answer = "抱歉，处理请求时遇到问题，请稍后重试。"
+
     # 自动设置会话标题（首次对话时用 LLM 生成语义摘要）
     if is_new and req.query.strip() and answer.strip():
         title = await generate_conversation_title(req.query, answer)
@@ -212,7 +234,7 @@ async def send_message_stream(
         except Exception as exc:
             logger.warning("[chat/stream] file_id backfill failed: %s", exc)
 
-        # 2. 流式生成
+        # 2. 流式生成（含空响应兜底）
         answer_parts: list[str] = []
         try:
             llm = get_llm_client()
@@ -223,6 +245,27 @@ async def send_message_stream(
             logger.error("[chat/stream] generation error: %s", exc)
             yield _sse({"type": "error", "detail": f"生成失败: {exc}"})
             return
+
+        # 兜底：流式返回空时用同步调用重试（API 偶发空响应，尤其法律类内容）
+        if not answer_parts:
+            logger.warning("[chat/stream] stream returned 0 tokens, falling back to sync")
+            try:
+                fallback_answer = await loop.run_in_executor(
+                    None, llm.chat_sync, ctx["messages"]
+                )
+            except Exception as fb_exc:
+                logger.error("[chat/stream] sync fallback also failed: %s", fb_exc)
+                yield _sse({"type": "error", "detail": "模型未返回有效回答，请重试"})
+                return
+
+            if fallback_answer and fallback_answer.strip():
+                answer_parts = [fallback_answer]
+                yield _sse({"type": "delta", "content": fallback_answer})
+                logger.info("[chat/stream] sync fallback succeeded (%d chars)", len(fallback_answer))
+            else:
+                logger.warning("[chat/stream] sync fallback also returned empty")
+                yield _sse({"type": "error", "detail": "模型未返回有效回答，请尝试简化问题后重试"})
+                return
 
         answer = "".join(answer_parts).strip()
         elapsed = round(time.perf_counter() - start, 3)
