@@ -10,8 +10,8 @@
 ```
 阶段 1: 后端架构化   FastAPI分层 + PostgreSQL/Redis/MinIO + Repository模式  ✅ 完成
 阶段 2: 知识库增强   多策略分块 + OCR链路 + 知识图谱 + 评估管线            ✅ 完成
-阶段 3: Agent 体系    Sub-agent + MCP + Skill系统 + 中间件
-阶段 4: 产品化       Vue3前端 + 多租户 + 管理后台                    🚧 前端先行
+阶段 3: Agent 体系    Sub-agent + MCP + Skill系统 + 中间件                    🚧 进行中（3A 完成）
+阶段 4: 产品化       Vue3前端 + 多租户 + 管理后台                             🚧 前端先行
 ```
 
 ---
@@ -458,3 +458,39 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 - `get_llm_client(tier="main"|"fast")`：fast 未配置回退主模型；配置后独立 fast client（per-tier 单例缓存）。本期所有调用点仍用 main，接口留好。
 
 **验证：** 4 个新 verify 脚本全绿（tool_plugin 15/15、react_loop 19/19、memory_layers 14/14、model_tiers 13/13）；message_persistence 15/16（唯一 FAIL 是清理检查——DB 有 6 条旧真实会话数据不该删，功能 15 项全过）；快速路径 4 类意图回归通过。
+
+#### 2026-08-05 — 阶段 3A：Orchestrator-Worker 骨架 + 共享黑板（M1+M2）
+
+**M1 Orchestrator-Worker 骨架：**
+
+| # | 任务 | 状态 |
+|---|---|---|
+| 1 | `app/agents/` 目录结构 + `__init__.py` | ✅ |
+| 2 | `workers/base.py` — TaskBrief / WorkerReport / BaseWorker（name/persona/工具白名单/run 接口） | ✅ |
+| 3 | `rag_worker.py` — 复用现有 retriever，白名单 [web_search]，lazy retriever 防模块导入时连接 Milvus | ✅ |
+| 4 | `legal_worker.py` — 法律人格 prompt，白名单 [web_search] | ✅ |
+| 5 | `code_worker.py` — 代码人格 prompt，白名单 [calculator, text_tool]，提取 code_snippets | ✅ |
+| 6 | `orchestrator.py` — LLM 拆解（TaskBrief JSON）+ 派发 + 汇总 + Worker 注册表 | ✅ |
+| 7 | `config.py` + `agent_service.py` — AGENT_MODE 开关 + multi 分支 + 崩溃回退 single | ✅ |
+| 8 | `verify/verify_multi_agent.py` — 28/28 通过（契约 + mock 全流程 + 真实 LLM 结构断言 + single 回归） | ✅ |
+
+**M2 共享黑板（Blackboard）：**
+
+| # | 任务 | 状态 |
+|---|---|---|
+| 9 | `app/agents/blackboard.py` — Blackboard 类（threading.Lock 全方法保护） | ✅ |
+| 10 | `base.py` + `orchestrator.py` — `run_with_board` 自动上板 / `_resolve_refs` task-N 引用解析 / `ThreadPoolExecutor` parallel 真并发 | ✅ |
+| 11 | `verify/verify_blackboard.py` — 24/24 通过（黑板单测 + 8 线程×25 post 并发安全 + sequential/parallel 集成 + 崩溃隔离 + 真实 LLM 黑板透出） | ✅ |
+
+**关键设计：**
+- **特性开关**：`.env` 设 `AGENT_MODE=single|multi`（默认 single，行为完全不变）；multi 分支 try/except 包住，orchestrator 崩溃回退 single
+- **数据契约**：`TaskBrief`（task_id/goal/context/constraints/worker_hint）→ `WorkerReport`（status/summary/detail/artifacts/steps/error）
+- **Worker 基类**：name + persona（system prompt）+ tool_names 白名单；`invoke_tool` 越权抛 PermissionError；LLM client lazy property 可注入 mock
+- **Orchestrator 循环**：`_decompose`（LLM 输出 JSON：needs_decomposition / sub_tasks[] / execution_mode / final_instruction）→ `_dispatch`（sequential/parallel）→ `_synthesize`（单任务直返 / 多任务 LLM 整合，失败回退原始拼接）
+- **黑板**：`post_artifact` / `read_artifact` / `find_by_tag` / `find_by_task` / `render_for_prompt`（排除自身任务防自引用）；`run_with_board` 包装 `run()` 自动上板；`_resolve_refs` 解析 brief.context 中的 task-N 引用注入前序产出
+- **并发**：parallel 模式 `ThreadPoolExecutor` + `as_completed`，收集后按原任务序 sort 恢复；黑板锁保护多线程读写
+
+**验证：**
+- `verify/verify_multi_agent.py` 28/28（mock 全流程 + 真实 LLM 结构断言 + single 回归）
+- `verify/verify_blackboard.py` 24/24（黑板单测 + 并发安全 + sequential/parallel 集成 + 崩溃隔离 + 真实 LLM 黑板透出）
+- 真实 LLM 路径硬断言结构（blackboard/execution_mode/steps），软断言内容——LLM 端点波动导致空回答时打 WARN 不 FAIL

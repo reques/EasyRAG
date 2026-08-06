@@ -56,6 +56,44 @@ class AgentService:
         self._graph = get_graph()
         self._sessions = SessionStore(ttl=cfg.SESSION_TTL)
 
+    # ── 智能路由：auto 模式下判断是否走多智能体 ──────────────────────────────
+    @staticmethod
+    def _should_use_multi(query: str, history: Optional[List[Dict[str, str]]] = None) -> bool:
+        """auto 模式下按查询特征判断是否走 Orchestrator-Worker 多智能体。
+
+        规则（轻量，不调用 LLM）：
+        1. 查询含多领域关键词组合（法律+代码、检索+计算、查询+生成等）→ multi
+        2. 查询长度 > 100 字符且含「然后」「再」「并且」「同时」等连词 → multi
+        3. 其余 → single（快速路径）
+        """
+        q = query.lower()
+
+        # 多领域关键词组合（覆盖更全面的跨域场景）
+        domain_pairs = [
+            # 法律 + 代码/计算
+            (("法律", "法条", "合同", "劳动", "赔偿", "安全生产", "民法典", "刑法", "行政处罚", "诉讼"),
+             ("代码", "脚本", "python", "计算", "程序", "算法", "开发")),
+            # 检索/查询 + 生成/写作
+            (("查询", "检索", "搜索", "查一下", "查找", "了解"),
+             ("写", "生成", "创作", "编写", "撰写", "起草", "整理")),
+            # 分析/解读 + 代码/实现
+            (("分析", "解读", "解释", "说明", "比较", "对比"),
+             ("代码", "脚本", "程序", "算法", "实现", "开发")),
+            # 法律 + 法律（跨法域比较，如安全生产法 vs 民法典）
+            (("安全生产", "刑法", "行政处罚", "民法", "合同", "劳动"),
+             ("民法典", "赔偿", "责任", "适用", "关系", "区别")),
+        ]
+        for domain_a, domain_b in domain_pairs:
+            if any(k in q for k in domain_a) and any(k in q for k in domain_b):
+                return True
+
+        # 长查询 + 连词
+        connectors = ("然后", "接着", "再", "并且", "同时", "以及", "之后")
+        if len(query) > 80 and any(c in query for c in connectors):
+            return True
+
+        return False
+
     def run(
         self,
         query: str,
@@ -64,6 +102,26 @@ class AgentService:
     ) -> Dict[str, Any]:
         logger.info("[agent_service] session=%s query=%r", session_id, query[:80])
         start = time.perf_counter()
+
+    # ── 多智能体分支（AGENT_MODE=multi 或 auto 智能判断）────────────────────
+        if cfg.AGENT_MODE == "multi" or (
+            cfg.AGENT_MODE == "auto" and self._should_use_multi(query, history)
+        ):
+            try:
+                from app.agents.orchestrator import get_orchestrator
+
+                orchestrator = get_orchestrator()
+                result = orchestrator.run(query, history=history)
+                # 拆解器判定单一意图 → 回退单 Agent 快速路径
+                if not result.get("degenerate_to_single"):
+                    result["session_id"] = session_id
+                    return result
+                logger.info("[agent_service] orchestrator degenerated to single, fast path")
+            except Exception as exc:
+                logger.error("[agent_service] multi-agent failed, fallback single: %s", exc)
+                # 崩溃回退 single，可用性永不回退
+
+        # ── 单 Agent 路径（默认，行为不变）─────────────────────────────────
         # 优先使用传入的 DB 历史，否则回退到内存 SessionStore
         if history is None:
             history = self._sessions.get_history(session_id)
@@ -104,33 +162,61 @@ class AgentService:
         query: str,
         history: Optional[List[Dict[str, str]]] = None,
         user_id=None,
+        on_step=None,
     ) -> Dict[str, Any]:
         """同步检索 + 构建生成消息, 为流式生成准备上下文。
 
-        先做意图识别(intent_recognition), 按 intent 分流:
-          chitchat      — 跳过检索, 直接对话
-          tool_use      — 走 tool_selection + tool_execution(web_search/calculator/datetime),
-                          工具结果注入上下文; requires_retrieval 时叠加知识库检索
-          knowledge_qa  — 向量检索(现状)
-          complex_task  — 检索 + 可选工具组合
-        返回 dict 含: messages / sources(含 file_id) / intent / tool_result。
-        user_id 传入时注入用户 facts（语义记忆）到 system prompt。
-        这是同步阻塞调用, 在 async 端点里需用 run_in_executor 包裹。
+        编排流程（每一步都可通过 on_step 回调透传到前端实时展示）:
+          0. 查询改写  — 追问/指代结合历史还原成自包含问题（"今天呢"→"无锡今天天气"）
+          1. 意图识别  — 带历史分类, 决定走哪条编排分支
+          2. 分支执行:
+             chitchat      — 跳过检索/工具, 直接对话
+             tool_use      — tool_selection + tool_execution, 工具结果注入上下文
+             knowledge_qa  — 向量检索知识库
+             complex_task  — 工具 + 检索组合
+        返回 dict 含: messages / sources / intent / tool_result / resolved_query。
+        on_step: 可选回调 fn(step, detail)，在关键步骤调用。
         """
         from app.graph.nodes import (
             intent_recognition, knowledge_retrieval, tool_selection, tool_execution,
+            rewrite_query_with_history,
         )
         from app.prompts.templates import (
             ANSWER_NO_CONTEXT, ANSWER_WITH_CONTEXT,
             ANSWER_WITH_ENHANCED_CONTEXT,
         )
 
-        history = history or []
-        state: Dict[str, Any] = {"query": query, "steps": [], "user_id": user_id}
+        def _step(step: str, detail: str = ""):
+            if on_step:
+                try:
+                    on_step(step, detail)
+                except Exception:
+                    pass
 
-        # 1. 意图识别(失败时 fallback knowledge_qa, 与完整路径一致)
+        history = history or []
+
+        # 0. 查询改写：把"今天呢"这类追问结合历史还原成自包含问题
+        _step("understand", "理解问题中...")
+        resolved_query = rewrite_query_with_history(query, history)
+        if resolved_query != query:
+            _step("understand_done", f"理解为：{resolved_query}")
+        else:
+            _step("understand_done", query[:60])
+
+        state: Dict[str, Any] = {
+            "query": resolved_query, "steps": [], "user_id": user_id,
+            "history": history,
+        }
+
+        # 1. 意图识别（带历史）
+        _step("intent", "判断问题类型...")
         state.update(intent_recognition(state))
         intent = state.get("intent", "knowledge_qa")
+        intent_label = {
+            "knowledge_qa": "知识库问答", "tool_use": "联网/工具查询",
+            "complex_task": "复杂任务", "chitchat": "闲聊",
+        }.get(intent, intent)
+        _step("intent_done", f"{intent_label}（置信度 {state.get('intent_confidence', 0):.0%}）")
         logger.info("[prepare_context] intent=%s conf=%.2f", intent, state.get("intent_confidence", 0))
 
         sources: List[Dict[str, Any]] = []
@@ -139,16 +225,24 @@ class AgentService:
         # 2. 工具路径: tool_use 或 requires_tool 时执行工具
         if state.get("requires_tool") or intent == "tool_use":
             state.update(tool_selection(state))
+            tool_name = state.get("tool_name")
+            if tool_name:
+                _step("tool", f"调用工具 {tool_name}...")
             state.update(tool_execution(state))
             if state.get("tool_triggered") and state.get("tool_result") is not None:
                 tool_result_text = str(state["tool_result"])
+                _step("tool_done", f"{tool_name} 返回结果")
+            elif state.get("tool_error"):
+                _step("tool_done", f"{tool_name} 失败：{state['tool_error'][:50]}")
             sources.extend(state.get("sources") or [])  # web_search 的引用
 
         # 3. 检索路径: 需要检索时做向量检索(chitchat 通常 requires_retrieval=False)
         docs = []
         if state.get("requires_retrieval", True) or intent in ("knowledge_qa", "complex_task"):
+            _step("retrieve", "检索知识库...")
             state.update(knowledge_retrieval(state))
             docs = state.get("retrieved_docs") or []
+            _step("retrieve_done", f"命中 {len(docs)} 条知识" if docs else "知识库无相关内容")
             sources.extend(state.get("kb_sources") or [])
             # knowledge_retrieval 内 web fallback 的 sources 也合并
             for s in (state.get("sources") or []):
@@ -156,6 +250,7 @@ class AgentService:
                     sources.append(s)
 
         # 4. 拼装生成消息（语义记忆: 注入用户 facts 到 system prompt）
+        _step("generate", "生成回答中...")
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
 
         # 语义记忆注入: 跨会话用户事实（偏好/身份/历史结论）
@@ -194,7 +289,7 @@ class AgentService:
             messages.append({
                 "role": "user",
                 "content": ANSWER_WITH_ENHANCED_CONTEXT.format(
-                    query=query, context=context, tool_result=tool_result_text
+                    query=resolved_query, context=context, tool_result=tool_result_text
                 ),
             })
         elif docs:
@@ -204,13 +299,13 @@ class AgentService:
             messages.append({
                 "role": "user",
                 "content": ANSWER_WITH_CONTEXT.format(
-                    query=query, context=context, tool_result=tool_result_text
+                    query=resolved_query, context=context, tool_result=tool_result_text
                 ),
             })
         else:
             messages.append({
                 "role": "user",
-                "content": ANSWER_NO_CONTEXT.format(query=query, tool_result=tool_result_text),
+                "content": ANSWER_NO_CONTEXT.format(query=resolved_query, tool_result=tool_result_text),
             })
 
         return {
@@ -218,6 +313,7 @@ class AgentService:
             "sources": sources,
             "intent": intent,
             "tool_result": state.get("tool_result"),
+            "resolved_query": resolved_query,
         }
 
     @staticmethod

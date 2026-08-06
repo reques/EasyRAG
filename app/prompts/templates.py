@@ -23,12 +23,38 @@ class PromptTemplate:
         return self._template
 
 
+# ── Query Rewrite (指代消解 / 上下文还原) ────────────────────────────────────
+
+QUERY_REWRITE = PromptTemplate(
+    """你是一个查询改写器。根据对话历史，把用户最新这条可能有指代/省略的消息，改写成一个不依赖上下文也能独立理解的完整问题。
+
+对话历史（最近的在前）:
+{history}
+
+用户最新消息: {query}
+
+改写规则:
+- 如果最新消息已经自包含（能独立看懂），原样返回，不要画蛇添足
+- 如果有指代（"今天呢/那明天/它/这个/那里/还有吗"等），结合上文补全主语和宾语
+- 保留用户原本的意图和语气，只补全省略信息，不改变诉求
+- 输出只有改写后的那一句话，不要任何解释、引号或前后缀
+
+改写结果:
+"""
+)
+
 # ── Intent Recognition ────────────────────────────────────────────────────────
 
 INTENT_RECOGNITION = PromptTemplate(
-    """You are an intent classifier for an AI assistant. Analyse the user query and return a JSON object.
+    """You are an intent classifier for an AI assistant.
 
-User query: {query}
+Conversation history (most recent last, may be empty):
+{history}
+
+Current user query (already rewritten to be self-contained): {query}
+
+Classify the intent of the CURRENT query. Use the history ONLY to understand
+references, not to change the topic — classify what the user is asking NOW.
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -42,20 +68,21 @@ Return ONLY valid JSON in this exact format:
 }}
 
 Intent definitions:
-- knowledge_qa  : user asks a factual question answerable from a knowledge base
-- tool_use      : user wants a calculation, time lookup, text processing, or a real-time web search
-- complex_task  : multi-step reasoning combining retrieval and/or tools
-- chitchat      : casual greeting or off-topic
+- knowledge_qa  : question answerable from a stored knowledge base (laws, docs, manuals)
+- tool_use      : needs a live tool — calculation, current time, OR real-time web info
+- complex_task  : multi-step task combining retrieval AND tools
+- chitchat      : greeting, thanks, small talk with no factual ask
 
-For tool_use, populate tool_name and tool_args appropriately.
+CRITICAL routing rules:
+- Weather, news, stock prices, exchange rates, "今天/现在/最新" real-time facts → tool_use + web_search, requires_retrieval=false. NEVER route these to knowledge_qa just because a KB exists.
+- "today/yesterday/tomorrow" + a topic → almost always real-time → tool_use + web_search.
+- Only use knowledge_qa when the user asks about content that plausibly lives in uploaded documents (法律条文, 公司文档, 产品手册).
+- For tool_use populate tool_name and tool_args.
+
 Example tool_args for calculator: {{"expression": "12 * 34"}}
 Example tool_args for datetime_tool: {{"format": "%Y-%m-%d"}}
 Example tool_args for text_tool: {{"operation": "word_count", "text": "..."}}
-Example tool_args for web_search: {{"query": "latest AI news today"}}
-
-Choose web_search when the user asks about current events, news, weather, recent
-happenings, prices, or anything that requires up-to-date information from the
-internet rather than the local knowledge base.
+Example tool_args for web_search: {{"query": "无锡今天天气"}}
 """
 )
 

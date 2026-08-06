@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.logger import get_logger
 from backend.services.chat_service import (
     create_conversation,
@@ -26,6 +27,7 @@ from backend.server.utils.auth_middleware import get_current_user
 from backend.storage.postgres.models_user import User
 
 logger = get_logger(__name__)
+cfg = get_settings()
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
@@ -208,14 +210,141 @@ async def send_message_stream(
 
         yield _sse({"type": "conversation_id", "conversation_id": str(conv_id)})
 
-        # 1. 同步检索准备上下文(阻塞, 放 executor)
+        # ── 智能路由：auto 模式判断是否走多智能体 ────────────────────────────
+        from app.services.agent_service import AgentService
+        use_multi = False
+        if cfg.AGENT_MODE == "multi":
+            use_multi = True
+        elif cfg.AGENT_MODE == "auto":
+            use_multi = AgentService._should_use_multi(req.query, db_history)
+
+        if use_multi:
+            # ── 多智能体路径：Orchestrator + 状态透传 ─────────────────────────
+            try:
+                from app.agents.orchestrator import get_orchestrator
+
+                orchestrator = get_orchestrator()
+
+                # 状态队列：orchestrator 回调 → SSE 事件
+                status_queue: list[dict] = []
+
+                def _on_status(step: str, detail: str):
+                    status_queue.append({"step": step, "detail": detail})
+
+                # 在 executor 里跑 orchestrator（同步 LLM 调用）
+                def _run_orch():
+                    return orchestrator.run(
+                        req.query, history=db_history, status_callback=_on_status
+                    )
+
+                result = await loop.run_in_executor(None, _run_orch)
+
+                # 拆解器判定单一意图 → 回退单 Agent 快速路径（走下面的 single 分支）
+                if result.get("degenerate_to_single"):
+                    yield _sse({"type": "status", "step": "fallback", "detail": "单一意图，走快速路径"})
+                else:
+                    # 先 flush 累积的状态事件
+                    for st in status_queue:
+                        yield _sse({"type": "status", **st})
+
+                    answer = result.get("final_answer", "")
+                    # multi 模式没有逐 token 流，一次性给 delta
+                    if answer:
+                        yield _sse({"type": "delta", "content": answer})
+
+                    elapsed = round(time.perf_counter() - start, 3)
+
+                    # 落库
+                    try:
+                        async with get_session() as session:
+                            meta = json.dumps({
+                                "intent": result.get("intent", "multi_agent"),
+                                "sources": result.get("sources", []),
+                                "steps": result.get("steps", []),
+                                "execution_mode": result.get("execution_mode", ""),
+                            }, ensure_ascii=False)
+                            await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
+                            await session.commit()
+                    except Exception as exc:
+                        logger.warning("[chat/stream] multi persist failed: %s", exc)
+
+                    yield _sse({
+                        "type": "done",
+                        "sources": result.get("sources", []),
+                        "intent": result.get("intent", "multi_agent"),
+                        "elapsed_seconds": elapsed,
+                        "execution_mode": result.get("execution_mode", ""),
+                    })
+
+                    # 新会话标题后台生成
+                    if is_new and answer:
+                        async def _gen_title_multi():
+                            try:
+                                title = await generate_conversation_title(req.query, answer)
+                                async with get_session() as session:
+                                    c = await get_conversation(session, conv_id)
+                                    if c:
+                                        c.title = title
+                                        await session.commit()
+                            except Exception as exc:
+                                logger.warning("[chat/stream] title gen failed: %s", exc)
+
+                        asyncio.get_event_loop().create_task(_gen_title_multi())
+
+                    return
+            except Exception as exc:
+                logger.error("[chat/stream] multi-agent error, fallback single: %s", exc)
+                yield _sse({"type": "status", "step": "fallback", "detail": "多智能体失败，回退单 Agent"})
+                # 继续走下面的 single 路径
+
+        # ── 单 Agent 路径（带实时思考过程透出）─────────────────────────────────
+        # 1. 同步编排(检索/工具)在 executor 线程跑, 通过线程安全队列把每一步的
+        #    状态实时桥接回事件循环, SSE 逐步推给前端 — 不再是黑盒等待。
+        import queue as _queue
+        step_queue: "_queue.Queue" = _queue.Queue()
+        _SENTINEL = object()
+
+        def _on_step(step: str, detail: str = ""):
+            step_queue.put({"type": "status", "step": step, "detail": detail})
+
+        def _prepare():
+            try:
+                return agent.prepare_context(
+                    req.query, db_history, current_user.id, on_step=_on_step
+                )
+            finally:
+                step_queue.put(_SENTINEL)
+
+        prepare_future = loop.run_in_executor(None, _prepare)
+
+        # 边等 prepare 边 drain 队列, 实时推状态
+        ctx = None
+        prepare_error: Optional[Exception] = None
+        while True:
+            try:
+                ev = await loop.run_in_executor(None, step_queue.get, True, 0.1)
+            except Exception:
+                ev = None  # queue.Empty 超时 → 检查 future 是否完成
+            if ev is _SENTINEL:
+                break
+            if ev is not None:
+                yield _sse(ev)
+            if prepare_future.done() and step_queue.empty():
+                break
+        # drain 残留
+        while not step_queue.empty():
+            ev = step_queue.get_nowait()
+            if ev is not _SENTINEL:
+                yield _sse(ev)
+
         try:
-            ctx = await loop.run_in_executor(
-                None, agent.prepare_context, req.query, db_history, current_user.id
-            )
+            ctx = prepare_future.result()
         except Exception as exc:
-            logger.error("[chat/stream] prepare_context error: %s", exc)
-            yield _sse({"type": "error", "detail": f"检索失败: {exc}"})
+            prepare_error = exc
+
+        if prepare_error is not None or ctx is None:
+            logger.error("[chat/stream] prepare_context error: %s", prepare_error)
+            yield _sse({"type": "error", "detail": f"检索失败: {prepare_error}"})
             return
 
         # 1b. 主协程里 async 反查 file_id 并回填到引用(executor 线程里
