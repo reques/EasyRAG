@@ -102,7 +102,7 @@ def route_after_validation(state: AgentState) -> str:
     if state.get("validation_passed"):
         return END
     regen = state.get("regeneration_count") or 0
-    max_regen = 1  # allow one regeneration
+    max_regen = 2  # allow one regeneration (answer_generation increments to 1, retry→2)
     if regen < max_regen:
         logger.info("[router] after_validation -> re-generate (attempt %d)", regen + 1)
         return ANSWER_GENERATION

@@ -27,9 +27,10 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import hashlib
+import threading
 import time
 import uuid
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -39,6 +40,54 @@ from app.rag.embeddings import get_embedder
 
 logger = get_logger(__name__)
 cfg = get_settings()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 查询分解缓存 (LRU + TTL)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class _DecompositionCache:
+    """LRU 缓存查询分解结果，减少重复 LLM 调用。"""
+
+    def __init__(self, max_size: int = 128, ttl_seconds: float = 300.0):
+        self._max_size = max_size
+        self._ttl = ttl_seconds
+        self._lock = threading.Lock()
+        self._store: OrderedDict[str, Tuple[float, QueryDecomposition]] = OrderedDict()
+
+    def _make_key(self, query: str) -> str:
+        return hashlib.md5(query.strip().lower().encode()).hexdigest()
+
+    def get(self, query: str) -> Optional[QueryDecomposition]:
+        key = self._make_key(query)
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return None
+            ts, val = entry
+            if time.monotonic() - ts > self._ttl:
+                del self._store[key]
+                return None
+            # Move to end (LRU)
+            self._store.move_to_end(key)
+            return val
+
+    def put(self, query: str, decomposition: QueryDecomposition):
+        key = self._make_key(query)
+        with self._lock:
+            if key in self._store:
+                self._store.move_to_end(key)
+            else:
+                self._store[key] = (time.monotonic(), decomposition)
+                while len(self._store) > self._max_size:
+                    self._store.popitem(last=False)
+
+    def clear(self):
+        with self._lock:
+            self._store.clear()
+
+
+_decomp_cache = _DecompositionCache(max_size=128, ttl_seconds=300.0)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 数据类
@@ -250,6 +299,25 @@ class EnhancedRetriever:
         self._llm = None
         self._embedder = None
         self._bm25 = None
+        # 持久线程池：避免每次检索创建/销毁线程的开销
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=6, thread_name_prefix="enhanced_retr"
+        )
+        # BM25 索引就绪标记（后台预构建）
+        self._bm25_ready = threading.Event()
+        # 启动后台 BM25 预构建
+        self._executor.submit(self._eager_build_bm25)
+
+    def _eager_build_bm25(self):
+        """后台预构建 BM25 索引（超时保护，永不阻塞线程池）。"""
+        try:
+            # 用 15 秒超时包装，防止 Milvus 连接挂起永久占住 worker
+            build_future = self._executor.submit(self._ensure_bm25_index)
+            build_future.result(timeout=15.0)
+        except (concurrent.futures.TimeoutError, Exception) as exc:
+            logger.warning("[enhanced] eager BM25 build failed (timeout or error): %s", exc)
+        finally:
+            self._bm25_ready.set()
 
     # ── 属性（延迟加载）───────────────────────────────────────────────────────
 
@@ -283,7 +351,7 @@ class EnhancedRetriever:
         history: Optional[List[Dict[str, str]]] = None,
         kb_sources_filter: Optional[List[str]] = None,
     ) -> RetrievalResult:
-        """主入口：执行完整的增强检索流程。
+        """主入口：执行完整的增强检索流程（优化版：投机检索 + 缓存分解）。
 
         参数
         ----
@@ -297,13 +365,13 @@ class EnhancedRetriever:
         """
         t0 = time.perf_counter()
 
-        # ── 第 0 步：构建 BM25 索引（如果尚未构建）──────────────────────────
-        self._ensure_bm25_index()
+        # ── 第 0 步：BM25（可选，不阻塞主链路）───────────────────────────
+        bm25_available = self._bm25_ready.wait(timeout=0.5) or self.bm25.doc_count > 0
 
-        # ── 第 1 步：查询结构分解 ──────────────────────────────────────────
-        decomposition = self._decompose_query(query, history)
+        # ── 第 1 步：查询结构分解（带缓存）──────────────────────────────
+        decomposition = self._cached_decompose_query(query, history)
 
-        # ── 第 2 步：四路并行检索 ──────────────────────────────────────────
+        # ── 第 2 步：四路并行检索 ──────────────────────────────────────
         all_candidates = self._parallel_retrieve(
             query, decomposition, kb_sources_filter
         )
@@ -335,6 +403,45 @@ class EnhancedRetriever:
             result.gap_rounds, result.elapsed_ms,
         )
         return result
+
+    def _cached_decompose_query(
+        self, query: str, history: Optional[List[Dict[str, str]]] = None,
+    ) -> QueryDecomposition:
+        """带缓存的查询分解。命中缓存跳过 LLM 调用。"""
+        # 有历史上下文时不缓存（上下文会影响分解结果）
+        if history and len(history) > 0:
+            return self._decompose_query(query, history)
+
+        cached = _decomp_cache.get(query)
+        if cached is not None:
+            logger.info("[enhanced] decomposition cache hit for query=%r", query[:60])
+            return cached
+
+        result = self._decompose_query(query, history)
+        _decomp_cache.put(query, result)
+        return result
+
+    @staticmethod
+    def _merge_path_docs(
+        all_docs: List[CandidateDoc],
+        seen: Set[str],
+        path_name: str,
+        new_docs: List[CandidateDoc],
+    ):
+        """合并一条路径的结果，去重并更新跨路命中计数。"""
+        for d in new_docs:
+            key = EnhancedRetriever._dedup_key(d)
+            if key in seen:
+                for existing in all_docs:
+                    if EnhancedRetriever._dedup_key(existing) == key:
+                        existing.cross_path_hits += 1
+                        existing.retrieval_path += "+" + path_name
+                        break
+            else:
+                seen.add(key)
+                if d.cross_path_hits == 0:
+                    d.cross_path_hits = 1
+                all_docs.append(d)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ① 查询结构分解
@@ -975,18 +1082,19 @@ class EnhancedRetriever:
             result.gap_rounds = round_num
             result.gap_details.append(gap_result)
 
-            # 对每个缺口查询做补充检索（仅 Path B 语义路径 + Path D BM25，不重复建图查询）
+            # 对每个缺口查询做补充检索（并行，仅 Path B 语义路径 + Path D BM25）
+            gap_futures = {}
             for gq in gap_queries[:3]:
+                gap_futures[gq] = self._executor.submit(self._gap_supplement_search, gq)
+
+            seen_keys = {self._dedup_key(d) for d in result.raw_docs}
+            for gq, future in gap_futures.items():
                 try:
-                    from app.rag.retriever import get_retriever
-                    retriever = get_retriever()
-                    raw = retriever.retrieve(gq, top_k=3)
-                except Exception:
+                    raw = future.result(timeout=15)
+                except Exception as exc:
+                    logger.warning("[enhanced] gap query %r failed: %s", gq[:40], exc)
                     continue
 
-                seen_keys = {
-                    self._dedup_key(d) for d in result.raw_docs
-                }
                 for rd in raw:
                     doc = CandidateDoc(
                         content=rd.get("content", ""),
@@ -1040,12 +1148,24 @@ class EnhancedRetriever:
     # 辅助方法
     # ═══════════════════════════════════════════════════════════════════════════
 
+    def _gap_supplement_search(self, query: str) -> List[dict]:
+        """缺口补充的单次检索（语义向量），供并行调用。"""
+        from app.rag.retriever import get_retriever
+        retriever = get_retriever()
+        return retriever.retrieve(query, top_k=3)
+
     def _ensure_bm25_index(self):
-        """确保 BM25 索引已从向量库同步。首次调用时自动构建。"""
+        """确保 BM25 索引已从向量库同步（超时保护，失败不抛异常）。"""
         if self.bm25.doc_count > 0:
+            self._bm25_ready.set()
             return
 
-        self.sync_bm25_from_vector_store()
+        try:
+            self.sync_bm25_from_vector_store()
+        except Exception as exc:
+            logger.warning("[enhanced] BM25 index sync failed (Path D unavailable): %s", exc)
+        finally:
+            self._bm25_ready.set()
 
     def sync_bm25_from_vector_store(self):
         """从向量库（Milvus/Memory/Chroma）拉取所有 chunk 并构建 BM25 索引。
