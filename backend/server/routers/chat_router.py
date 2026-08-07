@@ -238,6 +238,10 @@ async def send_message_stream(
                     status_list.append(ev)
                     status_queue.put({"type": "status", **ev})
 
+                def _on_tasks(tasks: list):
+                    # 拆解完成 → 推送待办清单，前端渲染侧边任务进度面板
+                    status_queue.put({"type": "sub_tasks", "tasks": tasks})
+
                 # 收集 worker 中间产出，落库时与汇总结果拼接成完整答案
                 worker_outputs: list[dict] = []
 
@@ -269,6 +273,7 @@ async def send_message_stream(
                             history=db_history,
                             status_callback=_on_status,
                             worker_done_callback=_on_worker_done,
+                            tasks_callback=_on_tasks,
                             return_synthesize_payload=True,
                         )
                     finally:
@@ -295,8 +300,17 @@ async def send_message_stream(
                                 "worker": ev["worker"],
                                 "content": ev["content"],
                             })
+                        elif ev_type == "sub_tasks":
+                            yield _sse({"type": "sub_tasks", "tasks": ev["tasks"]})
                         else:
-                            yield _sse({"type": "status", "step": ev["step"], "detail": ev["detail"]})
+                            # tool_call 步骤 → 独立事件（前端侧边面板展示工具调用）
+                            if ev.get("step") == "tool_call":
+                                yield _sse({
+                                    "type": "tool_call",
+                                    "detail": ev.get("detail", ""),
+                                })
+                            else:
+                                yield _sse({"type": "status", "step": ev["step"], "detail": ev["detail"]})
                     if orch_future.done() and status_queue.empty():
                         break
                 # drain 残留
@@ -312,8 +326,16 @@ async def send_message_stream(
                             "worker": ev["worker"],
                             "content": ev["content"],
                         })
+                    elif ev_type == "sub_tasks":
+                        yield _sse({"type": "sub_tasks", "tasks": ev["tasks"]})
                     else:
-                        yield _sse({"type": "status", "step": ev["step"], "detail": ev["detail"]})
+                        if ev.get("step") == "tool_call":
+                            yield _sse({
+                                "type": "tool_call",
+                                "detail": ev.get("detail", ""),
+                            })
+                        else:
+                            yield _sse({"type": "status", "step": ev["step"], "detail": ev["detail"]})
 
                 try:
                     result = orch_future.result()
