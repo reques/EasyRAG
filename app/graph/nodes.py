@@ -76,9 +76,14 @@ def intent_recognition(state):
     history = state.get("history") or []
     logger.info("[intent_recognition] query=%r history_turns=%d", query[:80], len(history) // 2)
     client = get_llm_client(tier="fast")
+    # 动态注入当前可用工具（含 MCP 工具）——prompt 里硬编码枚举会漏掉
+    # 后注册的工具，导致 LLM 把未知工具名当参数传给别的工具（如 "echo" → text_tool）
+    from app.tools.registry import get_tool_registry
+    available_tools = get_tool_registry().to_react_prompt()
     prompt = INTENT_RECOGNITION.format(
         history=_format_history_for_prompt(history),
         query=query,
+        available_tools=available_tools,
     )
     try:
         data = client.chat_json_sync([{"role": "user", "content": prompt}], temperature=0.0)

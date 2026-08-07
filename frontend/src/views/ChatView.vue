@@ -4,6 +4,13 @@
     <div class="chat-main">
     <!-- 消息列表 -->
     <div class="chat-messages" ref="msgContainer" :class="{ 'is-empty': messages.length === 0 && !sending }">
+      <!-- 任务面板开关：本轮有任务记录但面板被手动关闭时，提供重新打开的入口 -->
+      <div v-if="taskPanel.tasks.length && !taskPanel.visible" class="task-panel-toggle">
+        <button class="task-panel-toggle-btn" @click="taskPanel.visible = true">
+          <ListChecks :size="14" />
+          任务进度（{{ taskProgress.done }}/{{ taskProgress.total }}）
+        </button>
+      </div>
       <div class="chat-column">
         <!-- 空状态：Yuxi greeting — 轻量大标题 + 说明 -->
         <div v-if="messages.length === 0 && !sending" class="chat-empty">
@@ -98,7 +105,7 @@
     </div>
     </div><!-- /.chat-main -->
 
-    <!-- 侧边任务进度面板（多智能体请求时显示） -->
+    <!-- 侧边任务进度面板（多智能体请求时显示，可手动开/关） -->
     <aside v-if="taskPanel.visible" class="task-panel">
       <div class="task-panel-header">
         <span class="task-panel-title">
@@ -106,7 +113,12 @@
           <CheckCircle2 v-else :size="14" />
           任务进度
         </span>
-        <span class="task-panel-count">{{ taskProgress.done }}/{{ taskProgress.total }} · {{ taskProgress.pct }}%</span>
+        <span class="task-panel-actions">
+          <span class="task-panel-count">{{ taskProgress.done }}/{{ taskProgress.total }} · {{ taskProgress.pct }}%</span>
+          <button class="task-panel-close" title="关闭任务面板" @click="taskPanel.visible = false">
+            <X :size="14" />
+          </button>
+        </span>
       </div>
       <div class="task-panel-bar">
         <div class="task-panel-bar-fill" :style="{ width: taskProgress.pct + '%' }"></div>
@@ -145,7 +157,7 @@ import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
-import { ArrowUp, BookOpen, ChevronDown, ChevronRight, Loader2, CheckCircle2 } from 'lucide-vue-next'
+import { ArrowUp, BookOpen, ChevronDown, ChevronRight, ListChecks, Loader2, CheckCircle2, X } from 'lucide-vue-next'
 import api from '../api'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
@@ -295,6 +307,8 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   if (newId === oldId) return
   conversationId.value = newId
   messages.value = []
+  // 切换会话 → 清空上一会话的任务面板（否则面板残留 pin 在右边）
+  taskPanel.value = { visible: false, tasks: [] }
 
   if (newId) {
     try {
