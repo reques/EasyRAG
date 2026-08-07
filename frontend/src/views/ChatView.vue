@@ -1,5 +1,7 @@
 <template>
-  <div class="chat-view">
+  <div class="chat-view" :class="{ 'has-task-panel': taskPanel.visible }">
+    <!-- 消息区 -->
+    <div class="chat-main">
     <!-- 消息列表 -->
     <div class="chat-messages" ref="msgContainer" :class="{ 'is-empty': messages.length === 0 && !sending }">
       <div class="chat-column">
@@ -9,7 +11,7 @@
           <p>基于知识库与联网搜索，为你解答</p>
         </div>
 
-        <template v-for="(msg, i) in messages" :key="i">
+        <template v-for="(msg, i) in messages" :key="msg.ts || i">
           <!-- 等待首 token 时的空 assistant 占位不渲染，由下方「思考中」气泡代替，
                避免空灰条 + 思考中两个框同时出现 -->
           <div
@@ -17,6 +19,8 @@
             :class="['message', msg.role]"
           >
           <div class="message-body">
+            <!-- 时间分隔条: 首条消息 / 距上一条超过 10 分钟时, 居中显示在消息上方 -->
+            <div v-if="msg.time && shouldShowTimeSeparator(i)" class="message-time-separator">{{ msg.time }}</div>
             <!-- 思考过程：绑定在该条消息上，渲染在答案上方，不被下一轮覆盖 -->
             <div v-if="msg.steps && msg.steps.length" class="status-panel">
               <div class="status-header" @click="msg.stepsExpanded = !msg.stepsExpanded">
@@ -92,6 +96,47 @@
         </button>
       </div>
     </div>
+    </div><!-- /.chat-main -->
+
+    <!-- 侧边任务进度面板（多智能体请求时显示） -->
+    <aside v-if="taskPanel.visible" class="task-panel">
+      <div class="task-panel-header">
+        <span class="task-panel-title">
+          <Loader2 v-if="sending" :size="14" class="spin" />
+          <CheckCircle2 v-else :size="14" />
+          任务进度
+        </span>
+        <span class="task-panel-count">{{ taskProgress.done }}/{{ taskProgress.total }} · {{ taskProgress.pct }}%</span>
+      </div>
+      <div class="task-panel-bar">
+        <div class="task-panel-bar-fill" :style="{ width: taskProgress.pct + '%' }"></div>
+      </div>
+      <div class="task-list">
+        <div
+          v-for="t in taskPanel.tasks"
+          :key="t.task_id"
+          class="task-item"
+          :class="'task-' + t.status"
+        >
+          <span class="task-status-icon">
+            <CheckCircle2 v-if="t.status === 'done'" :size="14" />
+            <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
+            <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
+            <span v-else class="task-pending-dot"></span>
+          </span>
+          <div class="task-item-body">
+            <div class="task-item-title">{{ t.task_id }} · {{ workerLabel(t.worker_hint) }}</div>
+            <div class="task-item-goal">{{ t.goal }}</div>
+            <div v-if="t.tools.length" class="task-tools">
+              <div v-for="(tc, ti) in t.tools" :key="ti" class="task-tool-call">
+                <span class="task-tool-name">Call</span>
+                <span class="task-tool-args">{{ tc }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
   </div>
 </template>
 
@@ -140,6 +185,19 @@ const inputEl = ref(null)
 // msg.steps 上（随消息保留，渲染在答案上方，不会被下一轮清空覆盖）
 const statusSteps = ref([])
 
+// 侧边任务进度面板（多智能体）：子任务清单 + 每个子任务的状态
+const taskPanel = ref({
+  visible: false,
+  tasks: [],      // [{task_id, goal, worker_hint, status: pending|running|done|error, tools: []}]
+})
+function findTask(taskId) {
+  return taskPanel.value.tasks.find(t => t.task_id === taskId)
+}
+function setTaskStatus(taskId, status) {
+  const t = findTask(taskId)
+  if (t) t.status = status
+}
+
 // 把后端步骤 key 映射为友好的阶段名
 const STEP_LABELS = {
   understand: '理解问题',
@@ -170,6 +228,20 @@ function normalizeStep(st) {
   return st
 }
 
+// worker 名 → 友好标签
+const WORKER_LABELS = { rag: '知识库', legal: '法律', code: '代码' }
+function workerLabel(hint) {
+  return WORKER_LABELS[hint] || hint || '通用'
+}
+
+// 任务面板进度：已完成数 / 总数
+const taskProgress = computed(() => {
+  const tasks = taskPanel.value.tasks
+  if (!tasks.length) return { done: 0, total: 0, pct: 0 }
+  const done = tasks.filter(t => t.status === 'done' || t.status === 'error').length
+  return { done, total: tasks.length, pct: Math.round(done / tasks.length * 100) }
+})
+
 // 流式进行中: 最后一条 assistant 消息是否已开始收到内容
 const lastAssistantHasContent = computed(() => {
   const last = messages.value[messages.value.length - 1]
@@ -196,6 +268,28 @@ function resetInputHeight() {
   if (inputEl.value) inputEl.value.style.height = 'auto'
 }
 
+// 消息时间戳：当天显示 HH:MM，跨天显示 MM-DD HH:MM
+function formatTime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = n => String(n).padStart(2, '0')
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const now = new Date()
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  return sameDay ? hm : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
+}
+
+// 时间分隔条: 首条消息显示; 之后距上一条超过 10 分钟再显示当前时间
+const TIME_SEPARATOR_GAP_MS = 10 * 60 * 1000
+function shouldShowTimeSeparator(i) {
+  if (i === 0) return true
+  const prev = messages.value[i - 1]
+  const curr = messages.value[i]
+  if (!prev?.ts || !curr?.ts) return false
+  return curr.ts - prev.ts > TIME_SEPARATOR_GAP_MS
+}
+
 // ── 监听会话切换，从 DB 加载历史 ─────────────────────────────────
 watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   if (newId === oldId) return
@@ -214,6 +308,8 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         steps: m.meta?.steps || [],
         stepsExpanded: true,
         stepsLoading: false,
+        time: formatTime(m.created_at),
+        ts: m.created_at ? Date.parse(m.created_at) : null,
       }))
       scrollBottom()
     } catch { /* 忽略 */ }
@@ -228,16 +324,21 @@ async function send() {
   resetInputHeight()
   sending.value = true
 
-  messages.value.push({ role: 'user', content: text })
+  const userTs = Date.now()
+  messages.value.push({ role: 'user', content: text, time: formatTime(new Date(userTs).toISOString()), ts: userTs })
   // 先插入一条空的 assistant 消息, 流式 delta 逐步填充其 content
   // steps: 本轮思考过程（绑定在这条消息上，不会被下一轮覆盖）
-  messages.value.push({ role: 'assistant', content: '', sources: [], meta: null, steps: [], stepsExpanded: true, stepsLoading: true })
+  // 注意: assistant 的时间戳独立取"当前时刻"——不要复用 user 的 ts,
+  // 否则同秒差值为 0, 分隔条条件 >10min 永不成立, 回复后就看不到新时间了。
+  const asstTs = Date.now()
+  messages.value.push({ role: 'assistant', content: '', sources: [], meta: null, steps: [], stepsExpanded: true, stepsLoading: true, time: formatTime(new Date(asstTs).toISOString()), ts: asstTs })
   const msgIndex = messages.value.length - 1
   scrollBottom()
 
   let gotError = ''
-  // 重置当前轮次的状态缓冲
+  // 重置当前轮次的状态缓冲 + 任务面板
   statusSteps.value = []
+  taskPanel.value = { visible: false, tasks: [] }
 
   try {
     await api.streamChat('/chat/stream', {
@@ -246,12 +347,32 @@ async function send() {
     }, (ev) => {
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
+      } else if (ev.type === 'sub_tasks') {
+        // 拆解完成：初始化侧边任务面板的待办清单（全部 pending）
+        taskPanel.value = {
+          visible: true,
+          tasks: (ev.tasks || []).map(t => ({
+            task_id: t.task_id,
+            goal: t.goal,
+            worker_hint: t.worker_hint,
+            status: 'pending',
+            tools: [],
+          })),
+        }
+      } else if (ev.type === 'tool_call') {
+        // 工具调用记录：挂到当前运行中的子任务下
+        const running = taskPanel.value.tasks.find(t => t.status === 'running')
+        if (running) running.tools.push(ev.detail)
       } else if (ev.type === 'status') {
         // 状态事件：落到当前 assistant 消息的 steps（随消息保留）
         const st = { step: ev.step, detail: ev.detail }
         statusSteps.value.push(st)
         const m = messages.value[msgIndex]
         messages.value[msgIndex] = { ...m, steps: [...(m.steps || []), st] }
+        // 派发开始 → 所有子任务标记运行中
+        if (ev.step === 'dispatch') {
+          taskPanel.value.tasks.forEach(t => { t.status = 'running' })
+        }
         scrollBottom()
       } else if (ev.type === 'worker_output') {
         // 子任务产出：作为中间结果追加到消息内容，边执行边输出
@@ -259,6 +380,8 @@ async function send() {
         const header = `\n\n---\n**子任务 ${ev.task_id}（${ev.worker}）产出：**\n\n`
         m.content += header + ev.content
         messages.value[msgIndex] = { ...m }
+        // 任务面板：该子任务完成
+        setTaskStatus(ev.task_id, 'done')
         scrollBottom()
       } else if (ev.type === 'delta') {
         // 触发响应式更新: 替换数组元素
@@ -276,6 +399,10 @@ async function send() {
           steps: (ev.steps && ev.steps.length) ? ev.steps : (m.steps || []),
           stepsLoading: false,
         }
+        // 任务面板：全部子任务标记完成
+        taskPanel.value.tasks.forEach(t => {
+          if (t.status === 'running' || t.status === 'pending') t.status = 'done'
+        })
       } else if (ev.type === 'error') {
         gotError = ev.detail || '生成失败'
       }

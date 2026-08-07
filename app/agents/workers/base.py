@@ -62,6 +62,7 @@ class BaseWorker(ABC):
     def __init__(self):
         self._llm = None
         self.blackboard = None  # M2: orchestrator 注入，供 run_with_board 使用
+        self.tool_callback = None  # 工具调用钩子 fn(tool_name, args)，orchestrator 注入
 
     # ── LLM client（lazy，可注入 mock）─────────────────────────────────────
     @property
@@ -96,6 +97,11 @@ class BaseWorker(ABC):
             raise PermissionError(
                 f"Worker '{self.name}' 无权调用工具 '{name}'，白名单: {self.tool_names}"
             )
+        if self.tool_callback:
+            try:
+                self.tool_callback(name, kwargs)
+            except Exception:
+                pass
         from app.tools.registry import get_tool_registry
 
         registry = get_tool_registry()
