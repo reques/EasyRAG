@@ -18,9 +18,11 @@
             v-if="!(sending && msg.role === 'assistant' && !msg.content && !msg.steps?.length && i === messages.length - 1)"
             :class="['message', msg.role]"
           >
+          <!-- 用户消息时间: 显示在气泡外上方, 左对齐时间标签, 不放进气泡里 -->
+          <div v-if="msg.role === 'user' && msg.time && shouldShowTimeSeparator(i)" class="message-time-separator">{{ msg.time }}</div>
           <div class="message-body">
-            <!-- 时间分隔条: 首条消息 / 距上一条超过 10 分钟时, 居中显示在消息上方 -->
-            <div v-if="msg.time && shouldShowTimeSeparator(i)" class="message-time-separator">{{ msg.time }}</div>
+            <!-- AI 消息时间分隔条: 首条消息 / 距上一条超过 10 分钟时, 居中显示在消息上方 -->
+            <div v-if="msg.role === 'assistant' && msg.time && shouldShowTimeSeparator(i)" class="message-time-separator">{{ msg.time }}</div>
             <!-- 思考过程：绑定在该条消息上，渲染在答案上方，不被下一轮覆盖 -->
             <div v-if="msg.steps && msg.steps.length" class="status-panel">
               <div class="status-header" @click="msg.stepsExpanded = !msg.stepsExpanded">

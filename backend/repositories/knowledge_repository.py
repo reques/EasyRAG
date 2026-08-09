@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +35,51 @@ class KnowledgeBaseRepository(BaseRepository[KnowledgeBase]):
         )
         result = await self.session.execute(stmt)
         return result.scalars().all()
+
+    async def list_ids_by_owner(self, owner_id: uuid.UUID) -> Sequence[uuid.UUID]:
+        """Return the complete authorised retrieval scope without UI pagination."""
+        stmt = select(KnowledgeBase.id).where(KnowledgeBase.owner_id == owner_id)
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+    async def list_catalog_by_owner(
+        self, owner_id: uuid.UUID
+    ) -> List[Dict[str, Any]]:
+        """Return authorised KB/file metadata without loading document bodies."""
+        stmt = (
+            select(
+                KnowledgeBase.id.label("kb_id"),
+                KnowledgeBase.name.label("kb_name"),
+                KnowledgeFile.id.label("file_id"),
+                KnowledgeFile.filename,
+                KnowledgeFile.file_type,
+                KnowledgeFile.status,
+            )
+            .outerjoin(
+                KnowledgeFile,
+                KnowledgeFile.knowledge_base_id == KnowledgeBase.id,
+            )
+            .where(KnowledgeBase.owner_id == owner_id)
+            .order_by(KnowledgeBase.updated_at.desc(), KnowledgeFile.created_at.desc())
+        )
+        rows = (await self.session.execute(stmt)).all()
+
+        catalog_by_id: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            kb_id = str(row.kb_id)
+            item = catalog_by_id.setdefault(
+                kb_id,
+                {"id": kb_id, "name": row.kb_name, "files": []},
+            )
+            if row.file_id is not None:
+                item["files"].append({
+                    "id": str(row.file_id),
+                    "filename": row.filename,
+                    "file_type": row.file_type,
+                    "status": row.status,
+                })
+
+        return list(catalog_by_id.values())
 
     async def list_by_department(
         self, department_id: uuid.UUID, limit: int = 50, offset: int = 0

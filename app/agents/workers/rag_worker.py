@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 from app.agents.workers.base import BaseWorker, TaskBrief, WorkerReport
 from app.core.logger import get_logger
+from app.services.knowledge_catalog import format_knowledge_catalog
 
 logger = get_logger(__name__)
 
@@ -40,7 +41,11 @@ class RagWorker(BaseWorker):
             # 1. 向量检索（lazy：mock 测试时可能无 Milvus，失败不阻塞）
             docs = []
             try:
-                docs = self.retriever.retrieve(brief.goal, top_k=4)
+                docs = self.retriever.retrieve(
+                    brief.goal,
+                    top_k=4,
+                    knowledge_base_ids=brief.knowledge_base_ids,
+                )
                 steps.append(f"检索到 {len(docs)} 条相关文档")
             except Exception as exc:
                 steps.append(f"检索失败（继续无上下文生成）: {exc}")
@@ -55,6 +60,10 @@ class RagWorker(BaseWorker):
             # 3. 组装消息
             messages = [
                 {"role": "system", "content": self.persona},
+                {
+                    "role": "system",
+                    "content": format_knowledge_catalog(brief.knowledge_catalog),
+                },
                 {
                     "role": "user",
                     "content": (

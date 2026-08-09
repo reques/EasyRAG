@@ -32,7 +32,7 @@ import time
 import uuid
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from app.core.config import get_settings
 from app.core.logger import get_logger
@@ -349,7 +349,7 @@ class EnhancedRetriever:
         self,
         query: str,
         history: Optional[List[Dict[str, str]]] = None,
-        kb_sources_filter: Optional[List[str]] = None,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
     ) -> RetrievalResult:
         """主入口：执行完整的增强检索流程（优化版：投机检索 + 缓存分解）。
 
@@ -357,12 +357,19 @@ class EnhancedRetriever:
         ----
         query : 用户原始查询
         history : 对话历史 [{"role":"user","content":"..."}, ...]
-        kb_sources_filter : 限定检索的知识库文件 source 列表（None=全部）
+        knowledge_base_ids : 已授权的知识库 UUID；为空时拒绝检索
 
         返回
         ----
         RetrievalResult 包含 knowledge_blocks / raw_docs / sources 等
         """
+        from app.rag.retriever import normalize_knowledge_base_ids
+
+        allowed_ids = normalize_knowledge_base_ids(knowledge_base_ids)
+        if not allowed_ids:
+            logger.info("[enhanced] empty knowledge-base scope; retrieval denied")
+            return RetrievalResult()
+
         t0 = time.perf_counter()
 
         # ── 第 0 步：BM25（可选，不阻塞主链路）───────────────────────────
@@ -373,7 +380,7 @@ class EnhancedRetriever:
 
         # ── 第 2 步：四路并行检索 ──────────────────────────────────────
         all_candidates = self._parallel_retrieve(
-            query, decomposition, kb_sources_filter
+            query, decomposition, allowed_ids
         )
 
         # ── 第 3 步：图谱感知融合重排序 ─────────────────────────────────────
@@ -394,7 +401,9 @@ class EnhancedRetriever:
         )
 
         if decomposition.is_complex():
-            result = self._iterative_gap_fill(query, result, decomposition)
+            result = self._iterative_gap_fill(
+                query, result, decomposition, allowed_ids
+            )
 
         result.elapsed_ms = (time.perf_counter() - t0) * 1000
         logger.info(
@@ -541,7 +550,7 @@ class EnhancedRetriever:
         self,
         query: str,
         decomposition: QueryDecomposition,
-        kb_sources_filter: Optional[List[str]] = None,
+        knowledge_base_ids: Sequence[str],
     ) -> List[CandidateDoc]:
         """四路真正的并行检索，合并去重。
 
@@ -550,17 +559,22 @@ class EnhancedRetriever:
         """
         all_docs: List[CandidateDoc] = []
         seen_content: Set[str] = set()
+        allowed_ids = set(knowledge_base_ids)
 
         # 四路并发
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            future_entity = executor.submit(self._retrieve_entity_path, decomposition)
+            future_entity = executor.submit(
+                self._retrieve_entity_path, decomposition, knowledge_base_ids
+            )
             future_semantic = executor.submit(
-                self._retrieve_semantic_path, query, decomposition, kb_sources_filter
+                self._retrieve_semantic_path, query, decomposition, knowledge_base_ids
             )
             future_relation = executor.submit(
-                self._retrieve_relation_path, decomposition
+                self._retrieve_relation_path, decomposition, knowledge_base_ids
             )
-            future_bm25 = executor.submit(self._retrieve_bm25_path, query)
+            future_bm25 = executor.submit(
+                self._retrieve_bm25_path, query, knowledge_base_ids
+            )
 
             # 按完成顺序处理（谁先回来谁先处理，减少等待）
             path_results = [
@@ -578,6 +592,12 @@ class EnhancedRetriever:
                 docs = []
 
             for d in docs:
+                if d.metadata.get("knowledge_base_id") not in allowed_ids:
+                    logger.warning(
+                        "[enhanced] discarded out-of-scope candidate from path %s",
+                        path_name,
+                    )
+                    continue
                 key = self._dedup_key(d)
                 if key in seen_content:
                     # 多路命中：增加已有文档的 cross_path_hits
@@ -610,7 +630,11 @@ class EnhancedRetriever:
 
     # ── Path A: 精准实体路径 ──────────────────────────────────────────────────
 
-    def _retrieve_entity_path(self, decomposition: QueryDecomposition) -> List[CandidateDoc]:
+    def _retrieve_entity_path(
+        self,
+        decomposition: QueryDecomposition,
+        knowledge_base_ids: Sequence[str],
+    ) -> List[CandidateDoc]:
         """Path A: 显式实体 → 图谱内存缓存匹配 → 一跳邻居 → 向量精排。"""
         entity_names = [e["name"] for e in decomposition.explicit_entities]
         if not entity_names:
@@ -618,7 +642,11 @@ class EnhancedRetriever:
 
         try:
             from app.rag.graph_cache import graph_cache
-            matched = graph_cache.match_entities(entity_names, top_n=cfg.GRAPH_QUERY_TOP_ENTITIES)
+            matched = graph_cache.match_entities(
+                entity_names,
+                top_n=cfg.GRAPH_QUERY_TOP_ENTITIES,
+                knowledge_base_ids=knowledge_base_ids,
+            )
         except Exception as exc:
             logger.warning("[enhanced] Path A graph cache lookup failed: %s", exc)
             return []
@@ -630,20 +658,32 @@ class EnhancedRetriever:
             if desc:
                 docs.append(CandidateDoc(
                     content=f"[实体] {name} ({ent.get('type','')}): {desc}",
-                    metadata={"source": "knowledge_graph", "entity": name, "score": 1.0},
+                    metadata={
+                        "source": "knowledge_graph",
+                        "entity": name,
+                        "score": 1.0,
+                        "knowledge_base_id": ent.get("kb_id", ""),
+                    },
                     score=1.0,
                     retrieval_path="entity",
                     graph_entities=[name],
                 ))
             # 邻居关系
-            for rel in graph_cache.get_neighbor_relations(name)[:6]:
+            for rel in graph_cache.get_neighbor_relations(
+                name, knowledge_base_ids=knowledge_base_ids
+            )[:6]:
                 rel_text = (
                     f"[关系] {rel['source']} --[{rel['relation']}]--> "
                     f"{rel['target']}: {rel.get('description','')}"
                 )
                 docs.append(CandidateDoc(
                     content=rel_text,
-                    metadata={"source": "knowledge_graph", "entity": name, "relation": rel["relation"]},
+                    metadata={
+                        "source": "knowledge_graph",
+                        "entity": name,
+                        "relation": rel["relation"],
+                        "knowledge_base_id": rel.get("kb_id", ""),
+                    },
                     score=0.85,
                     retrieval_path="entity",
                     graph_entities=[rel.get("source", ""), rel.get("target", "")],
@@ -663,7 +703,7 @@ class EnhancedRetriever:
         self,
         query: str,
         decomposition: QueryDecomposition,
-        kb_sources_filter: Optional[List[str]] = None,
+        knowledge_base_ids: Sequence[str],
     ) -> List[CandidateDoc]:
         """Path B: 语义向量检索 + 反向追溯图谱实体以扩展上下文。
 
@@ -683,7 +723,11 @@ class EnhancedRetriever:
         seen_keys = set()
         for q in queries_to_search:
             try:
-                raw_docs = retriever.retrieve(q, top_k=self.top_k_per_path)
+                raw_docs = retriever.retrieve(
+                    q,
+                    top_k=self.top_k_per_path,
+                    knowledge_base_ids=knowledge_base_ids,
+                )
             except Exception:
                 continue
 
@@ -716,17 +760,26 @@ class EnhancedRetriever:
                     keywords = re.findall(r"[\u4e00-\u9fff]{2,10}|[A-Za-z]{3,20}", doc.content[:500])
                     if not keywords:
                         continue
-                    matched = graph_cache.match_entities(list(set(keywords))[:5], top_n=3)
+                    matched = graph_cache.match_entities(
+                        list(set(keywords))[:5],
+                        top_n=3,
+                        knowledge_base_ids=knowledge_base_ids,
+                    )
                     for ent in matched:
                         graph_extensions.append({
                             "entity": ent["name"],
                             "content": f"[实体] {ent['name']} ({ent['type']}): {ent.get('description','')}",
                             "score": 0.75,
+                            "knowledge_base_id": ent.get("kb_id", ""),
                         })
                 for ext in graph_extensions:
                     ext_doc = CandidateDoc(
                         content=ext["content"],
-                        metadata={"source": "knowledge_graph_reverse", "entity": ext["entity"]},
+                        metadata={
+                            "source": "knowledge_graph_reverse",
+                            "entity": ext["entity"],
+                            "knowledge_base_id": ext.get("knowledge_base_id", ""),
+                        },
                         score=ext.get("score", 0.7),
                         retrieval_path="semantic+graph_reverse",
                         graph_entities=[ext["entity"]],
@@ -742,7 +795,11 @@ class EnhancedRetriever:
 
     # ── Path C: 关系链路径 ───────────────────────────────────────────────────
 
-    def _retrieve_relation_path(self, decomposition: QueryDecomposition) -> List[CandidateDoc]:
+    def _retrieve_relation_path(
+        self,
+        decomposition: QueryDecomposition,
+        knowledge_base_ids: Sequence[str],
+    ) -> List[CandidateDoc]:
         """Path C: 关系模式 → 内存图谱缓存搜索 → 引导式多跳。"""
         patterns = decomposition.relation_patterns
         if not patterns:
@@ -756,7 +813,11 @@ class EnhancedRetriever:
             all_predicates = [p["predicate"] for p in patterns]
             search_entities = list(all_subjects | all_objects)
 
-            chains = graph_cache.get_relations_by_predicate(search_entities, all_predicates)
+            chains = graph_cache.get_relations_by_predicate(
+                search_entities,
+                all_predicates,
+                knowledge_base_ids=knowledge_base_ids,
+            )
 
             for chain in chains:
                 chain_text_parts = []
@@ -767,7 +828,11 @@ class EnhancedRetriever:
                     )
                 docs.append(CandidateDoc(
                     content="\n".join(chain_text_parts),
-                    metadata={"source": "knowledge_graph_chain", "chain_length": len(chain.get("steps", []))},
+                    metadata={
+                        "source": "knowledge_graph_chain",
+                        "chain_length": len(chain.get("steps", [])),
+                        "knowledge_base_id": chain.get("kb_id", ""),
+                    },
                     score=0.9,
                     retrieval_path="relation",
                     graph_entities=[s.get("source", "") for s in chain.get("steps", [])]
@@ -781,10 +846,18 @@ class EnhancedRetriever:
 
     # ── Path D: 全文精确路径 (BM25) ──────────────────────────────────────────
 
-    def _retrieve_bm25_path(self, query: str) -> List[CandidateDoc]:
+    def _retrieve_bm25_path(
+        self,
+        query: str,
+        knowledge_base_ids: Sequence[str],
+    ) -> List[CandidateDoc]:
         """Path D: BM25 稀疏检索 — 精确匹配数字、代码、专有名词。"""
         try:
-            results = self.bm25.search(query, top_k=self.top_k_per_path)
+            results = self.bm25.search(
+                query,
+                top_k=self.top_k_per_path,
+                knowledge_base_ids=knowledge_base_ids,
+            )
         except Exception as exc:
             logger.debug("[enhanced] Path D BM25 failed: %s", exc)
             return []
@@ -1062,6 +1135,7 @@ class EnhancedRetriever:
         query: str,
         result: RetrievalResult,
         decomposition: QueryDecomposition,
+        knowledge_base_ids: Sequence[str],
     ) -> RetrievalResult:
         """检测检索缺口并执行补充检索（最多 max_gap_rounds 轮）。"""
         for round_num in range(1, self.max_gap_rounds + 1):
@@ -1085,7 +1159,9 @@ class EnhancedRetriever:
             # 对每个缺口查询做补充检索（并行，仅 Path B 语义路径 + Path D BM25）
             gap_futures = {}
             for gq in gap_queries[:3]:
-                gap_futures[gq] = self._executor.submit(self._gap_supplement_search, gq)
+                gap_futures[gq] = self._executor.submit(
+                    self._gap_supplement_search, gq, knowledge_base_ids
+                )
 
             seen_keys = {self._dedup_key(d) for d in result.raw_docs}
             for gq, future in gap_futures.items():
@@ -1148,11 +1224,19 @@ class EnhancedRetriever:
     # 辅助方法
     # ═══════════════════════════════════════════════════════════════════════════
 
-    def _gap_supplement_search(self, query: str) -> List[dict]:
+    def _gap_supplement_search(
+        self,
+        query: str,
+        knowledge_base_ids: Sequence[str],
+    ) -> List[dict]:
         """缺口补充的单次检索（语义向量），供并行调用。"""
         from app.rag.retriever import get_retriever
         retriever = get_retriever()
-        return retriever.retrieve(query, top_k=3)
+        return retriever.retrieve(
+            query,
+            top_k=3,
+            knowledge_base_ids=knowledge_base_ids,
+        )
 
     def _ensure_bm25_index(self):
         """确保 BM25 索引已从向量库同步（超时保护，失败不抛异常）。"""
@@ -1192,7 +1276,9 @@ class EnhancedRetriever:
                     while offset < total:
                         res = retriever._col.query(
                             expr="id != ''",
-                            output_fields=["content", "source"],
+                            output_fields=[
+                                "content", "source", "knowledge_base_id"
+                            ],
                             offset=offset,
                             limit=page_size,
                         )
@@ -1200,7 +1286,12 @@ class EnhancedRetriever:
                             all_chunks.append({
                                 "id": row.get("id", ""),
                                 "content": row.get("content", ""),
-                                "metadata": {"source": row.get("source", "unknown")},
+                                "metadata": {
+                                    "source": row.get("source", "unknown"),
+                                    "knowledge_base_id": row.get(
+                                        "knowledge_base_id", ""
+                                    ),
+                                },
                             })
                         offset += page_size
                         if len(res) < page_size:

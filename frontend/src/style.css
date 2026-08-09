@@ -1,54 +1,54 @@
 /* =========================================================================
    EasyRAG Frontend — Global Styles
    设计语言: 参考 Yuxi (github.com/xerrors/Yuxi) 设计规范
-   骨架: 青色系 main 色阶 + 中性 gray 色阶 / 8px 圆角 / 轻边框、无装饰阴影
+   骨架: 黑白灰单色系 白底 + 纯黑 main 色阶 / 8px 圆角 / 轻边框、无装饰阴影
    布局: 纵向文字导航侧边栏 / 右侧用户气泡 + AI 无边框消息 / 卡片式输入框
    ========================================================================= */
 
 :root {
-  /* ── 主色: Yuxi 青色系 ─────────────────────────────────────────────── */
-  --main-900: #023944;
-  --main-700: #046a82;
-  --main-600: #24839a;
-  --main-500: #3996ae;
-  --main-400: #5faec2;
-  --main-200: #a3d8e8;
-  --main-100: #c4eaf5;
-  --main-50:  #e1f6fb;
-  --main-30:  #f7fbfd;
-  --main-20:  #f6f9fa;
-  --main-5:   #fcfefe;
+  /* ── 主色: 黑白灰单色系 纯黑主色 ─────────────────────────────────────────────── */
+  --main-900: #000000;
+  --main-700: #111111;
+  --main-600: #1a1a1a;
+  --main-500: #000000;
+  --main-400: #4d4d4d;
+  --main-200: #bfbfbf;
+  --main-100: #d9d9d9;
+  --main-50:  #f0f0f0;
+  --main-30:  #f6f6f6;
+  --main-20:  #f9f9f9;
+  --main-5:   #fcfcfc;
   --main-0:   #ffffff;
 
-  --main-color: var(--main-700);
+  --main-color: var(--main-500);
 
   /* ── 中性色骨架 ─────────────────────────────────────────────────────── */
-  --gray-1000: #151616;
-  --gray-900:  #1e1f1f;
-  --gray-800:  #323333;
-  --gray-700:  #4c4d4d;
-  --gray-600:  #697070;
-  --gray-500:  #979999;
-  --gray-400:  #bdbfbf;
-  --gray-300:  #d7d9d9;
-  --gray-200:  #e4e6e6;
-  --gray-150:  #eef0f0;
-  --gray-100:  #eff2f2;
-  --gray-50:   #f5f7f7;
-  --gray-25:   #f8fafa;
-  --gray-10:   #fbfcfc;
+  --gray-1000: #000000;
+  --gray-900:  #1a1a1a;
+  --gray-800:  #333333;
+  --gray-700:  #4d4d4d;
+  --gray-600:  #666666;
+  --gray-500:  #7d7d7d;
+  --gray-400:  #9a9a9a;
+  --gray-300:  #b5b5b5;
+  --gray-200:  #d4d4d4;
+  --gray-150:  #e4e4e4;
+  --gray-100:  #ebebeb;
+  --gray-50:   #f5f5f5;
+  --gray-25:   #fafafa;
+  --gray-10:   #fdfdfd;
   --gray-0:    #ffffff;
 
   /* ── 语义色(仅状态反馈, 不装饰) ───────────────────────────────────── */
-  --color-success-50:  #e6f7e6;
-  --color-success-700: #389e0d;
-  --color-error-50:    #fff2f0;
-  --color-error-500:   #ff4d4f;
-  --color-error-700:   #cf1322;
-  --color-warning-50:  #fffbe6;
-  --color-warning-900: #ad6800;
-  --color-info-50:     #e6f7ff;
-  --color-info-700:    #096dd9;
+  --color-success-50:  #f2f2f2;
+  --color-success-700: #333333;
+  --color-error-50:    #f5f5f5;
+  --color-error-500:   #7d7d7d;
+  --color-error-700:   #1a1a1a;
+  --color-warning-50:  #f5f5f5;
+  --color-warning-900: #4d4d4d;
+  --color-info-50:     #f2f2f2;
+  --color-info-700:    #333333;
 
   /* ── 阴影: 仅用于真实浮层(弹窗/下拉/输入卡) ───────────────────────── */
   --shadow-0: rgba(0, 0, 0, 0.02);
@@ -70,9 +70,9 @@
   --text: var(--gray-1000);
   --text-dim: var(--gray-600);
   --text-faint: var(--gray-500);
-  --primary: var(--main-700);
+  --primary: var(--main-500);
   --primary-soft: var(--main-50);
-  --primary-ring: rgba(4, 106, 130, 0.12);
+  --primary-ring: rgba(0, 0, 0, 0.10);
   --danger: var(--color-error-700);
   --success: var(--color-success-700);
   --border: var(--gray-150);
@@ -404,7 +404,7 @@ button { cursor: pointer; }
   width: 28px; height: 28px;
   border-radius: 50%;
   background: var(--main-100);
-  color: var(--main-700);
+  color: var(--main-400);
   font-size: 13px;
   font-weight: 600;
   flex-shrink: 0;
@@ -508,11 +508,11 @@ button { cursor: pointer; }
   padding: 8px 10px;
   border: 1px solid var(--gray-150, #e5e7eb);
   border-radius: 8px;
-  background: #fff;
+  background: var(--gray-25);
 }
-.task-item.task-running { border-color: var(--main-300, #7cc6d8); }
+.task-item.task-running { border-color: var(--main-400); }
 .task-item.task-done { opacity: 0.75; }
-.task-item.task-error { border-color: #e05d5d; }
+.task-item.task-error { border-color: var(--color-error-500); }
 .task-status-icon {
   flex-shrink: 0;
   width: 16px;
@@ -742,7 +742,7 @@ button { cursor: pointer; }
   line-height: 18px;
   vertical-align: 1px;
 }
-.source-tag.kb { background: var(--main-50); color: var(--main-700); }
+.source-tag.kb { background: var(--main-50); color: var(--main-400); }
 .source-tag.kg { background: var(--color-info-50); color: var(--color-info-700); }
 .source-tag.web { background: var(--gray-100); color: var(--gray-600); }
 .message-meta {
@@ -764,6 +764,13 @@ button { cursor: pointer; }
   /* 脱离消息对齐（user 右对齐 / assistant 左对齐），强制居中并占满整行 */
   width: 100%;
   align-self: center;
+}
+/* 用户消息时间标签: 在气泡外上方, 左对齐小字灰显, 不占气泡内部 */
+.message.user > .message-time-separator {
+  align-self: flex-start;
+  text-align: left;
+  width: auto;
+  margin: 0 0 6px;
 }
 
 /* typing animation */
@@ -816,7 +823,7 @@ button { cursor: pointer; }
   padding: 0 6px;
   border-radius: var(--radius-sm);
   background: var(--main-50);
-  color: var(--main-700);
+  color: var(--main-400);
   font-weight: 500;
 }
 .step-detail { color: var(--gray-600); }
@@ -832,7 +839,7 @@ button { cursor: pointer; }
   margin-top: 6px;
 }
 .status-step.active .step-dot { background: var(--main-500); box-shadow: 0 0 0 3px var(--main-100); }
-.status-step.active .step-name { background: var(--main-100); color: var(--main-700); }
+.status-step.active .step-name { background: var(--main-100); color: var(--main-400); }
 .status-step.active .step-detail { color: var(--gray-800); font-weight: 500; }
 
 /* spin animation for loader */
@@ -880,12 +887,12 @@ button { cursor: pointer; }
   color: var(--gray-1000);
 }
 .chat-input textarea::placeholder { color: var(--gray-400); }
-/* 发送按钮: Yuxi 深色圆形 */
+/* 发送按钮: 主色圆形 */
 .btn-send {
   width: 32px; height: 32px;
   border-radius: 50%;
   border: none;
-  background: var(--gray-900);
+  background: var(--main-color);
   color: #fff;
   display: flex;
   align-items: center;
@@ -893,7 +900,7 @@ button { cursor: pointer; }
   flex-shrink: 0;
   transition: background-color .15s ease;
 }
-.btn-send:hover { background: var(--gray-700); }
+.btn-send:hover { background: var(--main-600); }
 .btn-send:disabled { opacity: .3; cursor: not-allowed; }
 
 /* ── Knowledge Base ────────────────────────────────────────────────────── */
@@ -962,7 +969,7 @@ button { cursor: pointer; }
 .file-row td:first-child { display: flex; align-items: center; font-weight: 500; }
 .file-name-cell {
   cursor: pointer;
-  color: var(--main-700);
+  color: var(--main-color);
   text-decoration: none;
   transition: text-decoration .15s ease;
 }

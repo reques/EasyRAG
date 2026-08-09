@@ -494,3 +494,93 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 - `verify/verify_multi_agent.py` 28/28（mock 全流程 + 真实 LLM 结构断言 + single 回归）
 - `verify/verify_blackboard.py` 24/24（黑板单测 + 并发安全 + sequential/parallel 集成 + 崩溃隔离 + 真实 LLM 黑板透出）
 - 真实 LLM 路径硬断言结构（blackboard/execution_mode/steps），软断言内容——LLM 端点波动导致空回答时打 WARN 不 FAIL
+
+#### 2026-08-09 — 安全修复 1：向量检索按用户/知识库隔离
+
+**问题：** PostgreSQL 中的知识库记录虽然带 `owner_id`，向量数据也保存了
+`knowledge_base_id`，但 Milvus、Memory、Chroma 和增强检索实际查询时没有使用该字段。
+所有用户共享同一集合，因此登录用户可能检索到其他用户的文档；BM25、图谱缓存和
+多 Agent 的 RAG Worker 也存在同样的越权路径。
+
+**设计决策：** 采用“显式授权作用域 + 默认拒绝”。检索接口统一接收
+`knowledge_base_ids`；没有授权 ID 时直接返回空结果，不再把 `None` 解释为全库。
+过滤在候选召回前执行，避免其他租户的结果挤占当前用户 Top-K，并在结果返回前再次
+校验作用域作为纵深防御。
+
+**实现：**
+1. `backend/server/routers/chat_router.py` 从数据库查询当前用户拥有的全部知识库 ID，
+   分别注入同步聊天、SSE、单 Agent 和多 Agent 路径；新增
+   `KnowledgeBaseRepository.list_ids_by_owner()`，不复用 UI 的 50 条分页限制。
+2. `AgentState`、`AgentService`、`Orchestrator`、`TaskBrief` 和 `RagWorker` 全链路传递
+   授权知识库 ID；未认证/未传作用域的旧调用默认无法读取任何向量文档。
+3. Milvus 使用 `knowledge_base_id in [...]` 搜索表达式；Chroma 使用 metadata `where`；
+   Memory 在计算 Top-K 前筛选候选。三个后端都在返回阶段再次丢弃越界结果，作用域 ID
+   先做 UUID 规范化，避免表达式注入。
+4. 增强检索的语义、BM25、实体、关系和迭代补充路径全部携带同一作用域；BM25 同步
+   索引保留 `knowledge_base_id` 元数据。
+5. 图谱缓存以 `(knowledge_base_id, entity_name)` 作为实体键，关系也记录 `kb_id`，解决
+   不同知识库同名实体描述被合并的问题；旧版全局 PostgreSQL 图谱旁路改为只查询授权 ID。
+6. 上传索引时强制覆盖 chunk 的 `knowledge_base_id`，不允许上游元数据覆盖授权归属；
+   增强检索引用的 `file_id` 改为按 `(knowledge_base_id, filename)` 查询，避免同名文件串租户。
+
+**验证：**
+- 新增 `tests/test_retrieval_isolation.py`：覆盖默认拒绝、无效 UUID、Memory、Milvus、
+  Chroma、BM25、同名图谱实体、LangGraph 节点和 RAG Worker 作用域传递；
+  `python -m pytest -q` 为 **9/9 通过**。
+- `verify/verify_auto_route.py` 为 **12/12 通过**。
+- `app/`、`backend/`、`tests/` 共 78 个 Python 文件 AST 语法检查通过。
+
+#### 2026-08-09 — 知识库目录上下文：Agent 可读取知识库名与文件名
+
+**问题：** 对话链路此前只向检索器传递知识库 ID，生成模型只能看到命中的 chunk 和
+引用来源，看不到完整的知识库名称与文件目录。因此询问“当前知识库有什么文件”时，
+即使命中某个文件，Agent 也只能承认无法确定完整清单。
+
+**设计决策：** 增加“授权目录上下文”，不依赖向量命中。目录与检索 ID 由同一条
+`owner_id` 限定查询生成，确保两者作用域一致；只读取知识库名、文件名、类型与处理状态，
+不加载文件正文。目录元数据按不可信输入处理：清除控制字符、转义标签、逐项限长、整体
+限制 12000 字符，并在 system prompt 中明确名称只能作为数据、不得作为指令执行。
+
+**实现：**
+1. `KnowledgeBaseRepository.list_catalog_by_owner()` 使用 owner-scoped 外连接一次读取当前
+   用户的知识库和文件元数据；不使用 UI 分页，也不查询 `text_content`。
+2. `/chat/send` 与 `/chat/stream` 通过 `_load_knowledge_scope()` 从同一目录同时取得
+   `knowledge_base_ids` 和 `knowledge_catalog`，同步、SSE 快速路径、多 Agent 及直接 LLM
+   兜底均注入目录。
+3. `AgentState`、`AgentService`、`Orchestrator`、`TaskBrief` 全链路新增
+   `knowledge_catalog`；单 Agent `answer_generation`、SSE `prepare_context` 和多 Agent
+   `RagWorker` 都能读取相同目录。
+4. 新增 `app/services/knowledge_catalog.py`，负责把授权目录格式化为紧凑、安全、可截断的
+   system context；空目录明确告知 Agent 当前用户没有可访问的知识库。
+
+**验证：**
+- 新增 `tests/test_knowledge_catalog.py`，覆盖名称/文件名可见、文件状态可见、控制字符与
+  标签转义、目录长度上限、仓储 owner 条件、单 Agent、SSE 和多 Agent 目录注入。
+- `python -m pytest -q`：**15/15 通过**（含上一项检索隔离回归）。
+- `python -m compileall -q app backend tests` 与 `git diff --check` 通过。
+
+#### 2026-08-09 — 知识库管理工作台（前端阶段）
+
+**目标：** 参考知识库管理产品的详情工作台，在不新增后端接口的前提下，先完成知识库
+目录、文件管理以及检索/图谱/评估模块的前端信息架构和交互状态，供后续逐项接入后端。
+
+**实现：**
+1. `KnowledgeView.vue` 重构为“知识库目录 → 知识库详情工作台”两层页面；目录页新增账号级
+   概览、搜索、错误/空结果状态和更完整的知识库卡片，详情页支持复制 ID、返回目录以及
+   URL query 保存当前知识库与页签。
+2. 详情工作台新增六个页签：文件管理、检索测试、知识图谱、知识导图、RAG 评估、评估基准。
+   文件管理继续复用现有真实接口，保留上传与索引进度、文件刷新、预览和删除；统计卡片由
+   当前文件列表实时计算。
+3. 新模块只实现前端契约和状态，不伪造后端结果：检索测试展示动态请求参数与结果空态；
+   图谱、导图使用真实知识库名和文件名生成目录级预览；RAG 评估实现未运行状态、指标卡、
+   历史表格空态和配置弹窗；评估基准实现指标开关与数据集空态。所有未接能力均明确标记
+   “接口待接入”，点击操作会给出前端提示。
+4. 新增 `frontend/src/styles/knowledge-workspace.css`，提供独立的黑白灰工作台视觉、表格、
+   图谱画布、导图、评估卡片、弹窗与 1180/900/680px 响应式布局；未改动现有后端协议。
+5. 改善上传弹窗关闭行为：文件传输阶段禁止中断，进入索引阶段后可关闭弹窗并让前端继续
+   轮询，避免原实现关闭弹窗时停止轮询却留下未完成 Promise。
+
+**验证：**
+- `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
+- 使用本地只读模拟响应在 1440×1000 视口检查文件管理与 RAG 评估页：目录数据、页签路由、
+  统计卡片、文件表格、处理中状态和评估空态均正常渲染。

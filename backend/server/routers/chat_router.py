@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -25,10 +25,19 @@ from backend.services.chat_service import (
 from backend.storage.postgres.manager import get_session
 from backend.server.utils.auth_middleware import get_current_user
 from backend.storage.postgres.models_user import User
+from backend.repositories.knowledge_repository import KnowledgeBaseRepository
 
 logger = get_logger(__name__)
 cfg = get_settings()
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+async def _load_knowledge_scope(
+    session: AsyncSession, user_id: uuid.UUID
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Load retrieval IDs and display metadata from the same owner-scoped query."""
+    catalog = await KnowledgeBaseRepository(session).list_catalog_by_owner(user_id)
+    return [item["id"] for item in catalog], catalog
 
 
 # ── Request / Response ────────────────────────────────────────────────────────
@@ -87,10 +96,14 @@ async def send_message(
 
         # 加载对话历史（情景记忆压缩：有 summary 时 = 摘要+最近N轮，否则完整历史）
         db_history = await get_compressed_history(session, conv_id)
+        knowledge_base_ids, knowledge_catalog = await _load_knowledge_scope(
+            session, current_user.id
+        )
 
     # =====================================================================
     # 调用 LangGraph Agent，传入 DB 中的对话历史
     # =====================================================================
+    result: dict[str, Any] = {}
     try:
         from app.services.agent_service import get_agent_service
         agent = get_agent_service()
@@ -98,6 +111,9 @@ async def send_message(
             query=req.query,
             session_id=str(conv_id),
             history=db_history,          # ← 关键：传入 DB 历史
+            user_id=current_user.id,
+            knowledge_base_ids=knowledge_base_ids,
+            knowledge_catalog=knowledge_catalog,
         )
         answer = result.get("final_answer", "")
     except Exception as exc:
@@ -110,13 +126,21 @@ async def send_message(
         try:
             from app.llm.client import get_llm_client
             llm = get_llm_client()
-            fallback_answer = llm.chat_sync([{
-                "role": "user",
-                "content": (
+            from app.services.knowledge_catalog import format_knowledge_catalog
+
+            fallback_answer = llm.chat_sync([
+                {
+                    "role": "system",
+                    "content": format_knowledge_catalog(knowledge_catalog),
+                },
+                {
+                    "role": "user",
+                    "content": (
                     f"请简要回答以下问题（200字以内）：\n\n{req.query}\n\n"
                     "如果问题涉及法律条款，请引用具体法条编号。"
-                ),
-            }])
+                    ),
+                },
+            ])
             if fallback_answer and fallback_answer.strip():
                 answer = fallback_answer
                 logger.info("[chat/send] direct LLM fallback succeeded (%d chars)", len(fallback_answer))
@@ -197,6 +221,9 @@ async def send_message_stream(
         await add_message(session, conv_id, "user", req.query)
         await session.commit()
         db_history = await get_compressed_history(session, conv_id)
+        knowledge_base_ids, knowledge_catalog = await _load_knowledge_scope(
+            session, current_user.id
+        )
 
     async def event_gen():
         from app.services.agent_service import get_agent_service
@@ -275,6 +302,8 @@ async def send_message_stream(
                             worker_done_callback=_on_worker_done,
                             tasks_callback=_on_tasks,
                             return_synthesize_payload=True,
+                            knowledge_base_ids=knowledge_base_ids,
+                            knowledge_catalog=knowledge_catalog,
                         )
                     finally:
                         status_queue.put(_ORCH_SENTINEL)
@@ -475,7 +504,12 @@ async def send_message_stream(
         def _prepare():
             try:
                 return agent.prepare_context(
-                    req.query, db_history, current_user.id, on_step=_on_step
+                    req.query,
+                    db_history,
+                    user_id=current_user.id,
+                    knowledge_base_ids=knowledge_base_ids,
+                    knowledge_catalog=knowledge_catalog,
+                    on_step=_on_step,
                 )
             finally:
                 step_queue.put(_SENTINEL)

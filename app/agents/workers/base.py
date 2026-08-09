@@ -27,6 +27,8 @@ class TaskBrief:
     context: str = ""
     constraints: List[str] = field(default_factory=list)
     worker_hint: str = ""  # rag / legal / code
+    knowledge_base_ids: List[str] = field(default_factory=list)
+    knowledge_catalog: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
