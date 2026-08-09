@@ -11,7 +11,7 @@ The active backend is selected by ``Settings.VECTOR_STORE_TYPE``.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.core.config import get_settings
 from app.core.exceptions import VectorStoreError
@@ -22,6 +22,30 @@ logger = get_logger(__name__)
 cfg = get_settings()
 
 DocList = List[Dict[str, Any]]  # [{"content": str, "metadata": dict}]
+
+
+def normalize_knowledge_base_ids(
+    knowledge_base_ids: Optional[Sequence[str]],
+) -> List[str]:
+    """Validate and canonicalise an authorised knowledge-base scope.
+
+    Retrieval is fail-closed: callers that do not provide at least one valid
+    knowledge-base id receive no documents.  UUID validation also prevents a
+    caller-controlled value from being interpolated into a Milvus expression.
+    """
+    if not knowledge_base_ids:
+        return []
+    if isinstance(knowledge_base_ids, str):
+        knowledge_base_ids = [knowledge_base_ids]
+
+    normalised: List[str] = []
+    seen = set()
+    for value in knowledge_base_ids:
+        canonical = str(uuid.UUID(str(value)))
+        if canonical not in seen:
+            seen.add(canonical)
+            normalised.append(canonical)
+    return normalised
 
 
 def _unwrap_parent(docs: DocList) -> DocList:
@@ -60,7 +84,12 @@ class BaseRetriever:
     def add_documents(self, texts: List[str], metadatas: Optional[List[Dict]] = None) -> int:
         raise NotImplementedError
 
-    def retrieve(self, query: str, top_k: int = 4) -> DocList:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 4,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+    ) -> DocList:
         raise NotImplementedError
 
     def delete_collection(self) -> None:
@@ -98,21 +127,34 @@ class MemoryRetriever(BaseRetriever):
         logger.info("[MemoryRetriever] added %d docs, total=%d", len(texts), len(self._texts))
         return len(texts)
 
-    def retrieve(self, query: str, top_k: int = 4) -> DocList:
-        if not self._vecs:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 4,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+    ) -> DocList:
+        allowed_ids = set(normalize_knowledge_base_ids(knowledge_base_ids))
+        if not self._vecs or not allowed_ids:
             return []
         import numpy as np
         embedder = get_embedder()
         q_vec = np.array(embedder.embed_query(query), dtype=float)
-        mat = np.array(self._vecs, dtype=float)
+        allowed_indices = [
+            idx for idx, meta in enumerate(self._metas)
+            if str(meta.get("knowledge_base_id", "")) in allowed_ids
+        ]
+        if not allowed_indices:
+            return []
+        mat = np.array([self._vecs[idx] for idx in allowed_indices], dtype=float)
         # cosine similarity
         norms = np.linalg.norm(mat, axis=1, keepdims=True)
         norms = np.where(norms == 0, 1e-9, norms)
         scores = (mat / norms) @ (q_vec / (np.linalg.norm(q_vec) + 1e-9))
         top_idx = np.argsort(scores)[::-1][:top_k]
         results: DocList = []
-        for idx in top_idx:
-            score = float(scores[idx])
+        for local_idx in top_idx:
+            idx = allowed_indices[int(local_idx)]
+            score = float(scores[local_idx])
             if score < cfg.RAG_SCORE_THRESHOLD:
                 continue
             results.append({
@@ -233,20 +275,36 @@ class MilvusRetriever(BaseRetriever):
         logger.info("[MilvusRetriever] inserted %d docs", len(texts))
         return len(texts)
 
-    def retrieve(self, query: str, top_k: int = 4) -> DocList:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 4,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+    ) -> DocList:
+        allowed_ids = normalize_knowledge_base_ids(knowledge_base_ids)
+        if not allowed_ids:
+            return []
         import numpy as np
         embedder = get_embedder()
         q = np.array(embedder.embed_query(query), dtype=float)
         q = q / (np.linalg.norm(q) + 1e-9)
+        scope_expr = "knowledge_base_id in [" + ", ".join(
+            f'"{kb_id}"' for kb_id in allowed_ids
+        ) + "]"
         results = self._col.search(
             data=[q.tolist()],
             anns_field="vector",
             param={"metric_type": self._METRIC, "params": {"nprobe": 16}},
             limit=top_k,
+            expr=scope_expr,
             output_fields=["content", "source", "knowledge_base_id"],
         )
         docs: DocList = []
         for hit in results[0]:
+            hit_kb_id = hit.entity.get("knowledge_base_id", "") or ""
+            if hit_kb_id not in allowed_ids:
+                logger.warning("[MilvusRetriever] discarded out-of-scope hit")
+                continue
             score = float(hit.score)
             if score < cfg.RAG_SCORE_THRESHOLD:
                 continue
@@ -254,7 +312,7 @@ class MilvusRetriever(BaseRetriever):
                 "content": hit.entity.get("content", ""),
                 "metadata": {
                     "source": hit.entity.get("source", ""),
-                    "knowledge_base_id": hit.entity.get("knowledge_base_id", "") or "",
+                    "knowledge_base_id": hit_kb_id,
                     "score": score,
                 },
             })
@@ -348,18 +406,35 @@ class ChromaRetriever(BaseRetriever):
         logger.info("[ChromaRetriever] added %d docs", len(texts))
         return len(texts)
 
-    def retrieve(self, query: str, top_k: int = 4) -> DocList:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 4,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+    ) -> DocList:
+        allowed_ids = normalize_knowledge_base_ids(knowledge_base_ids)
+        if not allowed_ids:
+            return []
         embedder = get_embedder()
         q_vec = embedder.embed_query(query)
+        where = (
+            {"knowledge_base_id": allowed_ids[0]}
+            if len(allowed_ids) == 1
+            else {"knowledge_base_id": {"$in": allowed_ids}}
+        )
         res = self._col.query(
             query_embeddings=[q_vec],
             n_results=top_k,
+            where=where,
             include=["documents", "metadatas", "distances"],
         )
         docs: DocList = []
         for text, meta, dist in zip(
             res["documents"][0], res["metadatas"][0], res["distances"][0]
         ):
+            if str(meta.get("knowledge_base_id", "")) not in allowed_ids:
+                logger.warning("[ChromaRetriever] discarded out-of-scope hit")
+                continue
             score = 1.0 - float(dist)  # chroma returns L2 distance with cosine space
             if score < cfg.RAG_SCORE_THRESHOLD:
                 continue

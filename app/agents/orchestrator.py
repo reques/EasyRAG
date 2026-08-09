@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.agents.workers.base import BaseWorker, TaskBrief, WorkerReport
 from app.agents.workers.rag_worker import RagWorker
@@ -93,6 +93,8 @@ class Orchestrator:
         worker_done_callback=None,
         return_synthesize_payload: bool = False,
         tasks_callback=None,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """执行多智能体编排，返回与单 Agent 兼容的响应格式。
 
@@ -154,6 +156,12 @@ class Orchestrator:
                     "steps": steps,
                     "elapsed_seconds": round(time.perf_counter() - start, 3),
                 }
+
+            authorised_ids = list(knowledge_base_ids or [])
+            authorised_catalog = list(knowledge_catalog or [])
+            for brief in briefs:
+                brief.knowledge_base_ids = authorised_ids
+                brief.knowledge_catalog = authorised_catalog
 
             # 拆解完成 → 通知前端渲染侧边任务进度面板的待办清单
             if tasks_callback:
