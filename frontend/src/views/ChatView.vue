@@ -65,7 +65,8 @@
                 </li>
               </ol>
             </div>
-            <div v-if="msg.meta && (msg.meta.intent || msg.meta.elapsed)" class="message-meta">
+            <div v-if="msg.meta && (msg.meta.intent || msg.meta.elapsed || msg.meta.modelName)" class="message-meta">
+              <span v-if="msg.meta.modelName">模型: {{ msg.meta.modelName }}</span>
               <span v-if="msg.meta.intent">意图: {{ msg.meta.intent }}</span>
               <span v-if="msg.meta.elapsed">耗时: {{ msg.meta.elapsed }}s</span>
             </div>
@@ -93,9 +94,50 @@
           ref="inputEl"
           @input="autoResize"
         ></textarea>
-        <button @click="send" :disabled="!input.trim() || sending" class="btn-send" title="发送">
-          <ArrowUp :size="16" />
-        </button>
+        <div class="chat-input-actions">
+          <div ref="modelPickerEl" class="model-picker-shell">
+            <button
+              type="button"
+              class="model-picker"
+              :class="{ 'has-error': modelLoadError, open: modelMenuOpen }"
+              :title="modelPickerTitle"
+              :disabled="sending || modelsLoading"
+              @click="modelMenuOpen = !modelMenuOpen"
+            >
+              <span class="model-status-dot" :class="{ ready: selectedModel?.available }"></span>
+              <span class="model-picker-label">
+                {{ modelsLoading ? '加载模型中…' : (selectedModel?.name || '添加自定义模型') }}
+              </span>
+              <ChevronDown :size="13" />
+            </button>
+            <div v-if="modelMenuOpen" class="model-dropdown">
+              <div class="model-dropdown-title">对话模型</div>
+              <button
+                v-for="model in modelOptions"
+                :key="model.id"
+                type="button"
+                class="model-dropdown-item"
+                :class="{ selected: model.id === selectedModelId }"
+                :disabled="!model.available"
+                @click="selectModel(model)"
+              >
+                <span class="model-status-dot" :class="{ ready: model.available }"></span>
+                <span class="model-option-copy">
+                  <strong>{{ model.name }}</strong>
+                  <small>{{ model.provider_type === 'local' ? '本地' : model.provider }}</small>
+                </span>
+                <span v-if="!model.available" class="model-unavailable">未配置</span>
+                <CheckCircle2 v-else-if="model.id === selectedModelId" :size="14" />
+              </button>
+              <button type="button" class="model-dropdown-add" @click="openCustomModelModal">
+                <Plus :size="14" /> 添加自定义模型
+              </button>
+            </div>
+          </div>
+          <button @click="send" :disabled="!input.trim() || sending || !selectedModelId" class="btn-send" title="发送">
+            <ArrowUp :size="16" />
+          </button>
+        </div>
       </div>
     </div>
     </div><!-- /.chat-main -->
@@ -139,15 +181,106 @@
         </div>
       </div>
     </aside>
+
+    <Teleport to="body">
+      <div v-if="customModelModalOpen" class="modal-overlay" @click.self="closeCustomModelModal">
+        <div class="modal model-config-modal">
+          <div class="model-config-header">
+            <div>
+              <h3>添加自定义模型</h3>
+              <p>支持 OpenAI 兼容的本地服务或云端接口，配置会安全保存到后端。</p>
+            </div>
+            <button type="button" class="model-config-close" @click="closeCustomModelModal">×</button>
+          </div>
+
+          <form class="model-config-form" @submit.prevent="saveCustomModel">
+            <div class="model-type-grid">
+              <button
+                type="button"
+                :class="['model-type-card', { active: customModelForm.provider_type === 'local' }]"
+                @click="setCustomModelType('local')"
+              >
+                <HardDrive :size="18" />
+                <span><strong>本地模型</strong><small>Ollama、LM Studio 等</small></span>
+              </button>
+              <button
+                type="button"
+                :class="['model-type-card', { active: customModelForm.provider_type === 'cloud' }]"
+                @click="setCustomModelType('cloud')"
+              >
+                <Cloud :size="18" />
+                <span><strong>云端模型</strong><small>OpenAI 兼容 API</small></span>
+              </button>
+            </div>
+
+            <div class="model-form-grid">
+              <label>
+                <span>显示名称</span>
+                <input v-model="customModelForm.name" type="text" maxlength="80" placeholder="例如：本地 Qwen 32B" required />
+              </label>
+              <label>
+                <span>供应商名称</span>
+                <input v-model="customModelForm.provider_name" type="text" maxlength="80" placeholder="例如：Ollama / OpenRouter" />
+              </label>
+            </div>
+            <label>
+              <span>API Base URL</span>
+              <input v-model="customModelForm.base_url" type="url" maxlength="512" :placeholder="customModelUrlPlaceholder" required />
+              <small class="model-form-hint">填写 OpenAI 兼容接口根地址，通常以 /v1 结尾。</small>
+            </label>
+            <div class="model-form-grid">
+              <label>
+                <span>模型 ID</span>
+                <input v-model="customModelForm.model_name" type="text" maxlength="160" placeholder="例如：qwen3:32b" required />
+              </label>
+              <label>
+                <span>Temperature</span>
+                <input v-model.number="customModelForm.temperature" type="number" min="0" max="2" step="0.1" />
+              </label>
+            </div>
+            <label class="model-key-toggle">
+              <input v-model="customModelForm.requires_api_key" type="checkbox" />
+              <span>此接口需要 API Key</span>
+            </label>
+            <label v-if="customModelForm.requires_api_key">
+              <span>API Key</span>
+              <input v-model="customModelForm.api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="仅加密保存到后端" required />
+            </label>
+
+            <div v-if="customModelError" class="model-config-error">{{ customModelError }}</div>
+
+            <div v-if="customModels.length" class="custom-model-list">
+              <div class="custom-model-list-title">已添加</div>
+              <div v-for="model in customModels" :key="model.id" class="custom-model-row">
+                <span class="model-option-copy">
+                  <strong>{{ model.name }}</strong>
+                  <small>{{ model.provider_type === 'local' ? '本地模型' : model.provider }}</small>
+                </span>
+                <button type="button" title="删除模型" @click="deleteCustomModel(model)">
+                  <Trash2 :size="14" />
+                </button>
+              </div>
+            </div>
+
+            <div class="modal-actions">
+              <button type="button" class="btn-secondary" @click="closeCustomModelModal">取消</button>
+              <button type="submit" class="btn-primary-sm" :disabled="savingCustomModel">
+                {{ savingCustomModel ? '保存中…' : '保存并使用' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onActivated } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onActivated, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
-import { ArrowUp, BookOpen, ChevronDown, ChevronRight, Loader2, CheckCircle2 } from 'lucide-vue-next'
+import { ArrowUp, BookOpen, ChevronDown, ChevronRight, Loader2, CheckCircle2, Plus, Trash2, Cloud, HardDrive } from 'lucide-vue-next'
 import api from '../api'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
@@ -181,6 +314,155 @@ const sending = ref(false)
 const conversationId = ref(null)
 const msgContainer = ref(null)
 const inputEl = ref(null)
+
+// 对话模型目录由后端环境配置生成；浏览器只保存公开 model_id，不接触供应商密钥。
+const MODEL_STORAGE_KEY = 'easyrag-chat-model-id'
+const modelOptions = ref([])
+const selectedModelId = ref(localStorage.getItem(MODEL_STORAGE_KEY) || '')
+const modelsLoading = ref(true)
+const modelLoadError = ref('')
+const modelMenuOpen = ref(false)
+const modelPickerEl = ref(null)
+const customModelModalOpen = ref(false)
+const savingCustomModel = ref(false)
+const customModelError = ref('')
+const customModelForm = reactive({
+  provider_type: 'local',
+  name: '',
+  provider_name: 'Ollama',
+  base_url: 'http://localhost:11434/v1',
+  model_name: '',
+  api_key: '',
+  requires_api_key: false,
+  temperature: 0,
+})
+const selectedModel = computed(() => (
+  modelOptions.value.find(model => model.id === selectedModelId.value) || null
+))
+const customModels = computed(() => (
+  modelOptions.value.filter(model => model.source === 'custom')
+))
+const customModelUrlPlaceholder = computed(() => (
+  customModelForm.provider_type === 'local'
+    ? 'http://localhost:11434/v1'
+    : 'https://api.example.com/v1'
+))
+const modelPickerTitle = computed(() => {
+  if (modelLoadError.value) return modelLoadError.value
+  if (selectedModel.value) return `${selectedModel.value.provider} · ${selectedModel.value.name}`
+  return '添加自定义模型'
+})
+
+async function loadModels(preferredModelId = '') {
+  modelsLoading.value = true
+  modelLoadError.value = ''
+  try {
+    const data = await api.get('/chat/models')
+    modelOptions.value = data.models || []
+    const available = modelOptions.value.filter(model => model.available)
+    const requested = available.find(model => model.id === preferredModelId)
+    const saved = available.find(model => model.id === selectedModelId.value)
+    const preferred = available.find(model => model.id === data.default_model_id)
+    selectedModelId.value = (requested || saved || preferred || available[0])?.id || ''
+  } catch (error) {
+    modelOptions.value = []
+    selectedModelId.value = ''
+    modelLoadError.value = `模型列表加载失败：${error.message}`
+  } finally {
+    modelsLoading.value = false
+  }
+}
+
+watch(selectedModelId, (modelId) => {
+  if (modelId) localStorage.setItem(MODEL_STORAGE_KEY, modelId)
+  else localStorage.removeItem(MODEL_STORAGE_KEY)
+})
+
+function selectModel(model) {
+  if (!model.available) return
+  selectedModelId.value = model.id
+  modelMenuOpen.value = false
+}
+
+function setCustomModelType(type) {
+  customModelForm.provider_type = type
+  customModelForm.api_key = ''
+  if (type === 'local') {
+    customModelForm.provider_name = 'Ollama'
+    customModelForm.base_url = 'http://localhost:11434/v1'
+    customModelForm.requires_api_key = false
+    customModelForm.temperature = 0
+  } else {
+    customModelForm.provider_name = ''
+    customModelForm.base_url = ''
+    customModelForm.requires_api_key = true
+    customModelForm.temperature = 0.7
+  }
+}
+
+function openCustomModelModal() {
+  modelMenuOpen.value = false
+  customModelError.value = ''
+  Object.assign(customModelForm, {
+    provider_type: 'local',
+    name: '',
+    provider_name: 'Ollama',
+    base_url: 'http://localhost:11434/v1',
+    model_name: '',
+    api_key: '',
+    requires_api_key: false,
+    temperature: 0,
+  })
+  customModelModalOpen.value = true
+}
+
+function closeCustomModelModal() {
+  if (savingCustomModel.value) return
+  customModelModalOpen.value = false
+  customModelError.value = ''
+}
+
+async function saveCustomModel() {
+  if (savingCustomModel.value) return
+  savingCustomModel.value = true
+  customModelError.value = ''
+  try {
+    const created = await api.post('/chat/models', {
+      provider_type: customModelForm.provider_type,
+      name: customModelForm.name.trim(),
+      provider_name: customModelForm.provider_name.trim(),
+      base_url: customModelForm.base_url.trim(),
+      model_name: customModelForm.model_name.trim(),
+      api_key: customModelForm.api_key.trim(),
+      requires_api_key: customModelForm.requires_api_key,
+      temperature: customModelForm.temperature,
+    })
+    await loadModels(created.id)
+    customModelModalOpen.value = false
+  } catch (error) {
+    customModelError.value = error.response?.data?.detail || error.message || '保存失败'
+  } finally {
+    savingCustomModel.value = false
+  }
+}
+
+async function deleteCustomModel(model) {
+  if (!window.confirm(`确定删除自定义模型“${model.name}”吗？`)) return
+  customModelError.value = ''
+  try {
+    await api.delete(`/chat/models/${model.id}`)
+    if (selectedModelId.value === model.id) selectedModelId.value = ''
+    await loadModels()
+  } catch (error) {
+    customModelError.value = error.response?.data?.detail || error.message || '删除失败'
+  }
+}
+
+function closeModelMenuOnOutsideClick(event) {
+  if (modelPickerEl.value && !modelPickerEl.value.contains(event.target)) {
+    modelMenuOpen.value = false
+  }
+}
 
 // 状态步骤面板（思考过程时间线）
 // statusSteps 只是当前轮次的缓冲——status 事件实时落到当前 assistant 消息的
@@ -306,7 +588,10 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         role: m.role,
         content: m.content,
         sources: m.meta?.sources || [],
-        meta: m.meta?.intent ? { intent: m.meta.intent } : null,
+        meta: (m.meta?.intent || m.meta?.model_name) ? {
+          intent: m.meta?.intent || '',
+          modelName: m.meta?.model_name || '',
+        } : null,
         steps: m.meta?.steps || [],
         stepsExpanded: true,
         stepsLoading: false,
@@ -333,7 +618,17 @@ async function send() {
   // 注意: assistant 的时间戳独立取"当前时刻"——不要复用 user 的 ts,
   // 否则同秒差值为 0, 分隔条条件 >10min 永不成立, 回复后就看不到新时间了。
   const asstTs = Date.now()
-  messages.value.push({ role: 'assistant', content: '', sources: [], meta: null, steps: [], stepsExpanded: true, stepsLoading: true, time: formatTime(new Date(asstTs).toISOString()), ts: asstTs })
+  messages.value.push({
+    role: 'assistant',
+    content: '',
+    sources: [],
+    meta: { modelName: selectedModel.value?.name || '' },
+    steps: [],
+    stepsExpanded: true,
+    stepsLoading: true,
+    time: formatTime(new Date(asstTs).toISOString()),
+    ts: asstTs,
+  })
   const msgIndex = messages.value.length - 1
   scrollBottom()
 
@@ -346,9 +641,15 @@ async function send() {
     await api.streamChat('/chat/stream', {
       query: text,
       conversation_id: conversationId.value,
+      model_id: selectedModelId.value,
     }, (ev) => {
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
+        const m = messages.value[msgIndex]
+        messages.value[msgIndex] = {
+          ...m,
+          meta: { ...(m.meta || {}), modelName: ev.model_name || m.meta?.modelName || '' },
+        }
       } else if (ev.type === 'sub_tasks') {
         // 拆解完成：初始化侧边任务面板的待办清单（全部 pending）
         taskPanel.value = {
@@ -396,7 +697,11 @@ async function send() {
         messages.value[msgIndex] = {
           ...m,
           sources: ev.sources || [],
-          meta: { intent: ev.intent, elapsed: ev.elapsed_seconds },
+          meta: {
+            intent: ev.intent,
+            elapsed: ev.elapsed_seconds,
+            modelName: ev.model_name || m.meta?.modelName || '',
+          },
           // 兜底：流式中断时 status 事件可能不全，用 done 携带的完整 steps 补齐
           steps: (ev.steps && ev.steps.length) ? ev.steps : (m.steps || []),
           stepsLoading: false,
@@ -434,5 +739,14 @@ onActivated(() => {
   // 从知识库页切回时滚动到底部并恢复焦点
   scrollBottom()
   nextTick(() => inputEl.value?.focus())
+})
+
+onMounted(() => {
+  loadModels()
+  document.addEventListener('click', closeModelMenuOnOutsideClick)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', closeModelMenuOnOutsideClick)
 })
 </script>

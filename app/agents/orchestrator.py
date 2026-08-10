@@ -34,11 +34,13 @@ class Orchestrator:
     # ── LLM client（lazy，可注入 mock）─────────────────────────────────────
     @property
     def llm(self):
-        if self._llm is None:
-            from app.llm.client import get_llm_client
+        if self._llm is not None:
+            return self._llm
+        from app.llm.client import get_llm_client
 
-            self._llm = get_llm_client()
-        return self._llm
+        # Resolve on every access so a process-level Orchestrator singleton
+        # cannot pin the model chosen by the first chat request.
+        return get_llm_client()
 
     @llm.setter
     def llm(self, value):
@@ -347,16 +349,23 @@ class Orchestrator:
         """并行派发（ThreadPoolExecutor 真并发）。"""
         reports: List[WorkerReport] = []
 
+        from app.llm.client import get_active_chat_model_profile, use_chat_model
+
+        selected_model = get_active_chat_model_profile()
+
         def _run_one(brief: TaskBrief) -> WorkerReport:
-            worker = self._get_worker(brief.worker_hint)
-            worker.blackboard = self.blackboard
-            if status_cb:
-                self._attach_tool_callback(worker, status_cb)
-            try:
-                return worker.run_with_board(brief)
-            finally:
-                worker.blackboard = None
-                worker.tool_callback = None
+            # contextvars do not flow into ThreadPoolExecutor workers. Re-enter
+            # the request's selection so every sub-agent uses the same model.
+            with use_chat_model(selected_model):
+                worker = self._get_worker(brief.worker_hint)
+                worker.blackboard = self.blackboard
+                if status_cb:
+                    self._attach_tool_callback(worker, status_cb)
+                try:
+                    return worker.run_with_board(brief)
+                finally:
+                    worker.blackboard = None
+                    worker.tool_callback = None
 
         with ThreadPoolExecutor(max_workers=len(briefs)) as pool:
             futures = {pool.submit(_run_one, b): b for b in briefs}

@@ -584,3 +584,77 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 - `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
 - 使用本地只读模拟响应在 1440×1000 视口检查文件管理与 RAG 评估页：目录数据、页签路由、
   统计卡片、文件表格、处理中状态和评估空态均正常渲染。
+
+#### 2026-08-10 — 对话页多模型切换
+
+**目标：** 在对话输入区提供模型切换，并把 MiniMax-M2.7、DeepSeek-V4-Flash、
+Qwen-3.6-Flash、GLM-5.2 接入后端环境配置；同一次请求中的单 Agent、多 Agent 子任务与
+最终流式汇总必须使用同一模型，API Key 和供应商地址不得暴露给浏览器。
+
+**设计决策：** 使用“后端模型目录 + 公开 model_id 白名单”。前端只从
+`GET /api/v1/chat/models` 读取名称、供应商和可用状态，发送公开 `model_id`；后端再解析为
+真实 base URL、API 模型名、温度与密钥。未知模型和未配置模型在消息写库前直接拒绝，避免
+客户端注入任意上游地址或模型。多个模型使用同一 OpenAI 兼容网关时，各模型 BASE_URL 可
+设为 `LLM_BASE_URL` 并安全复用现有 `DEEPSEEK_API_KEY`；直连官方接口则使用独立密钥。
+
+**实现：**
+1. 新增 `app/llm/models.py`，定义四个模型的服务端目录、公开元数据、默认模型、配置可用性
+   检查和 allowlist 解析；`app/core/config.py`、`.env` 与 `.env.template` 同步供应商地址、
+   API 模型 ID、温度和密钥变量，当前本地 `.env` 四个模型统一复用既有网关。
+2. `GET /chat/models` 返回不含 base URL、API Key 和真实内部配置的安全目录；`ChatRequest`
+   新增 `model_id`，同步与 SSE 接口均在持久化用户消息前验证选择，助手消息 metadata 记录
+   `model_id/model_name`，便于历史追溯。
+3. `app/llm/client.py` 新增请求上下文模型选择与按模型缓存；Agent 图节点、Orchestrator、
+   Worker、增强检索和流式汇总都从当前请求解析客户端。针对 `ThreadPoolExecutor` 不自动
+   传播 contextvars 的行为，多 Agent 并行子任务会显式重新进入同一模型上下文。
+4. `ChatView.vue` 在输入框左下角新增模型选择器：记忆上次选择、加载后端默认值、发送期间
+   锁定、未配置项禁用；每条回复显示实际模型名。SSE 错误解析也改为优先显示后端 detail。
+5. README 补充模型配置与切换说明；`requirements-stage1.txt` 补齐此前遗漏的 FastAPI 与
+   Uvicorn 运行依赖声明。
+
+**验证：**
+- 新增 `tests/test_chat_model_selection.py`，覆盖四模型目录、敏感配置不外泄、共享网关密钥
+  复用、直连缺密钥禁用、未知模型拒绝、请求上下文恢复和并行 Worker 模型传播。
+- `python -m pytest -q`：**21/21 通过**。
+- `python -m compileall -q app backend tests`、`git diff --check` 通过。
+- `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
+- 安装 `requirements-stage1.txt` 后成功加载 FastAPI 应用，并确认
+  `GET /api/v1/chat/models` 路由及响应模型已注册。
+
+#### 2026-08-10 — v0.3.1：自定义本地/云端模型配置
+
+**目标：** 全局顶部展示当前应用版本 v0.3.1；对话模型菜单移除“暂无可用模型”占位，新增
+“添加自定义模型”，允许用户配置本地或云端 OpenAI 兼容模型，并在保存后立即进入当前账号
+的可选模型目录。
+
+**设计决策：** 采用“环境变量内置模型 + PostgreSQL 动态模型”的混合配置。部署者维护的
+四个内置模型继续由 `.env` 提供；用户在前端新增的模型按 `owner_id` 存入数据库，避免运行时
+修改进程环境或配置文件。动态 API Key 使用 Fernet 加密，密钥由
+`MODEL_CONFIG_ENCRYPTION_KEY` 提供，开发环境未配置时回退 `JWT_SECRET_KEY`；列表接口只返回
+公开 ID、显示名、供应商、来源、类型和可用状态，不返回真实地址、模型内部参数或密钥。
+
+**实现：**
+1. 应用默认版本、`.env`、`.env.template`、前端包版本统一升级为 `0.3.1`；`LayoutView.vue`
+   新增全局顶部条，从 `/api/v1/health` 同步后端版本并保留 `v0.3.1` 构建兜底。
+2. 新增 `custom_model_configs` 表、`CustomModelConfigRepository` 和模型配置服务；配置包含
+   owner、显示名、模型类型、Base URL、模型 ID、加密 API Key、温度与是否需要密钥。
+3. 新增 `POST /chat/models` 与 `DELETE /chat/models/{model_id}`；`GET /chat/models` 合并环境
+   内置模型与当前用户自定义模型。自定义模型使用 `custom:<uuid>` 公共 ID，所有读写和对话
+   解析都带 owner 条件，其他用户无法枚举、使用或删除。
+4. 本地模型允许无 API Key，支持 localhost、私有网段、`.local` 和 Docker 服务名；云端
+   模型强制 HTTPS，并拒绝字面量本机/私有 IP。URL 禁止嵌入账号、查询参数和 fragment，降低
+   错配与 SSRF 风险。
+5. LLM 请求上下文从“仅模型 ID”升级为携带完整、已授权的运行时 profile；因此数据库模型
+   也能正确传播到单 Agent、多 Agent 并行 Worker、增强检索和 SSE 最终汇总。客户端缓存键
+   加入配置指纹，删除后重建同名模型不会误用旧连接。
+6. 原生 select 改为可控模型菜单，始终提供“添加自定义模型”；新增本地/云端类型卡、服务
+   地址、模型 ID、温度、API Key 与已添加模型管理弹窗。保存成功后重新拉取后端目录并自动
+   选中新模型，删除操作只允许自定义项且需要二次确认。
+
+**验证：**
+- 新增 `tests/test_custom_model_config.py`，覆盖密钥密文存储/解密、本地无密钥模型、公开响应
+  不泄露密钥和地址、本地/云端 URL 安全边界、动态 profile 请求上下文及仓储 owner 条件。
+- `python -m pytest -q`：**26/26 通过**。
+- FastAPI 应用加载成功，确认 `GET/POST /api/v1/chat/models`、
+  `DELETE /api/v1/chat/models/{model_id}` 已注册，应用版本为 `0.3.1`。
+- `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
