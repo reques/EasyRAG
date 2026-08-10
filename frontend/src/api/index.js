@@ -64,7 +64,11 @@ export default {
     }
     if (!resp.ok) {
       const text = await resp.text().catch(() => '')
-      throw new Error(text || `HTTP ${resp.status}`)
+      let detail = text
+      try {
+        detail = JSON.parse(text)?.detail || text
+      } catch { /* 非 JSON 错误响应保持原文 */ }
+      throw new Error(detail || `HTTP ${resp.status}`)
     }
     const reader = resp.body.getReader()
     const decoder = new TextDecoder('utf-8')

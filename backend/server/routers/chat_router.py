@@ -5,14 +5,22 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.logger import get_logger
+from app.llm.models import (
+    ChatModelProfile,
+    ChatModelUnavailableError,
+    UnknownChatModelError,
+    get_chat_model_profile,
+    list_chat_model_profiles,
+)
 from backend.services.chat_service import (
     create_conversation,
     add_message,
@@ -26,6 +34,14 @@ from backend.storage.postgres.manager import get_session
 from backend.server.utils.auth_middleware import get_current_user
 from backend.storage.postgres.models_user import User
 from backend.repositories.knowledge_repository import KnowledgeBaseRepository
+from backend.repositories.model_config_repository import CustomModelConfigRepository
+from backend.services.model_config_service import (
+    ModelConfigValidationError,
+    encrypt_api_key,
+    profile_from_custom_model,
+    validate_and_normalize_base_url,
+)
+from backend.storage.postgres.models_model_config import CustomModelConfig
 
 logger = get_logger(__name__)
 cfg = get_settings()
@@ -45,11 +61,14 @@ async def _load_knowledge_scope(
 class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096)
     conversation_id: Optional[str] = None  # None = 创建新会话
+    model_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class ChatResponse(BaseModel):
     conversation_id: str
     answer: str
+    model_id: str = ""
+    model_name: str = ""
     intent: str = ""
     steps: list[str] = []
     sources: list[dict] = []
@@ -63,7 +82,175 @@ class ConversationSummary(BaseModel):
     updated_at: str
 
 
+class ChatModelInfo(BaseModel):
+    id: str
+    name: str
+    provider: str
+    available: bool
+    is_default: bool
+    source: str = "builtin"
+    provider_type: str = "cloud"
+    can_delete: bool = False
+
+
+class ChatModelListResponse(BaseModel):
+    default_model_id: str
+    models: list[ChatModelInfo]
+
+
+class CustomModelCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    provider_name: str = Field(default="", max_length=80)
+    provider_type: Literal["local", "cloud"]
+    base_url: str = Field(..., min_length=1, max_length=512)
+    model_name: str = Field(..., min_length=1, max_length=160)
+    api_key: str = Field(default="", max_length=8192)
+    requires_api_key: bool = True
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+
+
+async def _resolve_request_model(
+    model_id: Optional[str], user_id: uuid.UUID, session: AsyncSession
+) -> ChatModelProfile:
+    """Validate the public model selection before any message is persisted."""
+    if model_id and model_id.startswith("custom:"):
+        record = await CustomModelConfigRepository(session).get_by_public_id(
+            user_id, model_id
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="自定义模型不存在或无权访问",
+            )
+        try:
+            profile = profile_from_custom_model(record)
+        except ModelConfigValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        if not profile.available:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"模型 {profile.name} 配置不完整，请重新配置",
+            )
+        return profile
+
+    try:
+        return get_chat_model_profile(model_id)
+    except (UnknownChatModelError, ChatModelUnavailableError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/models", response_model=ChatModelListResponse)
+async def list_chat_models(
+    current_user: User = Depends(get_current_user),
+):
+    """Return safe model metadata for the conversation model selector."""
+    profiles = list_chat_model_profiles()
+    async with get_session() as session:
+        records = await CustomModelConfigRepository(session).list_by_owner(
+            current_user.id
+        )
+    for record in records:
+        try:
+            profiles.append(profile_from_custom_model(record))
+        except ModelConfigValidationError:
+            profiles.append(ChatModelProfile(
+                id=record.public_id,
+                name=record.name,
+                provider=record.provider_name,
+                provider_type=record.provider_type,
+                source="custom",
+                base_url=record.base_url,
+                api_key="",
+                model=record.model_name,
+                temperature=record.temperature,
+                requires_api_key=True,
+            ))
+    return ChatModelListResponse(
+        default_model_id=cfg.LLM_DEFAULT_MODEL_ID,
+        models=[
+            ChatModelInfo(
+                **profile.to_public_dict(
+                    default_model_id=cfg.LLM_DEFAULT_MODEL_ID
+                )
+            )
+            for profile in profiles
+        ],
+    )
+
+
+@router.post("/models", response_model=ChatModelInfo, status_code=status.HTTP_201_CREATED)
+async def create_custom_chat_model(
+    req: CustomModelCreate,
+    current_user: User = Depends(get_current_user),
+):
+    """Persist an owner-scoped local/cloud OpenAI-compatible model profile."""
+    name = req.name.strip()
+    model_name = req.model_name.strip()
+    provider_name = req.provider_name.strip() or (
+        "本地模型" if req.provider_type == "local" else "自定义云端"
+    )
+    if not name or not model_name:
+        raise HTTPException(status_code=400, detail="模型名称和模型 ID 不能为空")
+    if req.requires_api_key and not req.api_key.strip():
+        raise HTTPException(status_code=400, detail="该模型配置要求填写 API Key")
+    try:
+        base_url = validate_and_normalize_base_url(req.base_url, req.provider_type)
+        encrypted_key = encrypt_api_key(req.api_key)
+    except ModelConfigValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async with get_session() as session:
+        repo = CustomModelConfigRepository(session)
+        if await repo.get_by_name(current_user.id, name):
+            raise HTTPException(status_code=409, detail="已存在同名自定义模型")
+        record = CustomModelConfig(
+            owner_id=current_user.id,
+            name=name,
+            provider_name=provider_name,
+            provider_type=req.provider_type,
+            base_url=base_url,
+            model_name=model_name,
+            api_key_encrypted=encrypted_key,
+            requires_api_key=req.requires_api_key,
+            temperature=req.temperature,
+        )
+        try:
+            await repo.add(record)
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="已存在同名自定义模型") from exc
+
+    profile = profile_from_custom_model(record)
+    return ChatModelInfo(
+        **profile.to_public_dict(default_model_id=cfg.LLM_DEFAULT_MODEL_ID)
+    )
+
+
+@router.delete("/models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_custom_chat_model(
+    model_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Delete one user-owned custom model; built-in profiles are immutable."""
+    async with get_session() as session:
+        repo = CustomModelConfigRepository(session)
+        record = await repo.get_by_public_id(current_user.id, model_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="自定义模型不存在或无权访问")
+        await repo.delete(record)
+        await session.commit()
+    from app.llm.client import evict_chat_model_clients
+
+    evict_chat_model_clients(model_id)
+    return None
 
 @router.post("/send", response_model=ChatResponse)
 async def send_message(
@@ -74,6 +261,9 @@ async def send_message(
     start = time.perf_counter()
 
     async with get_session() as session:
+        selected_model = await _resolve_request_model(
+            req.model_id, current_user.id, session
+        )
         # 获取或创建会话
         conv_id = None
         is_new = False
@@ -106,15 +296,18 @@ async def send_message(
     result: dict[str, Any] = {}
     try:
         from app.services.agent_service import get_agent_service
+        from app.llm.client import use_chat_model
+
         agent = get_agent_service()
-        result = agent.run(
-            query=req.query,
-            session_id=str(conv_id),
-            history=db_history,          # ← 关键：传入 DB 历史
-            user_id=current_user.id,
-            knowledge_base_ids=knowledge_base_ids,
-            knowledge_catalog=knowledge_catalog,
-        )
+        with use_chat_model(selected_model):
+            result = agent.run(
+                query=req.query,
+                session_id=str(conv_id),
+                history=db_history,          # ← 关键：传入 DB 历史
+                user_id=current_user.id,
+                knowledge_base_ids=knowledge_base_ids,
+                knowledge_catalog=knowledge_catalog,
+            )
         answer = result.get("final_answer", "")
     except Exception as exc:
         logger.error("[chat/send] agent error: %s", exc)
@@ -125,7 +318,7 @@ async def send_message(
         logger.warning("[chat/send] agent returned empty answer, fallback to direct LLM")
         try:
             from app.llm.client import get_llm_client
-            llm = get_llm_client()
+            llm = get_llm_client(profile=selected_model)
             from app.services.knowledge_catalog import format_knowledge_catalog
 
             fallback_answer = llm.chat_sync([
@@ -167,6 +360,8 @@ async def send_message(
             "intent": result.get("intent", ""),
             "steps": result.get("steps", []),
             "sources": result.get("sources", []),
+            "model_id": selected_model.id,
+            "model_name": selected_model.name,
         }, ensure_ascii=False)
         await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
         await session.commit()
@@ -174,6 +369,8 @@ async def send_message(
     return ChatResponse(
         conversation_id=str(conv_id),
         answer=answer,
+        model_id=selected_model.id,
+        model_name=selected_model.name,
         intent=result.get("intent", ""),
         steps=result.get("steps", []),
         sources=result.get("sources", []),
@@ -203,6 +400,9 @@ async def send_message_stream(
     start = time.perf_counter()
 
     async with get_session() as session:
+        selected_model = await _resolve_request_model(
+            req.model_id, current_user.id, session
+        )
         # 获取或创建会话
         if req.conversation_id:
             conv = await get_conversation(session, uuid.UUID(req.conversation_id))
@@ -227,7 +427,7 @@ async def send_message_stream(
 
     async def event_gen():
         from app.services.agent_service import get_agent_service
-        from app.llm.client import get_llm_client
+        from app.llm.client import get_llm_client, use_chat_model
 
         loop = asyncio.get_event_loop()
         agent = get_agent_service()
@@ -235,7 +435,12 @@ async def send_message_stream(
         def _sse(payload: dict) -> str:
             return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
-        yield _sse({"type": "conversation_id", "conversation_id": str(conv_id)})
+        yield _sse({
+            "type": "conversation_id",
+            "conversation_id": str(conv_id),
+            "model_id": selected_model.id,
+            "model_name": selected_model.name,
+        })
 
         # ── 智能路由：auto 模式判断是否走多智能体 ────────────────────────────
         from app.services.agent_service import AgentService
@@ -295,16 +500,17 @@ async def send_message_stream(
                 # return_synthesize_payload=True：synthesize 交给主事件循环流式生成
                 def _run_orch():
                     try:
-                        return orchestrator.run(
-                            req.query,
-                            history=db_history,
-                            status_callback=_on_status,
-                            worker_done_callback=_on_worker_done,
-                            tasks_callback=_on_tasks,
-                            return_synthesize_payload=True,
-                            knowledge_base_ids=knowledge_base_ids,
-                            knowledge_catalog=knowledge_catalog,
-                        )
+                        with use_chat_model(selected_model):
+                            return orchestrator.run(
+                                req.query,
+                                history=db_history,
+                                status_callback=_on_status,
+                                worker_done_callback=_on_worker_done,
+                                tasks_callback=_on_tasks,
+                                return_synthesize_payload=True,
+                                knowledge_base_ids=knowledge_base_ids,
+                                knowledge_catalog=knowledge_catalog,
+                            )
                     finally:
                         status_queue.put(_ORCH_SENTINEL)
 
@@ -400,7 +606,7 @@ async def send_message_stream(
                                 f"汇总要求：{payload['final_inst'] or '综合各子任务结果，给出完整、连贯的回答。'}"
                             )
                             try:
-                                llm = get_llm_client()
+                                llm = get_llm_client(profile=selected_model)
                                 # 综合回答前推分隔标题（前端 m.content 已有各子任务产出）
                                 if len(worker_outputs) > 1:
                                     yield _sse({"type": "delta", "content": "\n\n---\n**综合回答：**\n\n"})
@@ -451,6 +657,8 @@ async def send_message_stream(
                                 # result["steps"] 是 orchestrator 内部字符串日志，格式不兼容
                                 "steps": status_list,
                                 "execution_mode": result.get("execution_mode", ""),
+                                "model_id": selected_model.id,
+                                "model_name": selected_model.name,
                             }, ensure_ascii=False)
                             await add_message(session, conv_id, "assistant", full_answer, metadata_json=meta)
                             await session.commit()
@@ -464,6 +672,8 @@ async def send_message_stream(
                         "steps": status_list,
                         "elapsed_seconds": elapsed,
                         "execution_mode": result.get("execution_mode", ""),
+                        "model_id": selected_model.id,
+                        "model_name": selected_model.name,
                     })
 
                     # 新会话标题后台生成
@@ -503,14 +713,15 @@ async def send_message_stream(
 
         def _prepare():
             try:
-                return agent.prepare_context(
-                    req.query,
-                    db_history,
-                    user_id=current_user.id,
-                    knowledge_base_ids=knowledge_base_ids,
-                    knowledge_catalog=knowledge_catalog,
-                    on_step=_on_step,
-                )
+                with use_chat_model(selected_model):
+                    return agent.prepare_context(
+                        req.query,
+                        db_history,
+                        user_id=current_user.id,
+                        knowledge_base_ids=knowledge_base_ids,
+                        knowledge_catalog=knowledge_catalog,
+                        on_step=_on_step,
+                    )
             finally:
                 step_queue.put(_SENTINEL)
 
@@ -566,7 +777,7 @@ async def send_message_stream(
         # 2. 流式生成（含空响应兜底）
         answer_parts: list[str] = []
         try:
-            llm = get_llm_client()
+            llm = get_llm_client(profile=selected_model)
             async for delta in llm.chat_stream(ctx["messages"]):
                 answer_parts.append(delta)
                 yield _sse({"type": "delta", "content": delta})
@@ -606,6 +817,8 @@ async def send_message_stream(
                     "intent": ctx["intent"],
                     "sources": ctx["sources"],
                     "steps": collected_steps,
+                    "model_id": selected_model.id,
+                    "model_name": selected_model.name,
                 }, ensure_ascii=False)
                 await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
                 await session.commit()
@@ -618,6 +831,8 @@ async def send_message_stream(
             "intent": ctx["intent"],
             "steps": collected_steps,
             "elapsed_seconds": elapsed,
+            "model_id": selected_model.id,
+            "model_name": selected_model.name,
         })
 
         # 4. 新会话标题生成 — 在 done 之后的后台协程里做，不阻塞 SSE 流。

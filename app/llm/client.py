@@ -15,13 +15,17 @@ Usage::
 """
 import json
 import re
-from typing import Any, Dict, List, Optional
+import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 from openai import AsyncOpenAI, OpenAI, APITimeoutError, RateLimitError, APIConnectionError
 
 from app.core.config import get_settings
 from app.core.exceptions import LLMClientError, LLMOutputParseError, LLMTimeoutError
 from app.core.logger import get_logger
+from app.llm.models import ChatModelProfile
 
 logger = get_logger(__name__)
 
@@ -45,7 +49,9 @@ class LLMClient:
         import httpx
         client_kwargs = dict(
             base_url=base_url or cfg.LLM_BASE_URL,
-            api_key=api_key or cfg.LLM_API_KEY,
+            # The SDK requires a string during construction. Chat endpoints
+            # validate provider configuration before reaching this point.
+            api_key=api_key or cfg.LLM_API_KEY or "not-configured",
             timeout=cfg.LLM_TIMEOUT,
             max_retries=cfg.LLM_MAX_RETRIES,
         )
@@ -204,11 +210,63 @@ class LLMClient:
             raise LLMClientError(f"LLM API error: {exc}") from exc
 
 
-# Module-level singletons (lazy, per-tier)
+# Request-local model selection. Sync work dispatched to a thread must enter
+# ``use_chat_model`` again because contextvars are not copied to executor
+# threads automatically.
+_active_chat_model: ContextVar[Optional[ChatModelProfile]] = ContextVar(
+    "active_chat_model", default=None
+)
+
+
+@contextmanager
+def use_chat_model(
+    model: Optional[Union[str, ChatModelProfile]],
+) -> Iterator[Optional[ChatModelProfile]]:
+    """Apply a validated chat model selection within the current context."""
+    if model is None:
+        yield None
+        return
+
+    if isinstance(model, ChatModelProfile):
+        profile = model
+    else:
+        from app.llm.models import get_chat_model_profile
+
+        profile = get_chat_model_profile(model)
+    token = _active_chat_model.set(profile)
+    try:
+        yield profile
+    finally:
+        _active_chat_model.reset(token)
+
+
+def get_active_chat_model_profile() -> Optional[ChatModelProfile]:
+    """Return the complete request-local model profile, if one was selected."""
+    return _active_chat_model.get()
+
+
+def get_active_chat_model_id() -> Optional[str]:
+    """Return the model selected for the current request context, if any."""
+    profile = get_active_chat_model_profile()
+    return profile.id if profile else None
+
+
+# Module-level singletons (lazy, per tier/profile)
 _tier_clients: Dict[str, LLMClient] = {}
 
 
-def get_llm_client(tier: str = "main") -> LLMClient:
+def evict_chat_model_clients(model_id: str) -> None:
+    """Forget cached clients for a deleted or replaced custom profile."""
+    prefix = f"chat:{model_id}:"
+    for cache_key in [key for key in _tier_clients if key.startswith(prefix)]:
+        _tier_clients.pop(cache_key, None)
+
+
+def get_llm_client(
+    tier: str = "main",
+    model_id: Optional[str] = None,
+    profile: Optional[ChatModelProfile] = None,
+) -> LLMClient:
     """Return the process-level LLM client for the given tier (created once per tier).
 
     tier="main" — 主模型（默认），用于 ReAct 推理、答案生成等核心任务。
@@ -218,6 +276,36 @@ def get_llm_client(tier: str = "main") -> LLMClient:
     分级接口为阶段 1 引入, 本期所有调用点仍用 main; 后续成本优化时按需切 fast。
     """
     cfg = get_settings()
+    selected_profile = profile or get_active_chat_model_profile()
+    if selected_profile is None and model_id:
+        from app.llm.models import get_chat_model_profile
+
+        selected_profile = get_chat_model_profile(model_id)
+    if selected_profile is not None:
+        profile_hash = hashlib.sha256(
+            "\0".join((
+                selected_profile.id,
+                selected_profile.base_url,
+                selected_profile.model,
+                selected_profile.api_key,
+            )).encode("utf-8")
+        ).hexdigest()[:12]
+        cache_key = f"chat:{selected_profile.id}:{profile_hash}"
+        if cache_key not in _tier_clients:
+            _tier_clients[cache_key] = LLMClient(
+                base_url=selected_profile.base_url,
+                api_key=selected_profile.api_key,
+                model=selected_profile.model,
+                temperature=selected_profile.temperature,
+            )
+            logger.info(
+                "[llm] chat model client created: id=%s provider=%s model=%s",
+                selected_profile.id,
+                selected_profile.provider,
+                selected_profile.model,
+            )
+        return _tier_clients[cache_key]
+
     if tier == "fast" and not cfg.LLM_FAST_MODEL:
         tier = "main"  # fast 未配置 → 回退主模型
     if tier not in _tier_clients:

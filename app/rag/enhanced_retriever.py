@@ -323,10 +323,13 @@ class EnhancedRetriever:
 
     @property
     def llm(self):
-        if self._llm is None:
-            from app.llm.client import get_llm_client
-            self._llm = get_llm_client()
-        return self._llm
+        if self._llm is not None:
+            return self._llm
+        from app.llm.client import get_llm_client
+
+        # The retriever may be reused across requests; do not retain another
+        # user's per-chat model choice on this singleton-like service.
+        return get_llm_client()
 
     @property
     def embedder(self):
