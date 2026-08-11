@@ -497,6 +497,7 @@ const statusSteps = ref([])
 // 侧边任务进度面板（多智能体）：子任务清单 + 每个子任务的状态
 const taskPanel = ref({
   visible: false,
+  run_id: '',
   tasks: [],      // [{task_id, goal, worker_hint, status: pending|running|done|error, tools: []}]
 })
 function findTask(taskId) {
@@ -605,7 +606,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   conversationId.value = newId
   messages.value = []
   // 切换会话 → 清空上一会话的任务面板（否则面板残留 pin 在右边）
-  taskPanel.value = { visible: false, tasks: [] }
+  taskPanel.value = { visible: false, run_id: '', tasks: [] }
 
   if (newId) {
     try {
@@ -615,9 +616,10 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         role: m.role,
         content: m.content,
         sources: m.meta?.sources || [],
-        meta: (m.meta?.intent || m.meta?.model_name) ? {
+        meta: (m.meta?.intent || m.meta?.model_name || m.meta?.run_id) ? {
           intent: m.meta?.intent || '',
           modelName: m.meta?.model_name || '',
+          runId: m.meta?.run_id || '',
         } : null,
         steps: m.meta?.steps || [],
         stepsExpanded: true,
@@ -662,7 +664,7 @@ async function send() {
   let gotError = ''
   // 重置当前轮次的状态缓冲 + 任务面板
   statusSteps.value = []
-  taskPanel.value = { visible: false, tasks: [] }
+  taskPanel.value = { visible: false, run_id: '', tasks: [] }
 
   try {
     await api.streamChat('/chat/stream', {
@@ -675,12 +677,18 @@ async function send() {
         const m = messages.value[msgIndex]
         messages.value[msgIndex] = {
           ...m,
-          meta: { ...(m.meta || {}), modelName: ev.model_name || m.meta?.modelName || '' },
+          meta: {
+            ...(m.meta || {}),
+            runId: ev.run_id || m.meta?.runId || '',
+            modelName: ev.model_name || m.meta?.modelName || '',
+          },
         }
+        taskPanel.value.run_id = ev.run_id || ''
       } else if (ev.type === 'sub_tasks') {
         // 拆解完成：初始化侧边任务面板的待办清单（全部 pending）
         taskPanel.value = {
           visible: true,
+          run_id: ev.run_id || taskPanel.value.run_id || '',
           tasks: (ev.tasks || []).map(t => ({
             task_id: t.task_id,
             goal: t.goal,
@@ -727,6 +735,7 @@ async function send() {
           meta: {
             intent: ev.intent,
             elapsed: ev.elapsed_seconds,
+            runId: ev.run_id || m.meta?.runId || '',
             modelName: ev.model_name || m.meta?.modelName || '',
           },
           // 兜底：流式中断时 status 事件可能不全，用 done 携带的完整 steps 补齐
