@@ -36,6 +36,27 @@ class ToolDefinition:
         except Exception:
             return False
 
+    def to_llm_schema(self) -> Dict[str, Any]:
+        """本工具的 OpenAI function-call 格式 schema。"""
+        properties: Dict[str, Any] = {}
+        required_args: List[str] = []
+        for arg_name, (type_str, desc, is_req) in self.arg_schema.items():
+            properties[arg_name] = {"type": type_str, "description": desc}
+            if is_req:
+                required_args.append(arg_name)
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required_args,
+                },
+            },
+        }
+
 
 class ToolRegistry:
     """Registry that maps tool names to their definitions."""
@@ -57,6 +78,13 @@ class ToolRegistry:
         if not available_only:
             return list(self._tools.keys())
         return [t.name for t in self._tools.values() if t.is_available()]
+
+    def list_all(self, available_only: bool = True) -> List[ToolDefinition]:
+        """Return all ToolDefinition objects (for schema/prompt building).
+        available_only=True 时只含 check_fn 通过的工具。"""
+        if not available_only:
+            return list(self._tools.values())
+        return [t for t in self._tools.values() if t.is_available()]
 
     def invoke(self, name: str, **kwargs: Any) -> str:
         """Execute a registered tool by name.
@@ -91,29 +119,7 @@ class ToolRegistry:
 
     def to_llm_schema(self) -> List[Dict[str, Any]]:
         """Return a list of tool descriptions in OpenAI function-call format (仅可用工具)."""
-        schema = []
-        for tool in self._tools.values():
-            if not tool.is_available():
-                continue
-            properties: Dict[str, Any] = {}
-            required_args: List[str] = []
-            for arg_name, (type_str, desc, is_req) in tool.arg_schema.items():
-                properties[arg_name] = {"type": type_str, "description": desc}
-                if is_req:
-                    required_args.append(arg_name)
-            schema.append({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required_args,
-                    },
-                },
-            })
-        return schema
+        return [t.to_llm_schema() for t in self.list_all()]
 
     def to_react_prompt(self) -> str:
         """生成 ReAct reasoning prompt 用的工具描述文本（仅含可用工具）。"""

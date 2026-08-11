@@ -4,6 +4,13 @@
     <div class="chat-main">
     <!-- 消息列表 -->
     <div class="chat-messages" ref="msgContainer" :class="{ 'is-empty': messages.length === 0 && !sending }">
+      <!-- 任务面板开关：本轮有任务记录但面板被手动关闭时，提供重新打开的入口 -->
+      <div v-if="taskPanel.tasks.length && !taskPanel.visible" class="task-panel-toggle">
+        <button class="task-panel-toggle-btn" @click="taskPanel.visible = true">
+          <ListChecks :size="14" />
+          任务进度（{{ taskProgress.done }}/{{ taskProgress.total }}）
+        </button>
+      </div>
       <div class="chat-column">
         <!-- 空状态：Yuxi greeting — 轻量大标题 + 说明 -->
         <div v-if="messages.length === 0 && !sending" class="chat-empty">
@@ -142,7 +149,7 @@
     </div>
     </div><!-- /.chat-main -->
 
-    <!-- 侧边任务进度面板（多智能体请求时显示） -->
+    <!-- 侧边任务进度面板（多智能体请求时显示，可手动开/关） -->
     <aside v-if="taskPanel.visible" class="task-panel">
       <div class="task-panel-header">
         <span class="task-panel-title">
@@ -150,7 +157,12 @@
           <CheckCircle2 v-else :size="14" />
           任务进度
         </span>
-        <span class="task-panel-count">{{ taskProgress.done }}/{{ taskProgress.total }} · {{ taskProgress.pct }}%</span>
+        <span class="task-panel-actions">
+          <span class="task-panel-count">{{ taskProgress.done }}/{{ taskProgress.total }} · {{ taskProgress.pct }}%</span>
+          <button class="task-panel-close" title="关闭任务面板" @click="taskPanel.visible = false">
+            <X :size="14" />
+          </button>
+        </span>
       </div>
       <div class="task-panel-bar">
         <div class="task-panel-bar-fill" :style="{ width: taskProgress.pct + '%' }"></div>
@@ -280,7 +292,20 @@ import { ref, reactive, computed, watch, nextTick, onActivated, onMounted, onUnm
 import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
-import { ArrowUp, BookOpen, ChevronDown, ChevronRight, Loader2, CheckCircle2, Plus, Trash2, Cloud, HardDrive } from 'lucide-vue-next'
+import {
+  ArrowUp,
+  BookOpen,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Cloud,
+  HardDrive,
+  ListChecks,
+  Loader2,
+  Plus,
+  Trash2,
+  X,
+} from 'lucide-vue-next'
 import api from '../api'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
@@ -472,6 +497,7 @@ const statusSteps = ref([])
 // 侧边任务进度面板（多智能体）：子任务清单 + 每个子任务的状态
 const taskPanel = ref({
   visible: false,
+  run_id: '',
   tasks: [],      // [{task_id, goal, worker_hint, status: pending|running|done|error, tools: []}]
 })
 function findTask(taskId) {
@@ -579,6 +605,8 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   if (newId === oldId) return
   conversationId.value = newId
   messages.value = []
+  // 切换会话 → 清空上一会话的任务面板（否则面板残留 pin 在右边）
+  taskPanel.value = { visible: false, run_id: '', tasks: [] }
 
   if (newId) {
     try {
@@ -588,9 +616,10 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         role: m.role,
         content: m.content,
         sources: m.meta?.sources || [],
-        meta: (m.meta?.intent || m.meta?.model_name) ? {
+        meta: (m.meta?.intent || m.meta?.model_name || m.meta?.run_id) ? {
           intent: m.meta?.intent || '',
           modelName: m.meta?.model_name || '',
+          runId: m.meta?.run_id || '',
         } : null,
         steps: m.meta?.steps || [],
         stepsExpanded: true,
@@ -635,7 +664,7 @@ async function send() {
   let gotError = ''
   // 重置当前轮次的状态缓冲 + 任务面板
   statusSteps.value = []
-  taskPanel.value = { visible: false, tasks: [] }
+  taskPanel.value = { visible: false, run_id: '', tasks: [] }
 
   try {
     await api.streamChat('/chat/stream', {
@@ -648,12 +677,18 @@ async function send() {
         const m = messages.value[msgIndex]
         messages.value[msgIndex] = {
           ...m,
-          meta: { ...(m.meta || {}), modelName: ev.model_name || m.meta?.modelName || '' },
+          meta: {
+            ...(m.meta || {}),
+            runId: ev.run_id || m.meta?.runId || '',
+            modelName: ev.model_name || m.meta?.modelName || '',
+          },
         }
+        taskPanel.value.run_id = ev.run_id || ''
       } else if (ev.type === 'sub_tasks') {
         // 拆解完成：初始化侧边任务面板的待办清单（全部 pending）
         taskPanel.value = {
           visible: true,
+          run_id: ev.run_id || taskPanel.value.run_id || '',
           tasks: (ev.tasks || []).map(t => ({
             task_id: t.task_id,
             goal: t.goal,
@@ -700,6 +735,7 @@ async function send() {
           meta: {
             intent: ev.intent,
             elapsed: ev.elapsed_seconds,
+            runId: ev.run_id || m.meta?.runId || '',
             modelName: ev.model_name || m.meta?.modelName || '',
           },
           // 兜底：流式中断时 status 事件可能不全，用 done 携带的完整 steps 补齐

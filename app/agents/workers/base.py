@@ -91,7 +91,7 @@ class BaseWorker(ABC):
         registry = get_tool_registry()
         return [
             t.to_llm_schema()
-            for t in registry.list_tools()
+            for t in registry.list_all()
             if t.name in self.tool_names
         ]
 

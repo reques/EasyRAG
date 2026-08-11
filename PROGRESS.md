@@ -100,6 +100,22 @@
 
 来源展示：web_search 输出尾部嵌入 `<!--SOURCES:[...]-->` 机器可读块，tool_execution 解析进 `state.sources`，answer_validation/fallback 统一在最终答案底部追加有序「参考来源」列表（Markdown 链接）。ChatResponse 同时返回结构化 `sources` 字段供前端使用。
 
+### 3B MCP 外部工具接入（2026-08-07）✅
+
+| # | 任务 | 状态 |
+|---|---|---|
+| 1 | MCP SDK 接入（stage1-agent 环境装 `mcp` 2.0.0） | ✅ |
+| 2 | `app/tools/mcp/config.py` — `mcp_servers.json` 声明 server（name/transport/command 或 url/enabled/allowed_tools） | ✅ |
+| 3 | `app/tools/mcp/manager.py` — MCPManager：每 server 独立常驻事件循环线程，list_tools 注册为 `ToolDefinition`（`mcp_<server>_<tool>` 前缀），同步 fn 经 `run_coroutine_threadsafe` 桥接异步 call_tool，start/stop/status 统一启停，stop 注销工具 | ✅ |
+| 4 | `app/tools/mcp/demo_server.py` — 零依赖演示 server（stdio + HTTP 双模式，echo/get_time） | ✅ |
+| 5 | `backend/server/routers/mcp_router.py` — GET /mcp/servers、POST /mcp/servers/{name}/start\|stop、GET /mcp/servers/{name}/tools；main.py lifespan 随应用启停 enabled server | ✅ |
+| 6 | 权限两层：server 级 `allowed_tools` 白名单过滤 + Worker 侧 `tool_names` 白名单（既有机制） | ✅ |
+| 7 | 验证：stdio + HTTP 双传输全链路（连接→list→注册→invoke→stop→注销）、权限过滤、TestClient 路由 200/404 | ✅ |
+
+关键坑（踩过）：**async context manager 的 GC 陷阱** —— `stdio_client()` / `ClientSession()` 是 asynccontextmanager，若作为函数局部变量随返回被 GC，生成器收到 GeneratorExit，子进程关闭、流断开，后续调用报 `Connection closed`。必须把 context manager 引用保存在 handle 实例上（`_transport_cm` / `_session_cm`），stop 时显式 `__aexit__`。
+
+用法：`mcp_servers.json` 登记 server，`GET /api/v1/mcp/servers` 查状态，`POST /api/v1/mcp/servers/{name}/start|stop` 启停。stdio 命令里的 `python` 会被替换为当前解释器（保证子进程有 mcp 包）。
+
 ---
 
 ## 阶段 4（前端先行）：Vue 3 前端

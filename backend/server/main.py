@@ -50,7 +50,23 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("[lifespan] minio init skipped: %s", exc)
 
+    # MCP 外部工具服务：启动所有 enabled 的 server（失败不阻塞应用启动）
+    try:
+        from app.tools.mcp.manager import get_mcp_manager
+        mcp_results = get_mcp_manager().start_all(wait=False)
+        logger.info("[lifespan] MCP servers started: %s", mcp_results)
+    except Exception as exc:
+        logger.warning("[lifespan] MCP init skipped: %s", exc)
+
     yield
+
+    # 清理资源
+    try:
+        from app.tools.mcp.manager import get_mcp_manager
+        get_mcp_manager().stop_all()
+        logger.info("[lifespan] MCP servers stopped")
+    except Exception:
+        pass
 
     # 清理资源
     try:
@@ -88,11 +104,13 @@ def create_app() -> FastAPI:
     from backend.server.routers.chat_router import router as chat_router
     from backend.server.routers.knowledge_router import router as kb_router
     from backend.server.routers.evaluation_router import router as eval_router
+    from backend.server.routers.mcp_router import router as mcp_router
 
     application.include_router(auth_router, prefix="/api/v1")
     application.include_router(chat_router, prefix="/api/v1")
     application.include_router(kb_router, prefix="/api/v1")
     application.include_router(eval_router, prefix="/api/v1")
+    application.include_router(mcp_router, prefix="/api/v1")
 
     # =========================================================================
     # 旧路由（保持兼容）— app/api/routes.py + app/api/kb_routes.py

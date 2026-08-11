@@ -9,7 +9,7 @@ logger = get_logger(__name__)
 
 
 class CodeWorker(BaseWorker):
-    """代码专家 Worker：生成、解释、调试代码，白名单 [calculator, text_tool]。"""
+    """代码专家 Worker：生成、解释、调试代码，白名单 [calculator, text_tool, mcp_demo_echo]。"""
 
     name = "code"
     persona = (
@@ -21,7 +21,15 @@ class CodeWorker(BaseWorker):
         "4. 给出使用示例或测试用例\n"
         "代码风格：遵循 PEP 8，变量命名语义化，函数有类型注解。"
     )
-    tool_names = ["calculator", "text_tool"]
+    # tool_names = ["calculator", "text_tool", "mcp_demo_echo"]
+    tool_names = [
+        "calculator",
+        "text_tool",
+        "mcp_demo_echo",
+        "mcp_filesystem_read_file",
+        "mcp_filesystem_list_directory",
+        "mcp_filesystem_search_files",
+    ]
 
     def run(self, brief: TaskBrief) -> WorkerReport:
         steps = [f"code_worker 接收任务: {brief.goal[:80]}"]

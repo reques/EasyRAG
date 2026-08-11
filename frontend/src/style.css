@@ -519,6 +519,51 @@ button { cursor: pointer; }
   color: var(--gray-500, #6b7280);
   font-variant-numeric: tabular-nums;
 }
+.task-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-panel-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-500, #6b7280);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.task-panel-close:hover {
+  background: var(--gray-150, #e5e7eb);
+  color: var(--gray-1000, #1a1a1a);
+}
+/* 任务面板重新打开的入口按钮（消息区顶部） */
+.task-panel-toggle {
+  display: flex;
+  justify-content: center;
+  padding: 10px 22px 0;
+}
+.task-panel-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--gray-150, #e5e7eb);
+  border-radius: var(--radius-full, 999px);
+  background: var(--gray-0, #fff);
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--gray-600, #4b5563);
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.task-panel-toggle-btn:hover {
+  border-color: var(--main-400, #0b8fae);
+  color: var(--main-700, #046a82);
+}
 .task-panel-bar {
   height: 5px;
   border-radius: var(--radius-full, 999px);

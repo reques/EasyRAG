@@ -1,0 +1,25 @@
+{
+  "servers": [
+    {
+      "name": "demo",
+      "transport": "stdio",
+      "enabled": true,
+      "command": ["python", "-m", "app.tools.mcp.demo_server"],
+      "allowed_tools": ["*"]
+    },
+    {
+      "name": "filesystem",
+      "transport": "stdio",
+      "enabled": true,
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "E:\\Learn_Agent\\develop\\EasyRAG\\volumes"],
+      "allowed_tools": [
+        "read_file",
+        "read_directory",
+        "list_directory",
+        "get_file_info",
+        "search_files",
+        "directory_tree"
+      ]
+    }
+  ]
+}

@@ -215,6 +215,24 @@ class Orchestrator:
                 ),
                 "tool_triggered": False,
                 "sub_tasks": [b.goal for b in briefs],
+                "task_details": [
+                    {
+                        "task_id": b.task_id,
+                        "goal": b.goal,
+                        "worker_hint": b.worker_hint,
+                    }
+                    for b in briefs
+                ],
+                "worker_reports": [
+                    {
+                        "task_id": report.task_id,
+                        "worker_name": report.worker_name,
+                        "status": report.status,
+                        "summary": report.detail or report.summary,
+                        "error": report.error or "",
+                    }
+                    for report in reports
+                ],
                 "steps": steps,
                 "validation_passed": True,
                 "validation_feedback": "",
