@@ -62,10 +62,13 @@ Return ONLY valid JSON in this exact format:
   "confidence": <float 0.0-1.0>,
   "requires_retrieval": <true|false>,
   "requires_tool": <true|false>,
-  "tool_name": "<calculator|datetime_tool|text_tool|web_search|null>",
+  "tool_name": "<one of the available tools below, or null>",
   "tool_args": {{}},
   "reasoning": "<one sentence why>"
 }}
+
+Currently available tools:
+{available_tools}
 
 Intent definitions:
 - knowledge_qa  : question answerable from a stored knowledge base (laws, docs, manuals)
@@ -77,12 +80,8 @@ CRITICAL routing rules:
 - Weather, news, stock prices, exchange rates, "今天/现在/最新" real-time facts → tool_use + web_search, requires_retrieval=false. NEVER route these to knowledge_qa just because a KB exists.
 - "today/yesterday/tomorrow" + a topic → almost always real-time → tool_use + web_search.
 - Only use knowledge_qa when the user asks about content that plausibly lives in uploaded documents (法律条文, 公司文档, 产品手册).
-- For tool_use populate tool_name and tool_args.
-
-Example tool_args for calculator: {{"expression": "12 * 34"}}
-Example tool_args for datetime_tool: {{"format": "%Y-%m-%d"}}
-Example tool_args for text_tool: {{"operation": "word_count", "text": "..."}}
-Example tool_args for web_search: {{"query": "无锡今天天气"}}
+- For tool_use populate tool_name and tool_args. tool_name MUST be one of the available tools listed above — never invent a tool name.
+- When the user explicitly names a tool (e.g. "用 echo 工具..."), use exactly that tool with its correct args.
 """
 )
 

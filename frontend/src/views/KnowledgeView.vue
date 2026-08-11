@@ -1,281 +1,686 @@
 <template>
-  <div class="knowledge-view">
-    <header class="chat-header">
-      <h2><LibraryBig :size="16" /> 知识库管理</h2>
-      <div class="header-actions">
-        <button @click="showCreate = true" class="btn-primary-sm">
-          <Plus :size="14" /> 新建知识库
-        </button>
-      </div>
-    </header>
+  <div class="knowledge-view kbw-shell">
+    <template v-if="!activeKb">
+      <div class="kbw-catalog-scroll">
+        <header class="kbw-page-header">
+          <div>
+            <span class="kbw-eyebrow">KNOWLEDGE WORKSPACE</span>
+            <h1>知识库</h1>
+            <p>集中管理可供 Agent 查阅的资料，并为检索与评估流程做好准备。</p>
+          </div>
+          <button class="kbw-primary-button" @click="showCreate = true">
+            <Plus :size="15" /> 新建知识库
+          </button>
+        </header>
 
-    <!-- 创建知识库弹窗 -->
+        <section class="kbw-overview-grid" aria-label="知识库概览">
+          <article>
+            <span>知识库总数</span>
+            <strong>{{ kbList.length }}</strong>
+            <small>当前账号可访问</small>
+          </article>
+          <article>
+            <span>最近创建</span>
+            <strong>{{ recentlyCreatedCount }}</strong>
+            <small>近 30 天</small>
+          </article>
+          <article>
+            <span>支持格式</span>
+            <strong>9</strong>
+            <small>文档与常见图片</small>
+          </article>
+        </section>
+
+        <section class="kbw-catalog-section">
+          <div class="kbw-section-heading">
+            <div>
+              <h2>全部知识库</h2>
+              <p>{{ filteredKbs.length }} 个结果</p>
+            </div>
+            <label class="kbw-search-box">
+              <Search :size="15" />
+              <input v-model="catalogQuery" type="search" placeholder="搜索名称或描述" />
+            </label>
+          </div>
+
+          <div v-if="loading" class="kbw-state-card">
+            <LoaderCircle :size="22" class="spin" />
+            <strong>正在加载知识库</strong>
+            <span>正在读取当前账号可访问的目录。</span>
+          </div>
+          <div v-else-if="catalogError" class="kbw-state-card is-error">
+            <CircleAlert :size="22" />
+            <strong>知识库加载失败</strong>
+            <span>{{ catalogError }}</span>
+            <button class="kbw-secondary-button" @click="loadKbs">重新加载</button>
+          </div>
+          <div v-else-if="kbList.length === 0" class="kbw-state-card">
+            <Database :size="24" />
+            <strong>还没有知识库</strong>
+            <span>新建一个知识库，然后上传可供 Agent 检索的资料。</span>
+            <button class="kbw-primary-button" @click="showCreate = true">
+              <Plus :size="14" /> 新建知识库
+            </button>
+          </div>
+          <div v-else-if="filteredKbs.length === 0" class="kbw-state-card">
+            <SearchX :size="24" />
+            <strong>没有匹配结果</strong>
+            <span>换一个关键词，或清空当前搜索条件。</span>
+            <button class="kbw-secondary-button" @click="catalogQuery = ''">清空搜索</button>
+          </div>
+          <div v-else class="kbw-library-grid">
+            <button
+              v-for="kb in filteredKbs"
+              :key="kb.id"
+              class="kbw-library-card"
+              @click="selectKb(kb)"
+            >
+              <span class="kbw-library-icon"><Database :size="20" /></span>
+              <span class="kbw-library-card-main">
+                <span class="kbw-library-title-row">
+                  <strong>{{ kb.name }}</strong>
+                  <ChevronRight :size="16" />
+                </span>
+                <span class="kbw-library-description">
+                  {{ kb.description || '尚未填写知识库描述。' }}
+                </span>
+                <span class="kbw-library-meta">
+                  <span><Layers3 :size="12" /> {{ shortCollectionName(kb.collection_name) }}</span>
+                  <span><CalendarDays :size="12" /> {{ formatDate(kb.created_at) }}</span>
+                </span>
+              </span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </template>
+
+    <template v-else>
+      <header class="kbw-detail-header">
+        <button class="kbw-back-button" title="返回知识库列表" @click="leaveKb">
+          <ArrowLeft :size="18" />
+        </button>
+        <span class="kbw-detail-icon"><Database :size="22" /></span>
+        <div class="kbw-detail-copy">
+          <div class="kbw-detail-title-row">
+            <h1>{{ activeKb.name }}</h1>
+            <span class="kbw-live-badge"><i></i> 可用</span>
+          </div>
+          <p>{{ activeKb.description || '这个知识库暂时没有描述。' }}</p>
+        </div>
+        <div class="kbw-detail-actions">
+          <button class="kbw-secondary-button" @click="copyKbId">
+            <Copy :size="14" /> 复制 ID
+          </button>
+          <button class="kbw-primary-button" @click="frontendOnly('知识库编辑')">
+            <Pencil :size="14" /> 编辑
+          </button>
+        </div>
+      </header>
+
+      <nav class="kbw-tabs" aria-label="知识库功能">
+        <button
+          v-for="tab in tabItems"
+          :key="tab.id"
+          :class="{ active: activeTab === tab.id }"
+          @click="selectTab(tab.id)"
+        >
+          <component :is="tab.icon" :size="16" />
+          <span>{{ tab.label }}</span>
+          <em v-if="tab.id !== 'files'">前端</em>
+        </button>
+      </nav>
+
+      <main class="kbw-detail-scroll">
+        <section v-if="activeTab === 'files'" class="kbw-workspace-section">
+          <div class="kbw-workspace-heading">
+            <div>
+              <span class="kbw-eyebrow">DOCUMENTS</span>
+              <h2>文件管理</h2>
+              <p>上传、查看和管理 Agent 可检索的源文件。</p>
+            </div>
+            <div class="kbw-heading-actions">
+              <button class="kbw-secondary-button" :disabled="filesLoading" @click="loadFiles">
+                <RefreshCw :size="14" :class="{ spin: filesLoading }" /> 刷新
+              </button>
+              <button class="kbw-primary-button" @click="showUpload = true">
+                <Upload :size="14" /> 上传文件
+              </button>
+            </div>
+          </div>
+
+          <div class="kbw-metric-grid">
+            <article>
+              <span class="kbw-metric-icon"><FileStack :size="17" /></span>
+              <div><small>文件总数</small><strong>{{ fileList.length }}</strong></div>
+            </article>
+            <article>
+              <span class="kbw-metric-icon"><CheckCircle2 :size="17" /></span>
+              <div><small>索引完成</small><strong>{{ completedFiles.length }}</strong></div>
+            </article>
+            <article>
+              <span class="kbw-metric-icon"><Blocks :size="17" /></span>
+              <div><small>内容分块</small><strong>{{ formatNumber(totalChunks) }}</strong></div>
+            </article>
+            <article>
+              <span class="kbw-metric-icon"><Binary :size="17" /></span>
+              <div><small>字符总数</small><strong>{{ formatCompactNumber(totalCharacters) }}</strong></div>
+            </article>
+          </div>
+
+          <div v-if="deleteSuccess" class="kbw-inline-notice is-success">
+            <CheckCircle2 :size="15" /> {{ deleteSuccess }}
+          </div>
+
+          <div class="kbw-table-card">
+            <div class="kbw-table-toolbar">
+              <div>
+                <strong>源文件</strong>
+                <span>{{ fileList.length }} 项</span>
+              </div>
+              <span class="kbw-id-label">ID {{ shortId(activeKb.id) }}</span>
+            </div>
+            <div v-if="filesLoading" class="kbw-table-state">
+              <LoaderCircle :size="20" class="spin" /> 正在读取文件列表
+            </div>
+            <div v-else-if="fileList.length === 0" class="kbw-table-state is-empty">
+              <FileUp :size="25" />
+              <strong>知识库中还没有文件</strong>
+              <span>支持 TXT、Markdown、PDF、DOCX 和常见图片格式。</span>
+              <button class="kbw-primary-button" @click="showUpload = true">
+                <Upload :size="14" /> 上传第一个文件
+              </button>
+            </div>
+            <div v-else class="kbw-table-wrap">
+              <table class="kbw-file-table">
+                <thead>
+                  <tr>
+                    <th>文件名</th>
+                    <th>类型</th>
+                    <th>分块</th>
+                    <th>字符数</th>
+                    <th>状态</th>
+                    <th>上传时间</th>
+                    <th><span class="sr-only">操作</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="file in fileList" :key="file.id">
+                    <td>
+                      <button
+                        class="kbw-file-link"
+                        :disabled="file.status !== 'completed'"
+                        :title="file.status === 'completed' ? '预览文件' : '索引完成后可预览'"
+                        @click="openPreview(file)"
+                      >
+                        <span><FileText :size="16" /></span>
+                        <span><strong>{{ file.filename }}</strong><small>{{ shortId(file.id) }}</small></span>
+                      </button>
+                    </td>
+                    <td><span class="kbw-type-badge">{{ file.file_type || 'FILE' }}</span></td>
+                    <td>{{ formatNumber(file.chunk_count) }}</td>
+                    <td>{{ formatNumber(file.char_count) }}</td>
+                    <td>
+                      <span :class="['kbw-status-badge', file.status]">
+                        <i></i>{{ statusLabel(file.status) }}
+                      </span>
+                    </td>
+                    <td>{{ formatDate(file.created_at) }}</td>
+                    <td>
+                      <button class="kbw-icon-danger" title="删除文件" @click="confirmDelete(file)">
+                        <Trash2 :size="15" />
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section v-else-if="activeTab === 'retrieval'" class="kbw-workspace-section">
+          <div class="kbw-workspace-heading">
+            <div>
+              <span class="kbw-eyebrow">RETRIEVAL LAB</span>
+              <h2>检索测试</h2>
+              <p>在接入后端前先确定测试参数、结果结构和交互方式。</p>
+            </div>
+            <span class="kbw-module-status"><CircleDashed :size="14" /> 接口待接入</span>
+          </div>
+
+          <div class="kbw-split-layout">
+            <article class="kbw-panel-card kbw-query-card">
+              <div class="kbw-panel-title">
+                <div><ScanSearch :size="17" /><strong>测试查询</strong></div>
+                <span>配置</span>
+              </div>
+              <label class="kbw-field">
+                <span>问题</span>
+                <textarea v-model="retrievalQuery" rows="6" placeholder="输入一个真实问题，例如：这份文档的核心结论是什么？"></textarea>
+              </label>
+              <div class="kbw-field-grid">
+                <label class="kbw-field">
+                  <span>Top K</span>
+                  <select v-model.number="retrievalTopK">
+                    <option :value="3">3</option>
+                    <option :value="5">5</option>
+                    <option :value="10">10</option>
+                    <option :value="20">20</option>
+                  </select>
+                </label>
+                <label class="kbw-field">
+                  <span>最低相似度</span>
+                  <select v-model.number="retrievalThreshold">
+                    <option :value="0">不过滤</option>
+                    <option :value="0.3">0.30</option>
+                    <option :value="0.5">0.50</option>
+                    <option :value="0.7">0.70</option>
+                  </select>
+                </label>
+              </div>
+              <button class="kbw-primary-button is-wide" @click="runRetrievalPreview">
+                <Play :size="14" /> 开始测试
+              </button>
+            </article>
+
+            <article class="kbw-panel-card kbw-contract-card">
+              <div class="kbw-panel-title">
+                <div><Braces :size="17" /><strong>请求预览</strong></div>
+                <span>供后端接入</span>
+              </div>
+              <pre>{{ retrievalContract }}</pre>
+              <div class="kbw-contract-foot">
+                <Info :size="14" />
+                <span>当前仅生成前端请求参数，不会调用未实现的检索接口。</span>
+              </div>
+            </article>
+          </div>
+
+          <article class="kbw-panel-card kbw-result-panel">
+            <div class="kbw-panel-title">
+              <div><ListFilter :size="17" /><strong>召回结果</strong></div>
+              <span>0 条</span>
+            </div>
+            <div class="kbw-result-empty">
+              <Waypoints :size="28" />
+              <strong>{{ retrievalAttempted ? '检索接口尚未接入' : '等待一次测试查询' }}</strong>
+              <span>{{ retrievalAttempted ? '前端参数已经准备好，后续接入接口即可展示真实分块与相似度。' : '结果区将展示命中文件、分块正文、相似度和元数据。' }}</span>
+            </div>
+          </article>
+        </section>
+
+        <section v-else-if="activeTab === 'graph'" class="kbw-workspace-section">
+          <div class="kbw-workspace-heading">
+            <div>
+              <span class="kbw-eyebrow">KNOWLEDGE GRAPH</span>
+              <h2>知识图谱</h2>
+              <p>先用真实文件目录预览图谱布局，实体与关系数据将在后端阶段接入。</p>
+            </div>
+            <span class="kbw-module-status"><CircleDashed :size="14" /> 图谱数据待接入</span>
+          </div>
+
+          <div class="kbw-graph-layout">
+            <article class="kbw-panel-card kbw-graph-canvas">
+              <div class="kbw-panel-title">
+                <div><Network :size="17" /><strong>目录关系预览</strong></div>
+                <span>{{ graphPreviewNodes.length + 1 }} 个节点</span>
+              </div>
+              <div v-if="graphPreviewNodes.length" class="kbw-graph-stage">
+                <svg viewBox="0 0 680 350" role="img" aria-label="知识库与文件关系预览">
+                  <line
+                    v-for="node in graphPreviewNodes"
+                    :key="`edge-${node.id}`"
+                    x1="340" y1="175" :x2="node.x" :y2="node.y"
+                  />
+                  <g class="root-node">
+                    <circle cx="340" cy="175" r="48" />
+                    <text x="340" y="170">知识库</text>
+                    <text x="340" y="190">{{ truncate(activeKb.name, 10) }}</text>
+                  </g>
+                  <g v-for="node in graphPreviewNodes" :key="node.id" class="file-node">
+                    <circle :cx="node.x" :cy="node.y" r="34" />
+                    <text :x="node.x" :y="node.y - 4">{{ node.type }}</text>
+                    <text :x="node.x" :y="node.y + 13">{{ node.label }}</text>
+                  </g>
+                </svg>
+              </div>
+              <div v-else class="kbw-result-empty">
+                <Network :size="28" />
+                <strong>上传文件后显示目录关系</strong>
+                <span>实体抽取与跨文件关系将在后端图谱接口接入后展示。</span>
+              </div>
+            </article>
+            <aside class="kbw-panel-card kbw-graph-sidebar">
+              <div class="kbw-panel-title">
+                <div><PanelRight :size="17" /><strong>图谱概览</strong></div>
+              </div>
+              <dl>
+                <div><dt>目录节点</dt><dd>{{ graphPreviewNodes.length + 1 }}</dd></div>
+                <div><dt>文件关系</dt><dd>{{ graphPreviewNodes.length }}</dd></div>
+                <div><dt>实体节点</dt><dd>—</dd></div>
+                <div><dt>跨文件关系</dt><dd>—</dd></div>
+              </dl>
+              <div class="kbw-sidebar-note">
+                <Sparkles :size="15" />
+                <p><strong>下一阶段</strong><span>接入实体、关系、置信度和来源分块。</span></p>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section v-else-if="activeTab === 'map'" class="kbw-workspace-section">
+          <div class="kbw-workspace-heading">
+            <div>
+              <span class="kbw-eyebrow">KNOWLEDGE MAP</span>
+              <h2>知识导图</h2>
+              <p>以知识库为根节点整理文件目录，后续可扩展到章节和知识点。</p>
+            </div>
+            <span class="kbw-module-status"><CircleDashed :size="14" /> 内容解析待接入</span>
+          </div>
+          <article class="kbw-panel-card kbw-map-card">
+            <div class="kbw-map-root">
+              <span><Database :size="19" /></span>
+              <div><small>知识库</small><strong>{{ activeKb.name }}</strong></div>
+            </div>
+            <div v-if="fileList.length" class="kbw-map-branches">
+              <div v-for="file in fileList" :key="file.id" class="kbw-map-branch">
+                <i></i>
+                <div>
+                  <span><FileText :size="15" /></span>
+                  <p><strong>{{ file.filename }}</strong><small>{{ statusLabel(file.status) }} · {{ formatNumber(file.chunk_count) }} 个分块</small></p>
+                </div>
+              </div>
+            </div>
+            <div v-else class="kbw-result-empty">
+              <GitBranch :size="28" />
+              <strong>暂无可整理的文件</strong>
+              <span>上传文件后，这里会先显示文件级目录结构。</span>
+            </div>
+          </article>
+        </section>
+
+        <section v-else-if="activeTab === 'evaluation'" class="kbw-workspace-section">
+          <div class="kbw-workspace-heading">
+            <div>
+              <span class="kbw-eyebrow">RAG EVALUATION</span>
+              <h2>RAG 评估</h2>
+              <p>评估检索召回和回答质量；当前先完成页面、状态与配置流程。</p>
+            </div>
+            <button class="kbw-primary-button" @click="openEvaluationSetup">
+              <Play :size="14" /> 开始评估
+            </button>
+          </div>
+
+          <article class="kbw-evaluation-card">
+            <div class="kbw-evaluation-main">
+              <div class="kbw-score-ring"><strong>—</strong><span>暂无评分</span></div>
+              <div>
+                <span class="kbw-module-status"><CircleDashed :size="14" /> 等待配置</span>
+                <h3>还没有评估运行记录</h3>
+                <p>选择评估基准和指标后即可创建首次运行；提交动作将在后端接口接入后启用。</p>
+                <div class="kbw-readiness-row">
+                  <span><CheckCircle2 :size="13" /> {{ completedFiles.length }} 个可评估文件</span>
+                  <span><ListChecks :size="13" /> 0 个评估基准</span>
+                </div>
+              </div>
+            </div>
+            <div class="kbw-evaluation-metrics">
+              <div><span>Recall@10</span><strong>—</strong><small>召回率</small></div>
+              <div><span>耗时</span><strong>—</strong><small>运行耗时</small></div>
+              <div><span>数据量</span><strong>0</strong><small>评估问题</small></div>
+              <div><span>完成率</span><strong>—</strong><small>执行进度</small></div>
+            </div>
+          </article>
+
+          <article class="kbw-panel-card kbw-history-card">
+            <div class="kbw-panel-title">
+              <div><History :size="17" /><strong>历史评估记录</strong></div>
+              <button class="kbw-text-button" @click="frontendOnly('评估记录刷新')"><RefreshCw :size="13" /> 刷新</button>
+            </div>
+            <div class="kbw-history-table-head">
+              <span>评估名称</span><span>评估基准</span><span>数据量</span><span>耗时</span><span>Recall@10</span><span>综合评分</span><span>状态</span>
+            </div>
+            <div class="kbw-result-empty is-compact">
+              <BarChart3 :size="25" />
+              <strong>暂无历史评估</strong>
+              <span>运行结果会按时间保留在这里。</span>
+            </div>
+          </article>
+        </section>
+
+        <section v-else class="kbw-workspace-section">
+          <div class="kbw-workspace-heading">
+            <div>
+              <span class="kbw-eyebrow">EVALUATION STANDARD</span>
+              <h2>评估基准</h2>
+              <p>定义评估数据集和指标组合，为 RAG 评估提供可复用标准。</p>
+            </div>
+            <button class="kbw-primary-button" @click="frontendOnly('新建评估基准')">
+              <Plus :size="14" /> 新建基准
+            </button>
+          </div>
+
+          <div class="kbw-criteria-grid">
+            <article v-for="criterion in criteria" :key="criterion.id" class="kbw-criterion-card">
+              <div>
+                <span><component :is="criterion.icon" :size="17" /></span>
+                <button
+                  class="kbw-toggle"
+                  :class="{ active: criterion.enabled }"
+                  :aria-pressed="criterion.enabled"
+                  @click="toggleCriterion(criterion)"
+                ><i></i></button>
+              </div>
+              <strong>{{ criterion.name }}</strong>
+              <p>{{ criterion.description }}</p>
+              <small>{{ criterion.group }}</small>
+            </article>
+          </div>
+
+          <article class="kbw-panel-card kbw-baseline-card">
+            <div class="kbw-panel-title">
+              <div><ClipboardCheck :size="17" /><strong>评估数据集</strong></div>
+              <span>0 个</span>
+            </div>
+            <div class="kbw-result-empty">
+              <FileQuestion :size="28" />
+              <strong>还没有评估基准</strong>
+              <span>后续可上传“问题、期望答案、相关文档”组成的数据集。</span>
+              <button class="kbw-secondary-button" @click="frontendOnly('评估基准上传')">了解待接入字段</button>
+            </div>
+          </article>
+        </section>
+      </main>
+    </template>
+
+    <div v-if="moduleNotice" class="kbw-toast" role="status">
+      <Info :size="15" /> {{ moduleNotice }}
+    </div>
+
     <div v-if="showCreate" class="modal-overlay" @click.self="showCreate = false">
-      <div class="modal">
-        <h3>新建知识库</h3>
-        <label>
+      <div class="modal kbw-modal">
+        <div class="kbw-modal-heading">
+          <div><span><Database :size="18" /></span><div><h3>新建知识库</h3><p>创建后即可进入详情页上传文件。</p></div></div>
+          <button @click="showCreate = false"><X :size="17" /></button>
+        </div>
+        <label class="kbw-field">
           <span>名称</span>
-          <input v-model="newKb.name" placeholder="我的知识库" />
+          <input v-model="newKb.name" type="text" maxlength="80" placeholder="例如：产品技术文档" @keyup.enter="createKb" />
         </label>
-        <label>
-          <span>描述（选填）</span>
-          <input v-model="newKb.description" placeholder="简要描述…" />
+        <label class="kbw-field">
+          <span>描述（可选）</span>
+          <textarea v-model="newKb.description" rows="3" maxlength="300" placeholder="说明这个知识库收录什么内容"></textarea>
         </label>
-        <p v-if="createError" class="auth-error">{{ createError }}</p>
+        <p v-if="createError" class="kbw-form-error">{{ createError }}</p>
         <div class="modal-actions">
-          <button @click="showCreate = false" class="btn-secondary">取消</button>
-          <button @click="createKb" :disabled="creating" class="btn-primary-sm">
-            {{ creating ? '创建中…' : '创建' }}
+          <button class="kbw-secondary-button" @click="showCreate = false">取消</button>
+          <button class="kbw-primary-button" :disabled="creating || !newKb.name.trim()" @click="createKb">
+            <LoaderCircle v-if="creating" :size="14" class="spin" />
+            <Plus v-else :size="14" /> {{ creating ? '创建中' : '创建知识库' }}
           </button>
         </div>
       </div>
     </div>
 
-    <!-- 文件上传弹窗 -->
     <div v-if="showUpload" class="modal-overlay" @click.self="closeUpload">
-      <div class="modal">
-        <h3>上传文档到「{{ activeKb?.name }}」</h3>
+      <div class="modal kbw-modal">
+        <div class="kbw-modal-heading">
+          <div><span><FileUp :size="18" /></span><div><h3>上传文件</h3><p>上传到「{{ activeKb?.name }}」</p></div></div>
+          <button :disabled="uploading && uploadPhase === 'transferring'" @click="closeUpload"><X :size="17" /></button>
+        </div>
         <label
-          class="file-label"
+          class="file-label kbw-dropzone"
           :class="{ 'file-label--dragover': dragOver, 'file-label--has-file': uploadFile }"
           @dragover.prevent="onDragOver"
           @dragleave.prevent="onDragLeave"
           @drop.prevent="onDrop"
         >
-          <input type="file" @change="onFileSelect" :disabled="uploading" accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.bmp,.webp" />
+          <input type="file" :disabled="uploading" accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.bmp,.webp" @change="onFileSelect" />
           <span v-if="!uploadFile" class="file-label-hint">
-            <UploadCloud :size="20" class="file-label-icon" />
-            {{ dragOver ? '松开以上传' : '点击选择或拖拽文件到此处' }}
-            <em>.txt .md .pdf .docx 图片</em>
+            <UploadCloud :size="23" class="file-label-icon" />
+            <strong>{{ dragOver ? '松开以上传' : '点击选择或拖拽文件到这里' }}</strong>
+            <em>TXT、MD、PDF、DOCX 与常见图片</em>
           </span>
-          <span v-else>📄 {{ uploadFile.name }}<span class="file-size-hint">（{{ formatSize(uploadFile.size) }}）</span></span>
+          <span v-else class="kbw-selected-file">
+            <FileText :size="20" /><span><strong>{{ uploadFile.name }}</strong><small>{{ formatSize(uploadFile.size) }}</small></span>
+          </span>
         </label>
-
-        <!-- 进度条：传输阶段 + 索引阶段 -->
         <div v-if="uploading || uploadPhase !== 'idle'" class="upload-progress">
-          <div class="upload-progress-label">
-            <span>{{ progressLabel }}</span>
-            <span>{{ displayProgress }}%</span>
-          </div>
+          <div class="upload-progress-label"><span>{{ progressLabel }}</span><span>{{ displayProgress }}%</span></div>
           <div class="progress-track">
             <div
               class="progress-fill"
               :class="{ indeterminate: uploadPhase === 'indexing' && indexProgress === 0, failed: uploadPhase === 'failed' }"
-              :style="{ width: displayProgress + '%' }"
+              :style="{ width: `${displayProgress}%` }"
             ></div>
           </div>
         </div>
-
-        <p v-if="uploadMsg" :class="uploadOk ? 'auth-success' : 'auth-error'">{{ uploadMsg }}</p>
+        <p v-if="uploadMsg" :class="['kbw-inline-notice', uploadOk ? 'is-success' : 'is-error']">{{ uploadMsg }}</p>
         <div class="modal-actions">
-          <button @click="closeUpload" :disabled="uploading && uploadPhase === 'transferring'" class="btn-secondary">
+          <button class="kbw-secondary-button" :disabled="uploading && uploadPhase === 'transferring'" @click="closeUpload">
             {{ uploading ? '后台继续' : '关闭' }}
           </button>
-          <button @click="doUpload" :disabled="!uploadFile || uploading" class="btn-primary-sm">
-            {{ uploading ? '处理中…' : '上传并索引' }}
+          <button class="kbw-primary-button" :disabled="!uploadFile || uploading" @click="doUpload">
+            <LoaderCircle v-if="uploading" :size="14" class="spin" />
+            <Upload v-else :size="14" /> {{ uploading ? '处理中' : '上传并索引' }}
           </button>
         </div>
       </div>
     </div>
 
-    <!-- 文件预览弹窗 -->
     <div v-if="showPreview" class="modal-overlay" @click.self="closePreview">
-      <div class="modal preview-modal">
-        <div class="preview-header">
-          <h3>
-            <FileText :size="16" />
-            {{ previewFile?.filename }}
-          </h3>
-          <button @click="closePreview" class="btn-secondary">&times;</button>
+      <div class="modal preview-modal kbw-preview-modal">
+        <div class="preview-header kbw-preview-header">
+          <div><span><FileText :size="18" /></span><div><h3>{{ previewFile?.filename }}</h3><p>{{ previewFile?.file_type?.toUpperCase() }} · {{ formatNumber(previewFile?.char_count) }} 字符</p></div></div>
+          <button class="kbw-icon-button" @click="closePreview"><X :size="17" /></button>
         </div>
-        <div v-if="previewLoading" class="preview-loading">加载中…</div>
+        <div v-if="previewLoading" class="preview-loading"><LoaderCircle :size="20" class="spin" /> 正在加载预览</div>
         <div v-else-if="previewError" class="preview-error">{{ previewError }}</div>
-        <!-- PDF / 图片：浏览器原生渲染 -->
         <div v-else-if="previewContentType === 'binary'" class="preview-binary-wrap">
           <iframe v-if="previewFile?.file_type === 'pdf'" :src="rawUrl" class="preview-frame" />
           <img v-else :src="rawUrl" :alt="previewFile?.filename" class="preview-image" />
         </div>
-        <!-- 文本预览 (txt/md/docx) -->
-        <div v-else class="preview-text-wrap">
-          <pre class="preview-text">{{ previewText }}</pre>
-        </div>
+        <div v-else class="preview-text-wrap"><pre class="preview-text">{{ previewText }}</pre></div>
       </div>
     </div>
 
-    <!-- 知识库列表 -->
-    <div v-if="loading" class="chat-empty"><p>加载中…</p></div>
-
-    <div v-else-if="kbList.length === 0" class="chat-empty">
-      <h3>暂无知识库</h3>
-      <p>点击上方按钮创建你的第一个知识库</p>
-    </div>
-
-    <div v-else class="kb-grid">
-      <div
-        v-for="kb in kbList"
-        :key="kb.id"
-        class="kb-card"
-        :class="{ active: activeKb?.id === kb.id }"
-        @click="selectKb(kb)"
-      >
-        <div class="kb-card-header">
-          <span class="kb-icon"><FolderOpen :size="17" /></span>
-          <strong>{{ kb.name }}</strong>
-        </div>
-        <p v-if="kb.description" class="kb-desc">{{ kb.description }}</p>
-        <div class="kb-meta">
-          <span>集合: {{ kb.collection_name }}</span>
-          <span>创建: {{ kb.created_at?.slice(0, 10) }}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 文件列表 -->
-    <div v-if="activeKb" class="kb-files-section">
-      <div class="kb-files-header">
-        <h3>「{{ activeKb.name }}」中的文件</h3>
-        <button @click="showUpload = true" class="btn-primary-sm">
-          <Upload :size="14" /> 上传文件
-        </button>
-      </div>
-      <!-- 删除成功提示 -->
-      <div v-if="deleteSuccess" class="delete-success">
-        <span>✓</span> {{ deleteSuccess }}
-      </div>
-      <div v-if="filesLoading" style="color:#888;padding:20px">加载中…</div>
-      <div v-else-if="fileList.length === 0" style="color:#888;padding:20px">暂无文件</div>
-      <table v-else class="file-table">
-        <thead>
-          <tr>
-            <th>文件名</th>
-            <th>类型</th>
-            <th>分块数</th>
-            <th>字符数</th>
-            <th>状态</th>
-            <th>上传时间</th>
-            <th style="width:60px"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="f in fileList"
-            :key="f.id"
-            class="file-row"
-          >
-            <td class="file-name-cell" @click.stop="openPreview(f)">
-              <FileText :size="14" class="file-icon" />
-              {{ f.filename }}
-            </td>
-            <td><span class="file-type-badge">{{ f.file_type }}</span></td>
-            <td>{{ f.chunk_count }}</td>
-            <td>{{ f.char_count.toLocaleString() }}</td>
-            <td><span :class="['status-badge', f.status]">{{ f.status }}</span></td>
-            <td>{{ f.created_at?.slice(0, 10) }}</td>
-            <td>
-              <button @click.stop="confirmDelete(f)" class="btn-icon-danger" title="删除文件">
-                <Trash2 :size="14" />
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-    <!-- 删除确认弹窗 -->
     <div v-if="showDeleteConfirm" class="modal-overlay" @click.self="showDeleteConfirm = false">
-      <div class="modal">
-        <h3>确认删除</h3>
-        <p class="delete-warning">
-          确定要删除文件「<strong>{{ deleteTarget?.filename }}</strong>」吗？<br/>
-          此操作将同时删除向量索引和存储的源文件，不可恢复。
-        </p>
+      <div class="modal kbw-modal kbw-danger-modal">
+        <div class="kbw-modal-heading">
+          <div><span><Trash2 :size="18" /></span><div><h3>删除文件</h3><p>此操作不可恢复</p></div></div>
+          <button @click="showDeleteConfirm = false"><X :size="17" /></button>
+        </div>
+        <p class="delete-warning">确定删除「<strong>{{ deleteTarget?.filename }}</strong>」吗？源文件和对应向量索引都会被删除。</p>
         <div class="modal-actions">
-          <button @click="showDeleteConfirm = false" class="btn-secondary">取消</button>
-          <button @click="doDelete" :disabled="deleting" class="btn-danger-sm">
-            {{ deleting ? '删除中…' : '确认删除' }}
+          <button class="kbw-secondary-button" @click="showDeleteConfirm = false">取消</button>
+          <button class="btn-danger-sm" :disabled="deleting" @click="doDelete">
+            <LoaderCircle v-if="deleting" :size="14" class="spin" />
+            <Trash2 v-else :size="14" /> {{ deleting ? '删除中' : '确认删除' }}
           </button>
         </div>
       </div>
     </div>
+
+    <div v-if="showEvaluationSetup" class="modal-overlay" @click.self="showEvaluationSetup = false">
+      <div class="modal kbw-modal kbw-eval-modal">
+        <div class="kbw-modal-heading">
+          <div><span><BarChart3 :size="18" /></span><div><h3>配置 RAG 评估</h3><p>前端配置预览，暂不提交运行。</p></div></div>
+          <button @click="showEvaluationSetup = false"><X :size="17" /></button>
+        </div>
+        <label class="kbw-field">
+          <span>评估基准</span>
+          <select disabled><option>暂无基准，请先在“评估基准”页创建</option></select>
+        </label>
+        <div class="kbw-eval-checks">
+          <span>评估指标</span>
+          <label v-for="criterion in enabledCriteria" :key="criterion.id">
+            <input type="checkbox" checked />
+            <span><strong>{{ criterion.name }}</strong><small>{{ criterion.group }}</small></span>
+          </label>
+        </div>
+        <div class="kbw-inline-notice"><Info :size="14" /> 后端接入后，此处将创建评估运行并实时更新进度。</div>
+        <div class="modal-actions">
+          <button class="kbw-secondary-button" @click="showEvaluationSetup = false">取消</button>
+          <button class="kbw-primary-button" @click="frontendOnly('RAG 评估运行'); showEvaluationSetup = false">
+            <Play :size="14" /> 保存前端配置
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { LibraryBig, Plus, FolderOpen, Upload, UploadCloud, FileText, Trash2 } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  ArrowLeft, BarChart3, Binary, Blocks, Braces, CalendarDays, CheckCircle2,
+  ChevronRight, CircleAlert, CircleDashed, ClipboardCheck, Copy, Database,
+  FileQuestion, FileStack, FileText, FileUp, GitBranch, History, Info,
+  Layers3, ListChecks, ListFilter, LoaderCircle, Network, PanelRight, Pencil,
+  Play, Plus, RefreshCw, ScanSearch, Search, SearchX, Sparkles, Trash2, Upload,
+  UploadCloud, Waypoints, X,
+} from 'lucide-vue-next'
 import api from '../api'
 
 const route = useRoute()
+const router = useRouter()
+
+const tabItems = [
+  { id: 'files', label: '文件管理', icon: FileText },
+  { id: 'retrieval', label: '检索测试', icon: Search },
+  { id: 'graph', label: '知识图谱', icon: Network },
+  { id: 'map', label: '知识导图', icon: GitBranch },
+  { id: 'evaluation', label: 'RAG 评估', icon: BarChart3 },
+  { id: 'benchmarks', label: '评估基准', icon: ClipboardCheck },
+]
+const validTabs = new Set(tabItems.map((tab) => tab.id))
 
 const kbList = ref([])
 const activeKb = ref(null)
+const activeTab = ref('files')
 const fileList = ref([])
 const loading = ref(true)
 const filesLoading = ref(false)
+const catalogError = ref('')
+const catalogQuery = ref('')
 
-// 创建
 const showCreate = ref(false)
 const newKb = reactive({ name: '', description: '' })
 const creating = ref(false)
 const createError = ref('')
 
-// 上传
 const showUpload = ref(false)
 const uploadFile = ref(null)
 const uploading = ref(false)
 const uploadMsg = ref('')
 const uploadOk = ref(false)
-// 进度条状态: idle | transferring | indexing | done | failed
 const uploadPhase = ref('idle')
-const transferProgress = ref(0)   // HTTP 传输进度 0-100（真实，axios 回调）
-const indexProgress = ref(0)      // 后端索引进度 0-100（轮询 /files 接口）
+const transferProgress = ref(0)
+const indexProgress = ref(0)
+const dragOver = ref(false)
 let pollTimer = null
 
-const displayProgress = computed(() => {
-  if (uploadPhase.value === 'transferring') return transferProgress.value
-  if (uploadPhase.value === 'indexing') return Math.max(indexProgress.value, 5)
-  if (uploadPhase.value === 'done') return 100
-  if (uploadPhase.value === 'failed') return 100
-  return 0
-})
-
-const progressLabel = computed(() => {
-  switch (uploadPhase.value) {
-    case 'transferring': return '上传文件中…'
-    case 'indexing': return indexProgress.value > 0 ? '索引中（解析/向量化/图谱）…' : '排队等待索引…'
-    case 'done': return '完成'
-    case 'failed': return '索引失败'
-    default: return ''
-  }
-})
-
-function formatSize(bytes) {
-  if (!bytes && bytes !== 0) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function closeUpload() {
-  // 传输阶段不允许关（关了请求也断了）；索引阶段可关，后台继续，文件列表里仍能看到进度
-  if (uploading.value && uploadPhase.value === 'transferring') return
-  stopPolling()
-  showUpload.value = false
-  uploadMsg.value = ''
-  dragOver.value = false
-  if (!uploading.value) {
-    uploadPhase.value = 'idle'
-    transferProgress.value = 0
-    indexProgress.value = 0
-  }
-}
-
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-}
-
-// 预览
 const showPreview = ref(false)
 const previewFile = ref(null)
 const previewLoading = ref(false)
@@ -284,79 +689,292 @@ const previewText = ref('')
 const previewContentType = ref('')
 const rawUrl = ref('')
 
-// 删除
 const showDeleteConfirm = ref(false)
 const deleteTarget = ref(null)
 const deleting = ref(false)
 const deleteSuccess = ref('')
 
+const retrievalQuery = ref('')
+const retrievalTopK = ref(5)
+const retrievalThreshold = ref(0.3)
+const retrievalAttempted = ref(false)
+const showEvaluationSetup = ref(false)
+const moduleNotice = ref('')
+let noticeTimer = null
+
+const criteria = reactive([
+  { id: 'recall', name: 'Recall@K', description: '衡量相关内容是否被检索到。', group: '检索质量', icon: ScanSearch, enabled: true },
+  { id: 'mrr', name: 'MRR', description: '衡量首个相关结果的排序位置。', group: '排序质量', icon: ListFilter, enabled: true },
+  { id: 'relevance', name: '上下文相关性', description: '判断召回内容与问题的相关程度。', group: '语义质量', icon: Waypoints, enabled: true },
+  { id: 'faithfulness', name: '回答忠实度', description: '检查回答是否得到上下文支持。', group: '生成质量', icon: CheckCircle2, enabled: true },
+])
+
+const ACCEPT_EXTS = ['.txt', '.md', '.pdf', '.docx', '.png', '.jpg', '.jpeg', '.bmp', '.webp']
+
+const filteredKbs = computed(() => {
+  const keyword = catalogQuery.value.trim().toLowerCase()
+  if (!keyword) return kbList.value
+  return kbList.value.filter((kb) => `${kb.name || ''} ${kb.description || ''}`.toLowerCase().includes(keyword))
+})
+
+const recentlyCreatedCount = computed(() => {
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
+  return kbList.value.filter((kb) => {
+    const time = Date.parse(kb.created_at)
+    return Number.isFinite(time) && time >= cutoff
+  }).length
+})
+
+const completedFiles = computed(() => fileList.value.filter((file) => file.status === 'completed'))
+const totalChunks = computed(() => fileList.value.reduce((sum, file) => sum + Number(file.chunk_count || 0), 0))
+const totalCharacters = computed(() => fileList.value.reduce((sum, file) => sum + Number(file.char_count || 0), 0))
+const enabledCriteria = computed(() => criteria.filter((criterion) => criterion.enabled))
+
+const displayProgress = computed(() => {
+  if (uploadPhase.value === 'transferring') return transferProgress.value
+  if (uploadPhase.value === 'indexing') return Math.max(indexProgress.value, 5)
+  if (uploadPhase.value === 'done' || uploadPhase.value === 'failed') return 100
+  return 0
+})
+
+const progressLabel = computed(() => ({
+  transferring: '正在上传文件', indexing: indexProgress.value > 0 ? '正在解析并建立索引' : '已上传，等待索引',
+  done: '处理完成', failed: '处理失败', idle: '',
+}[uploadPhase.value]))
+
+const retrievalContract = computed(() => JSON.stringify({
+  knowledge_base_id: activeKb.value?.id,
+  query: retrievalQuery.value || '<用户问题>',
+  top_k: retrievalTopK.value,
+  score_threshold: retrievalThreshold.value,
+}, null, 2))
+
+const graphPreviewNodes = computed(() => {
+  const positions = [
+    { x: 110, y: 82 }, { x: 340, y: 62 }, { x: 570, y: 82 },
+    { x: 105, y: 268 }, { x: 340, y: 292 }, { x: 575, y: 268 },
+  ]
+  return fileList.value.slice(0, positions.length).map((file, index) => ({
+    id: file.id,
+    x: positions[index].x,
+    y: positions[index].y,
+    type: (file.file_type || 'FILE').toUpperCase(),
+    label: truncate(file.filename, 10),
+  }))
+})
+
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString('zh-CN')
+}
+
+function formatCompactNumber(value) {
+  const number = Number(value || 0)
+  if (number < 1000) return String(number)
+  if (number < 10000) return `${(number / 1000).toFixed(1)}k`
+  if (number < 100000000) return `${(number / 10000).toFixed(1)}万`
+  return `${(number / 100000000).toFixed(1)}亿`
+}
+
+function formatSize(bytes) {
+  const value = Number(bytes || 0)
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatDate(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10)
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
+}
+
+function statusLabel(status) {
+  return { completed: '已完成', pending: '等待中', processing: '处理中', failed: '失败' }[status] || status || '未知'
+}
+
+function shortId(value) {
+  const text = String(value || '')
+  return text.length > 12 ? `${text.slice(0, 8)}…` : text || '—'
+}
+
+function shortCollectionName(value) {
+  const text = String(value || '默认集合')
+  return text.length > 22 ? `${text.slice(0, 20)}…` : text
+}
+
+function truncate(value, length) {
+  const text = String(value || '')
+  return text.length > length ? `${text.slice(0, length - 1)}…` : text
+}
+
+function notify(message) {
+  moduleNotice.value = message
+  if (noticeTimer) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => { moduleNotice.value = '' }, 3600)
+}
+
+function frontendOnly(action) {
+  notify(`${action}已完成前端入口，后端接口将在后续阶段接入。`)
+}
+
 async function loadKbs() {
   loading.value = true
+  catalogError.value = ''
   try {
     kbList.value = await api.get('/knowledge/bases')
-  } catch { /* 忽略 */ }
-  finally { loading.value = false }
+  } catch (error) {
+    catalogError.value = error.response?.data?.detail || '无法连接知识库服务，请稍后重试。'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadFiles() {
+  if (!activeKb.value) return
+  filesLoading.value = true
+  try {
+    fileList.value = await api.get(`/knowledge/bases/${activeKb.value.id}/files`)
+  } catch (error) {
+    fileList.value = []
+    notify(error.response?.data?.detail || '文件列表加载失败。')
+  } finally {
+    filesLoading.value = false
+  }
 }
 
 async function createKb() {
   createError.value = ''
-  if (!newKb.name.trim()) { createError.value = '请输入名称'; return }
+  if (!newKb.name.trim()) {
+    createError.value = '请输入知识库名称。'
+    return
+  }
   creating.value = true
   try {
-    await api.post('/knowledge/bases', { name: newKb.name, description: newKb.description })
+    const created = await api.post('/knowledge/bases', { name: newKb.name.trim(), description: newKb.description.trim() })
     showCreate.value = false
     newKb.name = ''
     newKb.description = ''
     await loadKbs()
-  } catch (e) {
-    createError.value = e.response?.data?.detail || '创建失败'
+    const target = kbList.value.find((kb) => kb.id === created?.id) || created
+    if (target?.id) await selectKb(target)
+  } catch (error) {
+    createError.value = error.response?.data?.detail || '创建失败，请稍后重试。'
   } finally {
     creating.value = false
   }
 }
 
-async function selectKb(kb) {
+async function selectKb(kb, syncRoute = true) {
   activeKb.value = kb
-  filesLoading.value = true
-  try {
-    fileList.value = await api.get(`/knowledge/bases/${kb.id}/files`)
-  } catch { fileList.value = [] }
-  finally { filesLoading.value = false }
+  activeTab.value = validTabs.has(String(route.query.tab)) ? String(route.query.tab) : 'files'
+  if (syncRoute) {
+    await router.replace({ query: { ...route.query, kb: kb.id, tab: activeTab.value, file: undefined } })
+  }
+  await loadFiles()
 }
 
-function onFileSelect(e) {
-  uploadFile.value = e.target.files[0] || null
+async function leaveKb() {
+  activeKb.value = null
+  activeTab.value = 'files'
+  fileList.value = []
+  await router.replace({ query: { ...route.query, kb: undefined, tab: undefined, file: undefined } })
+}
+
+async function selectTab(tabId) {
+  if (!validTabs.has(tabId)) return
+  activeTab.value = tabId
+  await router.replace({ query: { ...route.query, kb: activeKb.value?.id, tab: tabId, file: undefined } })
+}
+
+async function copyKbId() {
+  const value = String(activeKb.value?.id || '')
+  if (!value) return
+  try {
+    await navigator.clipboard.writeText(value)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = value
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    textarea.remove()
+  }
+  notify('知识库 ID 已复制。')
+}
+
+function runRetrievalPreview() {
+  if (!retrievalQuery.value.trim()) {
+    notify('请先输入一个用于检索测试的问题。')
+    return
+  }
+  retrievalAttempted.value = true
+  frontendOnly('检索测试')
+}
+
+function toggleCriterion(criterion) {
+  criterion.enabled = !criterion.enabled
+  notify(`已在前端${criterion.enabled ? '启用' : '停用'}「${criterion.name}」，尚未保存到后端。`)
+}
+
+function openEvaluationSetup() {
+  if (!completedFiles.value.length) {
+    notify('至少需要一个已完成索引的文件才能准备评估。')
+    return
+  }
+  showEvaluationSetup.value = true
+}
+
+function onFileSelect(event) {
+  uploadFile.value = event.target.files?.[0] || null
   uploadMsg.value = ''
 }
 
-// ── 拖拽上传 ────────────────────────────────────────────────────────
-const dragOver = ref(false)
-// 与 input accept 和后端 ALLOWED_EXTENSIONS 保持一致
-const ACCEPT_EXTS = ['.txt', '.md', '.pdf', '.docx', '.png', '.jpg', '.jpeg', '.bmp', '.webp']
-
-function onDragOver(e) {
+function onDragOver(event) {
   if (uploading.value) return
   dragOver.value = true
-  e.dataTransfer.dropEffect = 'copy'
+  event.dataTransfer.dropEffect = 'copy'
 }
 
 function onDragLeave() {
   dragOver.value = false
 }
 
-function onDrop(e) {
+function onDrop(event) {
   dragOver.value = false
   if (uploading.value) return
-  const file = e.dataTransfer?.files?.[0]
+  const file = event.dataTransfer?.files?.[0]
   if (!file) return
-  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
-  if (!ACCEPT_EXTS.includes(ext)) {
-    uploadMsg.value = `❌ 不支持的文件类型 ${ext}，支持 ${ACCEPT_EXTS.join(' ')}`
+  const extension = `.${(file.name.split('.').pop() || '').toLowerCase()}`
+  if (!ACCEPT_EXTS.includes(extension)) {
+    uploadMsg.value = `不支持 ${extension} 文件，请选择：${ACCEPT_EXTS.join(' ')}`
     uploadOk.value = false
     return
   }
   uploadFile.value = file
   uploadMsg.value = ''
+}
+
+function closeUpload() {
+  if (uploading.value && uploadPhase.value === 'transferring') return
+  showUpload.value = false
+  dragOver.value = false
+  if (!uploading.value) {
+    uploadFile.value = null
+    uploadMsg.value = ''
+    uploadPhase.value = 'idle'
+    transferProgress.value = 0
+    indexProgress.value = 0
+  }
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
 }
 
 async function doUpload() {
@@ -367,104 +985,98 @@ async function doUpload() {
   uploadPhase.value = 'transferring'
   transferProgress.value = 0
   indexProgress.value = 0
-
   const kbId = activeKb.value.id
   try {
-    const fd = new FormData()
-    fd.append('file', uploadFile.value)
-    // 202 Accepted：服务器已收到文件，索引进后台
-    await api.upload(`/knowledge/bases/${kbId}/upload`, fd, (e) => {
-      if (e.total) transferProgress.value = Math.round((e.loaded / e.total) * 100)
+    const formData = new FormData()
+    formData.append('file', uploadFile.value)
+    await api.upload(`/knowledge/bases/${kbId}/upload`, formData, (event) => {
+      if (event.total) transferProgress.value = Math.round((event.loaded / event.total) * 100)
     })
-
-    // 传输完成 → 进入索引阶段，开始轮询
     uploadPhase.value = 'indexing'
     await pollIndexing(kbId)
-  } catch (e) {
+  } catch (error) {
     uploadPhase.value = 'failed'
-    uploadMsg.value = `❌ ${e.response?.data?.detail || '上传失败'}`
+    uploadMsg.value = error.response?.data?.detail || '上传失败，请稍后重试。'
     uploadOk.value = false
     uploading.value = false
   }
 }
 
-// 轮询文件列表，跟踪最新那个 processing 文件的 progress，直到 completed/failed
 async function pollIndexing(kbId) {
   stopPolling()
   return new Promise((resolve) => {
     pollTimer = setInterval(async () => {
       try {
         const files = await api.get(`/knowledge/bases/${kbId}/files`)
-        fileList.value = files  // 同步刷新表格，关掉弹窗也能看到进度
-        // 找最新一个非终态文件（本次上传的那个）
-        const target = files.find((f) => f.status === 'processing' || f.status === 'pending')
+        fileList.value = files
+        const target = files.find((file) => file.status === 'processing' || file.status === 'pending')
         if (target) {
           indexProgress.value = target.progress ?? 0
-          return  // 继续轮询
+          return
         }
-        // 没有 processing 文件了 → 找最新文件看终态
         stopPolling()
         const latest = files[0]
         if (latest?.status === 'failed') {
           uploadPhase.value = 'failed'
-          uploadMsg.value = `❌ 索引失败：${latest.error_message || '未知错误'}`
+          uploadMsg.value = `索引失败：${latest.error_message || '未知错误'}`
           uploadOk.value = false
         } else {
           uploadPhase.value = 'done'
-          uploadMsg.value = `✅ 上传成功，索引了 ${latest?.chunk_count ?? 0} 个块`
+          uploadMsg.value = `上传完成，已建立 ${latest?.chunk_count ?? 0} 个分块。`
           uploadOk.value = true
           uploadFile.value = null
+          notify('文件索引已完成。')
         }
         uploading.value = false
         resolve()
       } catch {
-        // 轮询失败（网络抖动）不打断，下一轮再试
+        // 短暂网络抖动时保留轮询，下一轮继续尝试。
       }
     }, 1500)
   })
 }
 
-async function openPreview(f) {
+async function openPreview(file) {
+  if (file.status !== 'completed') return
+  closeObjectUrl()
   showPreview.value = true
-  previewFile.value = f
+  previewFile.value = file
   previewLoading.value = true
   previewError.value = ''
   previewText.value = ''
   previewContentType.value = ''
-  rawUrl.value = ''
-
   try {
     const kbId = activeKb.value.id
-
-    // PDF / 图片：直接拉原始文件用浏览器原生渲染
-    if (['pdf', 'png', 'jpg', 'jpeg', 'bmp', 'webp'].includes(f.file_type)) {
-      const { data: blob } = await api.getBlob(
-        `/knowledge/bases/${kbId}/files/${f.id}/raw`
-      )
+    if (['pdf', 'png', 'jpg', 'jpeg', 'bmp', 'webp'].includes(file.file_type)) {
+      const { data: blob } = await api.getBlob(`/knowledge/bases/${kbId}/files/${file.id}/raw`)
       rawUrl.value = URL.createObjectURL(blob)
       previewContentType.value = 'binary'
     } else {
-      // 文本文件：走 preview 端点提取文本
-      const data = await api.get(`/knowledge/bases/${kbId}/files/${f.id}/preview`)
+      const data = await api.get(`/knowledge/bases/${kbId}/files/${file.id}/preview`)
       previewContentType.value = data.content_type
-      previewText.value = data.text_content || '(空文件)'
+      previewText.value = data.text_content || '（空文件）'
     }
-  } catch (e) {
-    previewError.value = e.response?.data?.detail || e.message || '预览失败'
+  } catch (error) {
+    previewError.value = error.response?.data?.detail || error.message || '预览失败。'
   } finally {
     previewLoading.value = false
   }
+}
+
+function closeObjectUrl() {
+  if (rawUrl.value) URL.revokeObjectURL(rawUrl.value)
+  rawUrl.value = ''
 }
 
 function closePreview() {
   showPreview.value = false
   previewFile.value = null
   previewText.value = ''
-  rawUrl.value = ''
+  closeObjectUrl()
 }
 
-function confirmDelete(f) {
-  deleteTarget.value = f
+function confirmDelete(file) {
+  deleteTarget.value = file
   showDeleteConfirm.value = true
 }
 
@@ -472,40 +1084,34 @@ async function doDelete() {
   if (!deleteTarget.value || !activeKb.value) return
   deleting.value = true
   deleteSuccess.value = ''
+  const filename = deleteTarget.value.filename
   try {
     await api.delete(`/knowledge/bases/${activeKb.value.id}/files/${deleteTarget.value.id}`)
     showDeleteConfirm.value = false
-    deleteSuccess.value = `「${deleteTarget.value.filename}」删除成功`
     deleteTarget.value = null
-    await selectKb(activeKb.value)
-    // 3 秒后自动隐藏成功提示
+    deleteSuccess.value = `「${filename}」已删除。`
+    await loadFiles()
     setTimeout(() => { deleteSuccess.value = '' }, 3000)
-  } catch (e) {
-    const detail = e.response?.data?.detail
-    const msg = detail || `HTTP ${e.response?.status || 'error'}: ${e.response?.statusText || e.message}`
-    alert(`删除失败：${msg}`)
+  } catch (error) {
+    notify(error.response?.data?.detail || '删除失败，请稍后重试。')
   } finally {
     deleting.value = false
   }
 }
 
-// 根据路由 query (?kb=..&file=..) 选中知识库并打开文件预览 — 对话页引用跳转入口
 async function applyRouteQuery() {
-  const kbId = route.query.kb
-  const fileId = route.query.file
+  const kbId = typeof route.query.kb === 'string' ? route.query.kb : ''
+  const tab = typeof route.query.tab === 'string' && validTabs.has(route.query.tab) ? route.query.tab : 'files'
+  const fileId = typeof route.query.file === 'string' ? route.query.file : ''
   if (!kbId) return
-  if (!kbList.value.length) {
-    await loadKbs()
-  }
-  const kb = kbList.value.find((k) => k.id === kbId)
+  if (!kbList.value.length) await loadKbs()
+  const kb = kbList.value.find((item) => String(item.id) === kbId)
   if (!kb) return
-  // 若已是当前 kb 且文件已加载, 直接复用; 否则重新选中加载文件列表
-  if (activeKb.value?.id !== kb.id) {
-    await selectKb(kb)
-  }
+  activeTab.value = tab
+  if (activeKb.value?.id !== kb.id) await selectKb(kb, false)
   if (fileId) {
-    const f = fileList.value.find((x) => x.id === fileId)
-    if (f) openPreview(f)
+    const file = fileList.value.find((item) => String(item.id) === fileId)
+    if (file) await openPreview(file)
   }
 }
 
@@ -514,8 +1120,15 @@ onMounted(async () => {
   await applyRouteQuery()
 })
 
-// 已在知识库页时, 从对话页再次点击引用(query 变化)也要响应
-watch(() => route.query, () => {
+watch(() => [route.query.kb, route.query.tab, route.query.file], () => {
   if (route.path === '/knowledge') applyRouteQuery()
 })
+
+onBeforeUnmount(() => {
+  stopPolling()
+  closeObjectUrl()
+  if (noticeTimer) clearTimeout(noticeTimer)
+})
 </script>
+
+<style scoped src="../styles/knowledge-workspace.css"></style>

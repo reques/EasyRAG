@@ -100,6 +100,22 @@
 
 来源展示：web_search 输出尾部嵌入 `<!--SOURCES:[...]-->` 机器可读块，tool_execution 解析进 `state.sources`，answer_validation/fallback 统一在最终答案底部追加有序「参考来源」列表（Markdown 链接）。ChatResponse 同时返回结构化 `sources` 字段供前端使用。
 
+### 3B MCP 外部工具接入（2026-08-07）✅
+
+| # | 任务 | 状态 |
+|---|---|---|
+| 1 | MCP SDK 接入（stage1-agent 环境装 `mcp` 2.0.0） | ✅ |
+| 2 | `app/tools/mcp/config.py` — `mcp_servers.json` 声明 server（name/transport/command 或 url/enabled/allowed_tools） | ✅ |
+| 3 | `app/tools/mcp/manager.py` — MCPManager：每 server 独立常驻事件循环线程，list_tools 注册为 `ToolDefinition`（`mcp_<server>_<tool>` 前缀），同步 fn 经 `run_coroutine_threadsafe` 桥接异步 call_tool，start/stop/status 统一启停，stop 注销工具 | ✅ |
+| 4 | `app/tools/mcp/demo_server.py` — 零依赖演示 server（stdio + HTTP 双模式，echo/get_time） | ✅ |
+| 5 | `backend/server/routers/mcp_router.py` — GET /mcp/servers、POST /mcp/servers/{name}/start\|stop、GET /mcp/servers/{name}/tools；main.py lifespan 随应用启停 enabled server | ✅ |
+| 6 | 权限两层：server 级 `allowed_tools` 白名单过滤 + Worker 侧 `tool_names` 白名单（既有机制） | ✅ |
+| 7 | 验证：stdio + HTTP 双传输全链路（连接→list→注册→invoke→stop→注销）、权限过滤、TestClient 路由 200/404 | ✅ |
+
+关键坑（踩过）：**async context manager 的 GC 陷阱** —— `stdio_client()` / `ClientSession()` 是 asynccontextmanager，若作为函数局部变量随返回被 GC，生成器收到 GeneratorExit，子进程关闭、流断开，后续调用报 `Connection closed`。必须把 context manager 引用保存在 handle 实例上（`_transport_cm` / `_session_cm`），stop 时显式 `__aexit__`。
+
+用法：`mcp_servers.json` 登记 server，`GET /api/v1/mcp/servers` 查状态，`POST /api/v1/mcp/servers/{name}/start|stop` 启停。stdio 命令里的 `python` 会被替换为当前解释器（保证子进程有 mcp 包）。
+
 ---
 
 ## 阶段 4（前端先行）：Vue 3 前端
@@ -494,3 +510,167 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 - `verify/verify_multi_agent.py` 28/28（mock 全流程 + 真实 LLM 结构断言 + single 回归）
 - `verify/verify_blackboard.py` 24/24（黑板单测 + 并发安全 + sequential/parallel 集成 + 崩溃隔离 + 真实 LLM 黑板透出）
 - 真实 LLM 路径硬断言结构（blackboard/execution_mode/steps），软断言内容——LLM 端点波动导致空回答时打 WARN 不 FAIL
+
+#### 2026-08-09 — 安全修复 1：向量检索按用户/知识库隔离
+
+**问题：** PostgreSQL 中的知识库记录虽然带 `owner_id`，向量数据也保存了
+`knowledge_base_id`，但 Milvus、Memory、Chroma 和增强检索实际查询时没有使用该字段。
+所有用户共享同一集合，因此登录用户可能检索到其他用户的文档；BM25、图谱缓存和
+多 Agent 的 RAG Worker 也存在同样的越权路径。
+
+**设计决策：** 采用“显式授权作用域 + 默认拒绝”。检索接口统一接收
+`knowledge_base_ids`；没有授权 ID 时直接返回空结果，不再把 `None` 解释为全库。
+过滤在候选召回前执行，避免其他租户的结果挤占当前用户 Top-K，并在结果返回前再次
+校验作用域作为纵深防御。
+
+**实现：**
+1. `backend/server/routers/chat_router.py` 从数据库查询当前用户拥有的全部知识库 ID，
+   分别注入同步聊天、SSE、单 Agent 和多 Agent 路径；新增
+   `KnowledgeBaseRepository.list_ids_by_owner()`，不复用 UI 的 50 条分页限制。
+2. `AgentState`、`AgentService`、`Orchestrator`、`TaskBrief` 和 `RagWorker` 全链路传递
+   授权知识库 ID；未认证/未传作用域的旧调用默认无法读取任何向量文档。
+3. Milvus 使用 `knowledge_base_id in [...]` 搜索表达式；Chroma 使用 metadata `where`；
+   Memory 在计算 Top-K 前筛选候选。三个后端都在返回阶段再次丢弃越界结果，作用域 ID
+   先做 UUID 规范化，避免表达式注入。
+4. 增强检索的语义、BM25、实体、关系和迭代补充路径全部携带同一作用域；BM25 同步
+   索引保留 `knowledge_base_id` 元数据。
+5. 图谱缓存以 `(knowledge_base_id, entity_name)` 作为实体键，关系也记录 `kb_id`，解决
+   不同知识库同名实体描述被合并的问题；旧版全局 PostgreSQL 图谱旁路改为只查询授权 ID。
+6. 上传索引时强制覆盖 chunk 的 `knowledge_base_id`，不允许上游元数据覆盖授权归属；
+   增强检索引用的 `file_id` 改为按 `(knowledge_base_id, filename)` 查询，避免同名文件串租户。
+
+**验证：**
+- 新增 `tests/test_retrieval_isolation.py`：覆盖默认拒绝、无效 UUID、Memory、Milvus、
+  Chroma、BM25、同名图谱实体、LangGraph 节点和 RAG Worker 作用域传递；
+  `python -m pytest -q` 为 **9/9 通过**。
+- `verify/verify_auto_route.py` 为 **12/12 通过**。
+- `app/`、`backend/`、`tests/` 共 78 个 Python 文件 AST 语法检查通过。
+
+#### 2026-08-09 — 知识库目录上下文：Agent 可读取知识库名与文件名
+
+**问题：** 对话链路此前只向检索器传递知识库 ID，生成模型只能看到命中的 chunk 和
+引用来源，看不到完整的知识库名称与文件目录。因此询问“当前知识库有什么文件”时，
+即使命中某个文件，Agent 也只能承认无法确定完整清单。
+
+**设计决策：** 增加“授权目录上下文”，不依赖向量命中。目录与检索 ID 由同一条
+`owner_id` 限定查询生成，确保两者作用域一致；只读取知识库名、文件名、类型与处理状态，
+不加载文件正文。目录元数据按不可信输入处理：清除控制字符、转义标签、逐项限长、整体
+限制 12000 字符，并在 system prompt 中明确名称只能作为数据、不得作为指令执行。
+
+**实现：**
+1. `KnowledgeBaseRepository.list_catalog_by_owner()` 使用 owner-scoped 外连接一次读取当前
+   用户的知识库和文件元数据；不使用 UI 分页，也不查询 `text_content`。
+2. `/chat/send` 与 `/chat/stream` 通过 `_load_knowledge_scope()` 从同一目录同时取得
+   `knowledge_base_ids` 和 `knowledge_catalog`，同步、SSE 快速路径、多 Agent 及直接 LLM
+   兜底均注入目录。
+3. `AgentState`、`AgentService`、`Orchestrator`、`TaskBrief` 全链路新增
+   `knowledge_catalog`；单 Agent `answer_generation`、SSE `prepare_context` 和多 Agent
+   `RagWorker` 都能读取相同目录。
+4. 新增 `app/services/knowledge_catalog.py`，负责把授权目录格式化为紧凑、安全、可截断的
+   system context；空目录明确告知 Agent 当前用户没有可访问的知识库。
+
+**验证：**
+- 新增 `tests/test_knowledge_catalog.py`，覆盖名称/文件名可见、文件状态可见、控制字符与
+  标签转义、目录长度上限、仓储 owner 条件、单 Agent、SSE 和多 Agent 目录注入。
+- `python -m pytest -q`：**15/15 通过**（含上一项检索隔离回归）。
+- `python -m compileall -q app backend tests` 与 `git diff --check` 通过。
+
+#### 2026-08-09 — 知识库管理工作台（前端阶段）
+
+**目标：** 参考知识库管理产品的详情工作台，在不新增后端接口的前提下，先完成知识库
+目录、文件管理以及检索/图谱/评估模块的前端信息架构和交互状态，供后续逐项接入后端。
+
+**实现：**
+1. `KnowledgeView.vue` 重构为“知识库目录 → 知识库详情工作台”两层页面；目录页新增账号级
+   概览、搜索、错误/空结果状态和更完整的知识库卡片，详情页支持复制 ID、返回目录以及
+   URL query 保存当前知识库与页签。
+2. 详情工作台新增六个页签：文件管理、检索测试、知识图谱、知识导图、RAG 评估、评估基准。
+   文件管理继续复用现有真实接口，保留上传与索引进度、文件刷新、预览和删除；统计卡片由
+   当前文件列表实时计算。
+3. 新模块只实现前端契约和状态，不伪造后端结果：检索测试展示动态请求参数与结果空态；
+   图谱、导图使用真实知识库名和文件名生成目录级预览；RAG 评估实现未运行状态、指标卡、
+   历史表格空态和配置弹窗；评估基准实现指标开关与数据集空态。所有未接能力均明确标记
+   “接口待接入”，点击操作会给出前端提示。
+4. 新增 `frontend/src/styles/knowledge-workspace.css`，提供独立的黑白灰工作台视觉、表格、
+   图谱画布、导图、评估卡片、弹窗与 1180/900/680px 响应式布局；未改动现有后端协议。
+5. 改善上传弹窗关闭行为：文件传输阶段禁止中断，进入索引阶段后可关闭弹窗并让前端继续
+   轮询，避免原实现关闭弹窗时停止轮询却留下未完成 Promise。
+
+**验证：**
+- `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
+- 使用本地只读模拟响应在 1440×1000 视口检查文件管理与 RAG 评估页：目录数据、页签路由、
+  统计卡片、文件表格、处理中状态和评估空态均正常渲染。
+
+#### 2026-08-10 — 对话页多模型切换
+
+**目标：** 在对话输入区提供模型切换，并把 MiniMax-M2.7、DeepSeek-V4-Flash、
+Qwen-3.6-Flash、GLM-5.2 接入后端环境配置；同一次请求中的单 Agent、多 Agent 子任务与
+最终流式汇总必须使用同一模型，API Key 和供应商地址不得暴露给浏览器。
+
+**设计决策：** 使用“后端模型目录 + 公开 model_id 白名单”。前端只从
+`GET /api/v1/chat/models` 读取名称、供应商和可用状态，发送公开 `model_id`；后端再解析为
+真实 base URL、API 模型名、温度与密钥。未知模型和未配置模型在消息写库前直接拒绝，避免
+客户端注入任意上游地址或模型。多个模型使用同一 OpenAI 兼容网关时，各模型 BASE_URL 可
+设为 `LLM_BASE_URL` 并安全复用现有 `DEEPSEEK_API_KEY`；直连官方接口则使用独立密钥。
+
+**实现：**
+1. 新增 `app/llm/models.py`，定义四个模型的服务端目录、公开元数据、默认模型、配置可用性
+   检查和 allowlist 解析；`app/core/config.py`、`.env` 与 `.env.template` 同步供应商地址、
+   API 模型 ID、温度和密钥变量，当前本地 `.env` 四个模型统一复用既有网关。
+2. `GET /chat/models` 返回不含 base URL、API Key 和真实内部配置的安全目录；`ChatRequest`
+   新增 `model_id`，同步与 SSE 接口均在持久化用户消息前验证选择，助手消息 metadata 记录
+   `model_id/model_name`，便于历史追溯。
+3. `app/llm/client.py` 新增请求上下文模型选择与按模型缓存；Agent 图节点、Orchestrator、
+   Worker、增强检索和流式汇总都从当前请求解析客户端。针对 `ThreadPoolExecutor` 不自动
+   传播 contextvars 的行为，多 Agent 并行子任务会显式重新进入同一模型上下文。
+4. `ChatView.vue` 在输入框左下角新增模型选择器：记忆上次选择、加载后端默认值、发送期间
+   锁定、未配置项禁用；每条回复显示实际模型名。SSE 错误解析也改为优先显示后端 detail。
+5. README 补充模型配置与切换说明；`requirements-stage1.txt` 补齐此前遗漏的 FastAPI 与
+   Uvicorn 运行依赖声明。
+
+**验证：**
+- 新增 `tests/test_chat_model_selection.py`，覆盖四模型目录、敏感配置不外泄、共享网关密钥
+  复用、直连缺密钥禁用、未知模型拒绝、请求上下文恢复和并行 Worker 模型传播。
+- `python -m pytest -q`：**21/21 通过**。
+- `python -m compileall -q app backend tests`、`git diff --check` 通过。
+- `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
+- 安装 `requirements-stage1.txt` 后成功加载 FastAPI 应用，并确认
+  `GET /api/v1/chat/models` 路由及响应模型已注册。
+
+#### 2026-08-10 — v0.3.1：自定义本地/云端模型配置
+
+**目标：** 全局顶部展示当前应用版本 v0.3.1；对话模型菜单移除“暂无可用模型”占位，新增
+“添加自定义模型”，允许用户配置本地或云端 OpenAI 兼容模型，并在保存后立即进入当前账号
+的可选模型目录。
+
+**设计决策：** 采用“环境变量内置模型 + PostgreSQL 动态模型”的混合配置。部署者维护的
+四个内置模型继续由 `.env` 提供；用户在前端新增的模型按 `owner_id` 存入数据库，避免运行时
+修改进程环境或配置文件。动态 API Key 使用 Fernet 加密，密钥由
+`MODEL_CONFIG_ENCRYPTION_KEY` 提供，开发环境未配置时回退 `JWT_SECRET_KEY`；列表接口只返回
+公开 ID、显示名、供应商、来源、类型和可用状态，不返回真实地址、模型内部参数或密钥。
+
+**实现：**
+1. 应用默认版本、`.env`、`.env.template`、前端包版本统一升级为 `0.3.1`；`LayoutView.vue`
+   新增全局顶部条，从 `/api/v1/health` 同步后端版本并保留 `v0.3.1` 构建兜底。
+2. 新增 `custom_model_configs` 表、`CustomModelConfigRepository` 和模型配置服务；配置包含
+   owner、显示名、模型类型、Base URL、模型 ID、加密 API Key、温度与是否需要密钥。
+3. 新增 `POST /chat/models` 与 `DELETE /chat/models/{model_id}`；`GET /chat/models` 合并环境
+   内置模型与当前用户自定义模型。自定义模型使用 `custom:<uuid>` 公共 ID，所有读写和对话
+   解析都带 owner 条件，其他用户无法枚举、使用或删除。
+4. 本地模型允许无 API Key，支持 localhost、私有网段、`.local` 和 Docker 服务名；云端
+   模型强制 HTTPS，并拒绝字面量本机/私有 IP。URL 禁止嵌入账号、查询参数和 fragment，降低
+   错配与 SSRF 风险。
+5. LLM 请求上下文从“仅模型 ID”升级为携带完整、已授权的运行时 profile；因此数据库模型
+   也能正确传播到单 Agent、多 Agent 并行 Worker、增强检索和 SSE 最终汇总。客户端缓存键
+   加入配置指纹，删除后重建同名模型不会误用旧连接。
+6. 原生 select 改为可控模型菜单，始终提供“添加自定义模型”；新增本地/云端类型卡、服务
+   地址、模型 ID、温度、API Key 与已添加模型管理弹窗。保存成功后重新拉取后端目录并自动
+   选中新模型，删除操作只允许自定义项且需要二次确认。
+
+**验证：**
+- 新增 `tests/test_custom_model_config.py`，覆盖密钥密文存储/解密、本地无密钥模型、公开响应
+  不泄露密钥和地址、本地/云端 URL 安全边界、动态 profile 请求上下文及仓储 owner 条件。
+- `python -m pytest -q`：**26/26 通过**。
+- FastAPI 应用加载成功，确认 `GET/POST /api/v1/chat/models`、
+  `DELETE /api/v1/chat/models/{model_id}` 已注册，应用版本为 `0.3.1`。
+- `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。

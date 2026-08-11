@@ -65,7 +65,11 @@ cp .env.template .env       # 按需修改 LLM / embedding / 各服务连接
 
 | 变量 | 说明 |
 |------|------|
-| `DEEPSEEK_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 生成模型 |
+| `DEEPSEEK_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 默认/共享网关生成模型 |
+| `LLM_DEFAULT_MODEL_ID` | 对话页默认模型，默认 `deepseek-v4-flash` |
+| `MINIMAX_*` / `DEEPSEEK_*` / `QWEN_*` / `GLM_*` | 对话页四个可切换模型的地址、模型名与温度 |
+| `MINIMAX_API_KEY` / `DASHSCOPE_API_KEY` / `ZHIPUAI_API_KEY` | 各供应商密钥；使用同一 `LLM_BASE_URL` 网关时可留空并复用默认密钥 |
+| `MODEL_CONFIG_ENCRYPTION_KEY` | 加密数据库中的自定义模型 API Key；生产环境建议设置独立随机值 |
 | `EMBEDDING_TYPE` | `ollama`（本地）或 `api`（远程） |
 | `OLLAMA_EMBED_MODEL` | 默认 `bge-m3:latest` |
 | `TAVILY_API_KEY` | 联网搜索（可选，不配则 web_search 走兜底） |
@@ -76,6 +80,7 @@ cp .env.template .env       # 按需修改 LLM / embedding / 各服务连接
 
 ```bash
 pip install -r requirements.txt
+pip install -r requirements-stage1.txt
 python -c "import asyncio; from backend.storage.postgres.manager import init_db; asyncio.run(init_db())"
 ```
 
@@ -93,7 +98,11 @@ npm install
 npm run dev                 # http://localhost:5173, /api 代理到 :8000
 ```
 
-打开 http://localhost:5173 注册账号，创建知识库，上传文档，开始对话。
+打开 http://localhost:5173 注册账号，创建知识库，上传文档，开始对话。对话输入框左下角可在
+MiniMax-M2.7、DeepSeek-V4-Flash、Qwen-3.6-Flash 和 GLM-5.2 之间切换；未配置密钥的直连模型
+会显示为“未配置”且不可选择。模型菜单中的“添加自定义模型”可新增 Ollama、LM Studio 等
+本地 OpenAI 兼容服务，或其他云端 OpenAI 兼容接口；这些动态配置按用户保存在 PostgreSQL，
+API Key 加密保存，不写入 `.env`、也不会返回前端。修改内置模型 `.env` 后需要重启后端。
 
 ---
 

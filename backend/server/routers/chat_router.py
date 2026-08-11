@@ -5,14 +5,22 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.logger import get_logger
+from app.llm.models import (
+    ChatModelProfile,
+    ChatModelUnavailableError,
+    UnknownChatModelError,
+    get_chat_model_profile,
+    list_chat_model_profiles,
+)
 from backend.services.chat_service import (
     create_conversation,
     add_message,
@@ -25,10 +33,27 @@ from backend.services.chat_service import (
 from backend.storage.postgres.manager import get_session
 from backend.server.utils.auth_middleware import get_current_user
 from backend.storage.postgres.models_user import User
+from backend.repositories.knowledge_repository import KnowledgeBaseRepository
+from backend.repositories.model_config_repository import CustomModelConfigRepository
+from backend.services.model_config_service import (
+    ModelConfigValidationError,
+    encrypt_api_key,
+    profile_from_custom_model,
+    validate_and_normalize_base_url,
+)
+from backend.storage.postgres.models_model_config import CustomModelConfig
 
 logger = get_logger(__name__)
 cfg = get_settings()
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+async def _load_knowledge_scope(
+    session: AsyncSession, user_id: uuid.UUID
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Load retrieval IDs and display metadata from the same owner-scoped query."""
+    catalog = await KnowledgeBaseRepository(session).list_catalog_by_owner(user_id)
+    return [item["id"] for item in catalog], catalog
 
 
 # ── Request / Response ────────────────────────────────────────────────────────
@@ -36,11 +61,15 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096)
     conversation_id: Optional[str] = None  # None = 创建新会话
+    model_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class ChatResponse(BaseModel):
     conversation_id: str
     answer: str
+    run_id: str = ""
+    model_id: str = ""
+    model_name: str = ""
     intent: str = ""
     steps: list[str] = []
     sources: list[dict] = []
@@ -54,7 +83,175 @@ class ConversationSummary(BaseModel):
     updated_at: str
 
 
+class ChatModelInfo(BaseModel):
+    id: str
+    name: str
+    provider: str
+    available: bool
+    is_default: bool
+    source: str = "builtin"
+    provider_type: str = "cloud"
+    can_delete: bool = False
+
+
+class ChatModelListResponse(BaseModel):
+    default_model_id: str
+    models: list[ChatModelInfo]
+
+
+class CustomModelCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    provider_name: str = Field(default="", max_length=80)
+    provider_type: Literal["local", "cloud"]
+    base_url: str = Field(..., min_length=1, max_length=512)
+    model_name: str = Field(..., min_length=1, max_length=160)
+    api_key: str = Field(default="", max_length=8192)
+    requires_api_key: bool = True
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+
+
+async def _resolve_request_model(
+    model_id: Optional[str], user_id: uuid.UUID, session: AsyncSession
+) -> ChatModelProfile:
+    """Validate the public model selection before any message is persisted."""
+    if model_id and model_id.startswith("custom:"):
+        record = await CustomModelConfigRepository(session).get_by_public_id(
+            user_id, model_id
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="自定义模型不存在或无权访问",
+            )
+        try:
+            profile = profile_from_custom_model(record)
+        except ModelConfigValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        if not profile.available:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"模型 {profile.name} 配置不完整，请重新配置",
+            )
+        return profile
+
+    try:
+        return get_chat_model_profile(model_id)
+    except (UnknownChatModelError, ChatModelUnavailableError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/models", response_model=ChatModelListResponse)
+async def list_chat_models(
+    current_user: User = Depends(get_current_user),
+):
+    """Return safe model metadata for the conversation model selector."""
+    profiles = list_chat_model_profiles()
+    async with get_session() as session:
+        records = await CustomModelConfigRepository(session).list_by_owner(
+            current_user.id
+        )
+    for record in records:
+        try:
+            profiles.append(profile_from_custom_model(record))
+        except ModelConfigValidationError:
+            profiles.append(ChatModelProfile(
+                id=record.public_id,
+                name=record.name,
+                provider=record.provider_name,
+                provider_type=record.provider_type,
+                source="custom",
+                base_url=record.base_url,
+                api_key="",
+                model=record.model_name,
+                temperature=record.temperature,
+                requires_api_key=True,
+            ))
+    return ChatModelListResponse(
+        default_model_id=cfg.LLM_DEFAULT_MODEL_ID,
+        models=[
+            ChatModelInfo(
+                **profile.to_public_dict(
+                    default_model_id=cfg.LLM_DEFAULT_MODEL_ID
+                )
+            )
+            for profile in profiles
+        ],
+    )
+
+
+@router.post("/models", response_model=ChatModelInfo, status_code=status.HTTP_201_CREATED)
+async def create_custom_chat_model(
+    req: CustomModelCreate,
+    current_user: User = Depends(get_current_user),
+):
+    """Persist an owner-scoped local/cloud OpenAI-compatible model profile."""
+    name = req.name.strip()
+    model_name = req.model_name.strip()
+    provider_name = req.provider_name.strip() or (
+        "本地模型" if req.provider_type == "local" else "自定义云端"
+    )
+    if not name or not model_name:
+        raise HTTPException(status_code=400, detail="模型名称和模型 ID 不能为空")
+    if req.requires_api_key and not req.api_key.strip():
+        raise HTTPException(status_code=400, detail="该模型配置要求填写 API Key")
+    try:
+        base_url = validate_and_normalize_base_url(req.base_url, req.provider_type)
+        encrypted_key = encrypt_api_key(req.api_key)
+    except ModelConfigValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async with get_session() as session:
+        repo = CustomModelConfigRepository(session)
+        if await repo.get_by_name(current_user.id, name):
+            raise HTTPException(status_code=409, detail="已存在同名自定义模型")
+        record = CustomModelConfig(
+            owner_id=current_user.id,
+            name=name,
+            provider_name=provider_name,
+            provider_type=req.provider_type,
+            base_url=base_url,
+            model_name=model_name,
+            api_key_encrypted=encrypted_key,
+            requires_api_key=req.requires_api_key,
+            temperature=req.temperature,
+        )
+        try:
+            await repo.add(record)
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="已存在同名自定义模型") from exc
+
+    profile = profile_from_custom_model(record)
+    return ChatModelInfo(
+        **profile.to_public_dict(default_model_id=cfg.LLM_DEFAULT_MODEL_ID)
+    )
+
+
+@router.delete("/models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_custom_chat_model(
+    model_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Delete one user-owned custom model; built-in profiles are immutable."""
+    async with get_session() as session:
+        repo = CustomModelConfigRepository(session)
+        record = await repo.get_by_public_id(current_user.id, model_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="自定义模型不存在或无权访问")
+        await repo.delete(record)
+        await session.commit()
+    from app.llm.client import evict_chat_model_clients
+
+    evict_chat_model_clients(model_id)
+    return None
 
 @router.post("/send", response_model=ChatResponse)
 async def send_message(
@@ -65,6 +262,9 @@ async def send_message(
     start = time.perf_counter()
 
     async with get_session() as session:
+        selected_model = await _resolve_request_model(
+            req.model_id, current_user.id, session
+        )
         # 获取或创建会话
         conv_id = None
         is_new = False
@@ -82,41 +282,137 @@ async def send_message(
             is_new = True
 
         # 保存用户消息
-        await add_message(session, conv_id, "user", req.query)
+        user_message = await add_message(session, conv_id, "user", req.query)
         await session.commit()
+        user_message_id = user_message.id
 
         # 加载对话历史（情景记忆压缩：有 summary 时 = 摘要+最近N轮，否则完整历史）
         db_history = await get_compressed_history(session, conv_id)
+        knowledge_base_ids, knowledge_catalog = await _load_knowledge_scope(
+            session, current_user.id
+        )
+
+    from app.services.agent_service import AgentService
+
+    use_multi = cfg.AGENT_MODE == "multi" or (
+        cfg.AGENT_MODE == "auto"
+        and AgentService._should_use_multi(req.query, db_history)
+    )
+    multi_run_id: Optional[uuid.UUID] = None
+    if use_multi:
+        from backend.services.agent_run_service import create_run
+
+        async with get_session() as session:
+            run = await create_run(
+                session,
+                conversation_id=conv_id,
+                user_id=current_user.id,
+                source_message_id=user_message_id,
+                goal=req.query,
+                model_id=selected_model.id,
+            )
+            await session.commit()
+            multi_run_id = run.id
 
     # =====================================================================
     # 调用 LangGraph Agent，传入 DB 中的对话历史
     # =====================================================================
+    result: dict[str, Any] = {}
     try:
         from app.services.agent_service import get_agent_service
+        from app.llm.client import use_chat_model
+
         agent = get_agent_service()
-        result = agent.run(
-            query=req.query,
-            session_id=str(conv_id),
-            history=db_history,          # ← 关键：传入 DB 历史
-        )
+        with use_chat_model(selected_model):
+            result = agent.run(
+                query=req.query,
+                session_id=str(conv_id),
+                history=db_history,          # ← 关键：传入 DB 历史
+                user_id=current_user.id,
+                knowledge_base_ids=knowledge_base_ids,
+                knowledge_catalog=knowledge_catalog,
+            )
         answer = result.get("final_answer", "")
     except Exception as exc:
         logger.error("[chat/send] agent error: %s", exc)
         answer = f"处理请求时发生错误: {exc}"
+
+    if multi_run_id:
+        from backend.services.agent_run_service import (
+            create_tasks as persist_tasks,
+            finalize_run,
+            finish_task,
+            start_pending_tasks,
+        )
+
+        try:
+            async with get_session() as session:
+                task_details = result.get("task_details", [])
+                if result.get("intent") == "multi_agent" and task_details:
+                    await persist_tasks(
+                        session, multi_run_id, task_details, selected_model.id
+                    )
+                    await start_pending_tasks(session, multi_run_id)
+                    worker_reports = result.get("worker_reports", [])
+                    for report in worker_reports:
+                        await finish_task(
+                            session,
+                            multi_run_id,
+                            report.get("task_id", ""),
+                            worker_status=report.get("status", "error"),
+                            output_summary=report.get("summary", ""),
+                            error_summary=report.get("error", ""),
+                        )
+                    all_failed = bool(worker_reports) and not any(
+                        report.get("status") in {"done", "done_with_concerns"}
+                        for report in worker_reports
+                    )
+                    await finalize_run(
+                        session,
+                        multi_run_id,
+                        status="failed" if all_failed else "completed",
+                        execution_mode=result.get("execution_mode", ""),
+                        error_summary="所有子任务执行失败" if all_failed else "",
+                    )
+                elif result:
+                    await finalize_run(
+                        session,
+                        multi_run_id,
+                        status="completed",
+                        execution_mode="degenerate",
+                    )
+                else:
+                    await finalize_run(
+                        session,
+                        multi_run_id,
+                        status="failed",
+                        error_summary="多智能体执行未返回结果",
+                    )
+                await session.commit()
+        except Exception as exc:
+            logger.warning("[chat/send] run %s persist failed: %s", multi_run_id, exc)
 
     # 兜底：Agent 返回空答案时，用 LLM 直接生成（跳过检索）
     if not answer.strip():
         logger.warning("[chat/send] agent returned empty answer, fallback to direct LLM")
         try:
             from app.llm.client import get_llm_client
-            llm = get_llm_client()
-            fallback_answer = llm.chat_sync([{
-                "role": "user",
-                "content": (
+            llm = get_llm_client(profile=selected_model)
+            from app.services.knowledge_catalog import format_knowledge_catalog
+
+            fallback_answer = llm.chat_sync([
+                {
+                    "role": "system",
+                    "content": format_knowledge_catalog(knowledge_catalog),
+                },
+                {
+                    "role": "user",
+                    "content": (
                     f"请简要回答以下问题（200字以内）：\n\n{req.query}\n\n"
                     "如果问题涉及法律条款，请引用具体法条编号。"
-                ),
-            }])
+                    ),
+                },
+            ])
             if fallback_answer and fallback_answer.strip():
                 answer = fallback_answer
                 logger.info("[chat/send] direct LLM fallback succeeded (%d chars)", len(fallback_answer))
@@ -141,8 +437,11 @@ async def send_message(
     async with get_session() as session:
         meta = json.dumps({
             "intent": result.get("intent", ""),
+            "run_id": str(multi_run_id) if multi_run_id else "",
             "steps": result.get("steps", []),
             "sources": result.get("sources", []),
+            "model_id": selected_model.id,
+            "model_name": selected_model.name,
         }, ensure_ascii=False)
         await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
         await session.commit()
@@ -150,6 +449,9 @@ async def send_message(
     return ChatResponse(
         conversation_id=str(conv_id),
         answer=answer,
+        run_id=str(multi_run_id) if multi_run_id else "",
+        model_id=selected_model.id,
+        model_name=selected_model.name,
         intent=result.get("intent", ""),
         steps=result.get("steps", []),
         sources=result.get("sources", []),
@@ -179,6 +481,9 @@ async def send_message_stream(
     start = time.perf_counter()
 
     async with get_session() as session:
+        selected_model = await _resolve_request_model(
+            req.model_id, current_user.id, session
+        )
         # 获取或创建会话
         if req.conversation_id:
             conv = await get_conversation(session, uuid.UUID(req.conversation_id))
@@ -194,13 +499,41 @@ async def send_message_stream(
             conv_id = conv.id
             is_new = True
 
-        await add_message(session, conv_id, "user", req.query)
+        user_message = await add_message(session, conv_id, "user", req.query)
         await session.commit()
+        user_message_id = user_message.id
         db_history = await get_compressed_history(session, conv_id)
+        knowledge_base_ids, knowledge_catalog = await _load_knowledge_scope(
+            session, current_user.id
+        )
 
-    async def event_gen():
+    # Decide and persist the multi-agent run before opening the stream so the
+    # first event can expose a durable run_id to the client.
+    from app.services.agent_service import AgentService
+
+    use_multi = cfg.AGENT_MODE == "multi" or (
+        cfg.AGENT_MODE == "auto"
+        and AgentService._should_use_multi(req.query, db_history)
+    )
+    multi_run_id: Optional[uuid.UUID] = None
+    if use_multi:
+        from backend.services.agent_run_service import create_run
+
+        async with get_session() as session:
+            run = await create_run(
+                session,
+                conversation_id=conv_id,
+                user_id=current_user.id,
+                source_message_id=user_message_id,
+                goal=req.query,
+                model_id=selected_model.id,
+            )
+            await session.commit()
+            multi_run_id = run.id
+
+    async def _event_gen_inner():
         from app.services.agent_service import get_agent_service
-        from app.llm.client import get_llm_client
+        from app.llm.client import get_llm_client, use_chat_model
 
         loop = asyncio.get_event_loop()
         agent = get_agent_service()
@@ -208,20 +541,24 @@ async def send_message_stream(
         def _sse(payload: dict) -> str:
             return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
-        yield _sse({"type": "conversation_id", "conversation_id": str(conv_id)})
-
-        # ── 智能路由：auto 模式判断是否走多智能体 ────────────────────────────
-        from app.services.agent_service import AgentService
-        use_multi = False
-        if cfg.AGENT_MODE == "multi":
-            use_multi = True
-        elif cfg.AGENT_MODE == "auto":
-            use_multi = AgentService._should_use_multi(req.query, db_history)
+        yield _sse({
+            "type": "conversation_id",
+            "conversation_id": str(conv_id),
+            "run_id": str(multi_run_id) if multi_run_id else "",
+            "model_id": selected_model.id,
+            "model_name": selected_model.name,
+        })
 
         if use_multi:
             # ── 多智能体路径：Orchestrator + 状态实时透传 ────────────────────
             try:
                 from app.agents.orchestrator import get_orchestrator
+                from backend.services.agent_run_service import (
+                    create_tasks as persist_tasks,
+                    finalize_run,
+                    finish_task,
+                    start_pending_tasks,
+                )
 
                 orchestrator = get_orchestrator()
 
@@ -237,6 +574,10 @@ async def send_message_stream(
                     ev = {"step": step, "detail": detail}
                     status_list.append(ev)
                     status_queue.put({"type": "status", **ev})
+
+                def _on_tasks(tasks: list):
+                    # 拆解完成 → 推送待办清单，前端渲染侧边任务进度面板
+                    status_queue.put({"type": "sub_tasks", "tasks": tasks})
 
                 # 收集 worker 中间产出，落库时与汇总结果拼接成完整答案
                 worker_outputs: list[dict] = []
@@ -257,20 +598,85 @@ async def send_message_stream(
                         "type": "worker_output",
                         "task_id": report.task_id,
                         "worker": report.worker_name,
+                        "status": report.status,
+                        "error": report.error or "",
                         "content": content,
                     })
+
+                async def _prepare_orchestrator_event(ev: dict) -> dict:
+                    """Persist one lifecycle transition, then expose it to SSE."""
+                    ev_type = ev.get("type", "status")
+                    try:
+                        async with get_session() as session:
+                            if ev_type == "sub_tasks":
+                                await persist_tasks(
+                                    session,
+                                    multi_run_id,
+                                    ev.get("tasks", []),
+                                    selected_model.id,
+                                )
+                            elif ev_type == "worker_output":
+                                await finish_task(
+                                    session,
+                                    multi_run_id,
+                                    ev.get("task_id", ""),
+                                    worker_status=ev.get("status", "error"),
+                                    output_summary=ev.get("content", ""),
+                                    error_summary=ev.get("error", ""),
+                                )
+                            elif ev.get("step") == "dispatch":
+                                await start_pending_tasks(session, multi_run_id)
+                            await session.commit()
+                    except Exception as exc:
+                        logger.warning(
+                            "[chat/stream] run %s lifecycle persist failed: %s",
+                            multi_run_id,
+                            exc,
+                        )
+
+                    if ev_type == "worker_output":
+                        return {
+                            "type": "worker_output",
+                            "run_id": str(multi_run_id),
+                            "task_id": ev["task_id"],
+                            "worker": ev["worker"],
+                            "status": ev.get("status", ""),
+                            "content": ev["content"],
+                        }
+                    if ev_type == "sub_tasks":
+                        return {
+                            "type": "sub_tasks",
+                            "run_id": str(multi_run_id),
+                            "tasks": ev["tasks"],
+                        }
+                    if ev.get("step") == "tool_call":
+                        return {
+                            "type": "tool_call",
+                            "run_id": str(multi_run_id),
+                            "detail": ev.get("detail", ""),
+                        }
+                    return {
+                        "type": "status",
+                        "run_id": str(multi_run_id),
+                        "step": ev["step"],
+                        "detail": ev["detail"],
+                    }
 
                 # 在 executor 里跑 orchestrator（同步 LLM 调用）
                 # return_synthesize_payload=True：synthesize 交给主事件循环流式生成
                 def _run_orch():
                     try:
-                        return orchestrator.run(
-                            req.query,
-                            history=db_history,
-                            status_callback=_on_status,
-                            worker_done_callback=_on_worker_done,
-                            return_synthesize_payload=True,
-                        )
+                        with use_chat_model(selected_model):
+                            return orchestrator.run(
+                                req.query,
+                                history=db_history,
+                                status_callback=_on_status,
+                                worker_done_callback=_on_worker_done,
+                                tasks_callback=_on_tasks,
+                                return_synthesize_payload=True,
+                                knowledge_base_ids=knowledge_base_ids,
+                                knowledge_catalog=knowledge_catalog,
+                            )
                     finally:
                         status_queue.put(_ORCH_SENTINEL)
 
@@ -286,17 +692,7 @@ async def send_message_stream(
                     if ev is _ORCH_SENTINEL:
                         break
                     if ev is not None:
-                        ev_type = ev.get("type", "status")
-                        if ev_type == "worker_output":
-                            # 子任务产出：推 delta 让前端实时渲染中间结果
-                            yield _sse({
-                                "type": "worker_output",
-                                "task_id": ev["task_id"],
-                                "worker": ev["worker"],
-                                "content": ev["content"],
-                            })
-                        else:
-                            yield _sse({"type": "status", "step": ev["step"], "detail": ev["detail"]})
+                        yield _sse(await _prepare_orchestrator_event(ev))
                     if orch_future.done() and status_queue.empty():
                         break
                 # drain 残留
@@ -304,26 +700,33 @@ async def send_message_stream(
                     ev = status_queue.get_nowait()
                     if ev is _ORCH_SENTINEL:
                         continue
-                    ev_type = ev.get("type", "status")
-                    if ev_type == "worker_output":
-                        yield _sse({
-                            "type": "worker_output",
-                            "task_id": ev["task_id"],
-                            "worker": ev["worker"],
-                            "content": ev["content"],
-                        })
-                    else:
-                        yield _sse({"type": "status", "step": ev["step"], "detail": ev["detail"]})
+                    yield _sse(await _prepare_orchestrator_event(ev))
 
                 try:
                     result = orch_future.result()
                 except Exception as exc:
                     logger.error("[chat/stream] orchestrator future error: %s", exc)
+                    async with get_session() as session:
+                        await finalize_run(
+                            session,
+                            multi_run_id,
+                            status="failed",
+                            error_summary=str(exc),
+                        )
+                        await session.commit()
                     yield _sse({"type": "status", "step": "fallback", "detail": "多智能体失败，回退单 Agent"})
                     result = None
 
                 # 拆解器判定单一意图 → 回退单 Agent 快速路径（走下面的 single 分支）
                 if result and result.get("degenerate_to_single"):
+                    async with get_session() as session:
+                        await finalize_run(
+                            session,
+                            multi_run_id,
+                            status="completed",
+                            execution_mode="degenerate",
+                        )
+                        await session.commit()
                     yield _sse({"type": "status", "step": "fallback", "detail": "单一意图，走快速路径"})
                 elif result:
                     # ── 流式汇总：在主事件循环里用 chat_stream 逐 token 整合 ──
@@ -349,7 +752,7 @@ async def send_message_stream(
                                 f"汇总要求：{payload['final_inst'] or '综合各子任务结果，给出完整、连贯的回答。'}"
                             )
                             try:
-                                llm = get_llm_client()
+                                llm = get_llm_client(profile=selected_model)
                                 # 综合回答前推分隔标题（前端 m.content 已有各子任务产出）
                                 if len(worker_outputs) > 1:
                                     yield _sse({"type": "delta", "content": "\n\n---\n**综合回答：**\n\n"})
@@ -395,24 +798,45 @@ async def send_message_stream(
                         async with get_session() as session:
                             meta = json.dumps({
                                 "intent": result.get("intent", "multi_agent"),
+                                "run_id": str(multi_run_id),
                                 "sources": result.get("sources", []),
                                 # status_list 是 {step, detail} 对象数组，前端可直接渲染；
                                 # result["steps"] 是 orchestrator 内部字符串日志，格式不兼容
                                 "steps": status_list,
                                 "execution_mode": result.get("execution_mode", ""),
+                                "model_id": selected_model.id,
+                                "model_name": selected_model.name,
                             }, ensure_ascii=False)
                             await add_message(session, conv_id, "assistant", full_answer, metadata_json=meta)
                             await session.commit()
                     except Exception as exc:
                         logger.warning("[chat/stream] multi persist failed: %s", exc)
 
+                    run_status = "completed"
+                    if payload and not any(report.ok() for report in payload["reports"]):
+                        run_status = "failed"
+                    async with get_session() as session:
+                        await finalize_run(
+                            session,
+                            multi_run_id,
+                            status=run_status,
+                            execution_mode=result.get("execution_mode", ""),
+                            error_summary=(
+                                "所有子任务执行失败" if run_status == "failed" else ""
+                            ),
+                        )
+                        await session.commit()
+
                     yield _sse({
                         "type": "done",
+                        "run_id": str(multi_run_id),
                         "sources": result.get("sources", []),
                         "intent": result.get("intent", "multi_agent"),
                         "steps": status_list,
                         "elapsed_seconds": elapsed,
                         "execution_mode": result.get("execution_mode", ""),
+                        "model_id": selected_model.id,
+                        "model_name": selected_model.name,
                     })
 
                     # 新会话标题后台生成
@@ -433,6 +857,23 @@ async def send_message_stream(
                     return
             except Exception as exc:
                 logger.error("[chat/stream] multi-agent error, fallback single: %s", exc)
+                try:
+                    from backend.services.agent_run_service import finalize_run
+
+                    async with get_session() as session:
+                        await finalize_run(
+                            session,
+                            multi_run_id,
+                            status="failed",
+                            error_summary=str(exc),
+                        )
+                        await session.commit()
+                except Exception as persist_exc:
+                    logger.warning(
+                        "[chat/stream] failed to finalize run %s: %s",
+                        multi_run_id,
+                        persist_exc,
+                    )
                 yield _sse({"type": "status", "step": "fallback", "detail": "多智能体失败，回退单 Agent"})
                 # 继续走下面的 single 路径
 
@@ -452,9 +893,15 @@ async def send_message_stream(
 
         def _prepare():
             try:
-                return agent.prepare_context(
-                    req.query, db_history, current_user.id, on_step=_on_step
-                )
+                with use_chat_model(selected_model):
+                    return agent.prepare_context(
+                        req.query,
+                        db_history,
+                        user_id=current_user.id,
+                        knowledge_base_ids=knowledge_base_ids,
+                        knowledge_catalog=knowledge_catalog,
+                        on_step=_on_step,
+                    )
             finally:
                 step_queue.put(_SENTINEL)
 
@@ -510,7 +957,7 @@ async def send_message_stream(
         # 2. 流式生成（含空响应兜底）
         answer_parts: list[str] = []
         try:
-            llm = get_llm_client()
+            llm = get_llm_client(profile=selected_model)
             async for delta in llm.chat_stream(ctx["messages"]):
                 answer_parts.append(delta)
                 yield _sse({"type": "delta", "content": delta})
@@ -550,6 +997,8 @@ async def send_message_stream(
                     "intent": ctx["intent"],
                     "sources": ctx["sources"],
                     "steps": collected_steps,
+                    "model_id": selected_model.id,
+                    "model_name": selected_model.name,
                 }, ensure_ascii=False)
                 await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
                 await session.commit()
@@ -562,6 +1011,8 @@ async def send_message_stream(
             "intent": ctx["intent"],
             "steps": collected_steps,
             "elapsed_seconds": elapsed,
+            "model_id": selected_model.id,
+            "model_name": selected_model.name,
         })
 
         # 4. 新会话标题生成 — 在 done 之后的后台协程里做，不阻塞 SSE 流。
@@ -581,6 +1032,39 @@ async def send_message_stream(
 
             asyncio.get_event_loop().create_task(_gen_title())
 
+    async def event_gen():
+        """Ensure an interrupted stream cannot leave a run permanently active."""
+        completed_normally = False
+        try:
+            async for chunk in _event_gen_inner():
+                yield chunk
+            completed_normally = True
+        finally:
+            if multi_run_id:
+                async def _close_unfinished_run():
+                    from backend.services.agent_run_service import finalize_run_if_active
+
+                    async with get_session() as session:
+                        changed = await finalize_run_if_active(
+                            session,
+                            multi_run_id,
+                            status="failed" if completed_normally else "cancelled",
+                            error_summary=(
+                                "流式响应结束但运行未写入终态"
+                                if completed_normally
+                                else "客户端在运行完成前断开连接"
+                            ),
+                        )
+                        if changed:
+                            await session.commit()
+
+                close_task = asyncio.create_task(_close_unfinished_run())
+                try:
+                    await asyncio.shield(close_task)
+                except asyncio.CancelledError:
+                    # shield keeps the database finalizer alive on the app loop.
+                    pass
+
     return StreamingResponse(
         event_gen(),
         media_type="text/event-stream",
@@ -590,6 +1074,46 @@ async def send_message_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/runs/{run_id}")
+async def get_multi_agent_run(
+    run_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """Return one owner-scoped multi-agent run with tasks and worker runs."""
+    from backend.repositories.agent_run_repository import RunRepository
+    from backend.services.agent_run_service import serialize_run
+
+    async with get_session() as session:
+        run = await RunRepository(session).get_detail_for_user(
+            run_id, current_user.id
+        )
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return serialize_run(run)
+
+
+@router.get("/conversations/{conversation_id}/runs")
+async def list_conversation_runs(
+    conversation_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """List durable multi-agent runs for one owner-scoped conversation."""
+    from backend.repositories.agent_run_repository import RunRepository
+    from backend.services.agent_run_service import serialize_run
+
+    async with get_session() as session:
+        conv = await get_conversation(session, conversation_id)
+        if not conv or conv.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        runs = await RunRepository(session).list_by_conversation_for_user(
+            conversation_id, current_user.id
+        )
+        return {
+            "conversation_id": str(conversation_id),
+            "runs": [serialize_run(run) for run in runs],
+        }
 
 
 @router.get("/conversations", response_model=list[ConversationSummary])

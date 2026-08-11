@@ -53,6 +53,8 @@ async def init_db() -> None:
     from backend.storage.postgres.models_conversation import Conversation, Message  # noqa: F401
     from backend.storage.postgres.models_knowledge import KnowledgeBase, KnowledgeFile  # noqa: F401
     from backend.storage.postgres.models_memory import UserFact  # noqa: F401
+    from backend.storage.postgres.models_model_config import CustomModelConfig  # noqa: F401
+    from backend.storage.postgres.models_agent_run import Run, Task, AgentRun  # noqa: F401
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

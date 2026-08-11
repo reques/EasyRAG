@@ -56,11 +56,17 @@
 
     <!-- 主区域 -->
     <main class="main">
-      <router-view v-slot="{ Component }">
-        <keep-alive>
-          <component :is="Component" />
-        </keep-alive>
-      </router-view>
+      <header class="app-topbar">
+        <span class="app-topbar-name">EasyRAG</span>
+        <span class="app-version-badge">版本 {{ appVersion }}</span>
+      </header>
+      <div class="main-content">
+        <router-view v-slot="{ Component }">
+          <keep-alive>
+            <component :is="Component" />
+          </keep-alive>
+        </router-view>
+      </div>
     </main>
 
     <!-- 会话「⋯」弹出菜单 -->
@@ -115,6 +121,7 @@ const auth = useAuthStore()
 const chatStore = useChatStore()
 const router = useRouter()
 const route = useRoute()
+const appVersion = ref('v0.3.1')
 
 const avatarLetter = computed(() => (auth.username || '?').slice(0, 1).toUpperCase())
 
@@ -128,9 +135,13 @@ function newChat() {
   if (route.path !== '/') router.push('/')
 }
 
-onMounted(() => {
+onMounted(async () => {
   chatStore.loadConversations()
   window.addEventListener('scroll', closeConvMenu, true)
+  try {
+    const info = await api.get('/health')
+    if (info.version) appVersion.value = `v${String(info.version).replace(/^v/, '')}`
+  } catch { /* 保留构建时版本兜底 */ }
 })
 onUnmounted(() => window.removeEventListener('scroll', closeConvMenu, true))
 

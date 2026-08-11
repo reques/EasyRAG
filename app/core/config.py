@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # ── App ──────────────────────────────────────────────────────────────
     APP_NAME: str = "All-in-RAG Agent"
-    APP_VERSION: str = "0.1.0"
+    APP_VERSION: str = "0.3.1"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
@@ -35,12 +35,37 @@ class Settings(BaseSettings):
 
     # ── LLM ──────────────────────────────────────────────────────────────
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"
-    LLM_API_KEY: str = Field(default="«redacted:sk-…»", alias="DEEPSEEK_API_KEY")
-    LLM_MODEL: str = "deepseek-chat"
+    LLM_API_KEY: str = Field(default="", alias="DEEPSEEK_API_KEY")
+    LLM_MODEL: str = "deepseek-v4-flash"
     LLM_TEMPERATURE: float = 0.0
     LLM_MAX_TOKENS: int = 8192
     LLM_TIMEOUT: int = 60          # seconds
     LLM_MAX_RETRIES: int = 2
+
+    # ── Chat model catalog ──────────────────────────────────────────────────
+    # The browser only receives the public IDs below. Provider endpoints,
+    # concrete model names and API keys always remain server-side.
+    LLM_DEFAULT_MODEL_ID: str = "deepseek-v4-flash"
+
+    MINIMAX_BASE_URL: str = "https://api.minimaxi.com/v1"
+    MINIMAX_API_KEY: str = ""
+    MINIMAX_MODEL: str = "MiniMax-M2.7"
+    MINIMAX_TEMPERATURE: float = 0.1
+
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL: str = "deepseek-v4-flash"
+    DEEPSEEK_TEMPERATURE: float = 0.0
+
+    QWEN_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    DASHSCOPE_API_KEY: str = ""
+    QWEN_MODEL: str = "qwen3.6-flash"
+    QWEN_TEMPERATURE: float = 0.0
+
+    GLM_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
+    ZHIPUAI_API_KEY: str = ""
+    GLM_MODEL: str = "glm-5.2"
+    # GLM's OpenAI-compatible endpoint requires temperature > 0.
+    GLM_TEMPERATURE: float = 0.6
 
     # ── LLM 快速模型（分级接口，阶段 1）─────────────────────────────────────
     # 辅助任务（标题生成/意图识别/记忆提取等）可用更快/更便宜的模型。
@@ -149,6 +174,11 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change-this-to-a-random-secret-string"
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+
+    # Encrypts user-created model API keys stored in PostgreSQL. When empty,
+    # local development falls back to JWT_SECRET_KEY; production should set a
+    # separate, stable high-entropy value so credential rotation is explicit.
+    MODEL_CONFIG_ENCRYPTION_KEY: str = ""
 
     # ── Tavily Web Search ────────────────────────────────────────────────
     TAVILY_API_KEY: str = ""

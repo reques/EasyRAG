@@ -1,7 +1,7 @@
 """Agent service layer - wraps the LangGraph workflow."""
 from __future__ import annotations
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.graph.workflow import get_graph
@@ -99,6 +99,9 @@ class AgentService:
         query: str,
         session_id: str = "default",
         history: Optional[List[Dict[str, str]]] = None,
+        user_id=None,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         logger.info("[agent_service] session=%s query=%r", session_id, query[:80])
         start = time.perf_counter()
@@ -111,7 +114,12 @@ class AgentService:
                 from app.agents.orchestrator import get_orchestrator
 
                 orchestrator = get_orchestrator()
-                result = orchestrator.run(query, history=history)
+                result = orchestrator.run(
+                    query,
+                    history=history,
+                    knowledge_base_ids=knowledge_base_ids,
+                    knowledge_catalog=knowledge_catalog,
+                )
                 # 拆解器判定单一意图 → 回退单 Agent 快速路径
                 if not result.get("degenerate_to_single"):
                     result["session_id"] = session_id
@@ -129,6 +137,9 @@ class AgentService:
             "query": query,
             "session_id": session_id,
             "history": history,
+            "user_id": str(user_id) if user_id else "",
+            "knowledge_base_ids": list(knowledge_base_ids or []),
+            "knowledge_catalog": list(knowledge_catalog or []),
             "steps": [],
             "retrieved_docs": [],
             "tool_args": {},
@@ -162,6 +173,8 @@ class AgentService:
         query: str,
         history: Optional[List[Dict[str, str]]] = None,
         user_id=None,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
         on_step=None,
     ) -> Dict[str, Any]:
         """同步检索 + 构建生成消息, 为流式生成准备上下文。
@@ -205,6 +218,8 @@ class AgentService:
 
         state: Dict[str, Any] = {
             "query": resolved_query, "steps": [], "user_id": user_id,
+            "knowledge_base_ids": list(knowledge_base_ids or []),
+            "knowledge_catalog": list(knowledge_catalog or []),
             "history": history,
         }
 
@@ -252,6 +267,13 @@ class AgentService:
         # 4. 拼装生成消息（语义记忆: 注入用户 facts 到 system prompt）
         _step("generate", "生成回答中...")
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
+
+        from app.services.knowledge_catalog import format_knowledge_catalog
+
+        messages.insert(0, {
+            "role": "system",
+            "content": format_knowledge_catalog(state.get("knowledge_catalog")),
+        })
 
         # 语义记忆注入: 跨会话用户事实（偏好/身份/历史结论）
         # prepare_context 在 executor 线程跑, DB 查询走隔离 engine 避免连接池污染

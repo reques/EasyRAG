@@ -27,6 +27,8 @@ class TaskBrief:
     context: str = ""
     constraints: List[str] = field(default_factory=list)
     worker_hint: str = ""  # rag / legal / code
+    knowledge_base_ids: List[str] = field(default_factory=list)
+    knowledge_catalog: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -62,15 +64,18 @@ class BaseWorker(ABC):
     def __init__(self):
         self._llm = None
         self.blackboard = None  # M2: orchestrator 注入，供 run_with_board 使用
+        self.tool_callback = None  # 工具调用钩子 fn(tool_name, args)，orchestrator 注入
 
     # ── LLM client（lazy，可注入 mock）─────────────────────────────────────
     @property
     def llm(self):
-        if self._llm is None:
-            from app.llm.client import get_llm_client
+        if self._llm is not None:
+            return self._llm
+        from app.llm.client import get_llm_client
 
-            self._llm = get_llm_client()
-        return self._llm
+        # Workers are held by a process-level Orchestrator singleton. Resolve
+        # the request-local model dynamically instead of caching the first one.
+        return get_llm_client()
 
     @llm.setter
     def llm(self, value):
@@ -86,7 +91,7 @@ class BaseWorker(ABC):
         registry = get_tool_registry()
         return [
             t.to_llm_schema()
-            for t in registry.list_tools()
+            for t in registry.list_all()
             if t.name in self.tool_names
         ]
 
@@ -96,6 +101,11 @@ class BaseWorker(ABC):
             raise PermissionError(
                 f"Worker '{self.name}' 无权调用工具 '{name}'，白名单: {self.tool_names}"
             )
+        if self.tool_callback:
+            try:
+                self.tool_callback(name, kwargs)
+            except Exception:
+                pass
         from app.tools.registry import get_tool_registry
 
         registry = get_tool_registry()

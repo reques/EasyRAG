@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.agents.workers.base import BaseWorker, TaskBrief, WorkerReport
 from app.agents.workers.rag_worker import RagWorker
@@ -34,11 +34,13 @@ class Orchestrator:
     # ── LLM client（lazy，可注入 mock）─────────────────────────────────────
     @property
     def llm(self):
-        if self._llm is None:
-            from app.llm.client import get_llm_client
+        if self._llm is not None:
+            return self._llm
+        from app.llm.client import get_llm_client
 
-            self._llm = get_llm_client()
-        return self._llm
+        # Resolve on every access so a process-level Orchestrator singleton
+        # cannot pin the model chosen by the first chat request.
+        return get_llm_client()
 
     @llm.setter
     def llm(self, value):
@@ -92,6 +94,9 @@ class Orchestrator:
         status_callback=None,
         worker_done_callback=None,
         return_synthesize_payload: bool = False,
+        tasks_callback=None,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """执行多智能体编排，返回与单 Agent 兼容的响应格式。
 
@@ -99,6 +104,9 @@ class Orchestrator:
                          供 SSE 流式端点透传状态事件到前端。
         worker_done_callback: 可选回调 fn(report: WorkerReport)，每个 Worker
                          完成时调用，供 SSE 实时推送子任务产出（边执行边输出）。
+        tasks_callback: 可选回调 fn(tasks: list[dict])，拆解完成后一次性传入
+                         子任务清单 [{task_id, goal, worker_hint}]，供前端侧边
+                         任务进度面板渲染待办列表。
         return_synthesize_payload: True 时跳过 LLM 汇总，在 result 中返回
                          synthesize_payload（含 query/reports/final_inst），
                          由调用方（chat_router）在主事件循环中流式整合——
@@ -151,9 +159,25 @@ class Orchestrator:
                     "elapsed_seconds": round(time.perf_counter() - start, 3),
                 }
 
+            authorised_ids = list(knowledge_base_ids or [])
+            authorised_catalog = list(knowledge_catalog or [])
+            for brief in briefs:
+                brief.knowledge_base_ids = authorised_ids
+                brief.knowledge_catalog = authorised_catalog
+
+            # 拆解完成 → 通知前端渲染侧边任务进度面板的待办清单
+            if tasks_callback:
+                try:
+                    tasks_callback([
+                        {"task_id": b.task_id, "goal": b.goal, "worker_hint": b.worker_hint}
+                        for b in briefs
+                    ])
+                except Exception:
+                    pass
+
             # 2. 派发
             _status("dispatch", f"正在派发 {len(briefs)} 个子任务...")
-            reports = self._dispatch(briefs, exec_mode, steps, _worker_done)
+            reports = self._dispatch(briefs, exec_mode, steps, _worker_done, _status)
             _status("dispatch_done", f"派发完成，{sum(1 for r in reports if r.ok())} 成功")
 
             # 3. 汇总
@@ -191,6 +215,24 @@ class Orchestrator:
                 ),
                 "tool_triggered": False,
                 "sub_tasks": [b.goal for b in briefs],
+                "task_details": [
+                    {
+                        "task_id": b.task_id,
+                        "goal": b.goal,
+                        "worker_hint": b.worker_hint,
+                    }
+                    for b in briefs
+                ],
+                "worker_reports": [
+                    {
+                        "task_id": report.task_id,
+                        "worker_name": report.worker_name,
+                        "status": report.status,
+                        "summary": report.detail or report.summary,
+                        "error": report.error or "",
+                    }
+                    for report in reports
+                ],
                 "steps": steps,
                 "validation_passed": True,
                 "validation_feedback": "",
@@ -261,16 +303,28 @@ class Orchestrator:
         return briefs, exec_mode, final_inst
 
     # ── 派发 ─────────────────────────────────────────────────────────────────
+    def _attach_tool_callback(self, worker, status_cb) -> None:
+        """给 worker 注入工具调用钩子 → 桥接到 status_callback（前端侧边面板展示）。"""
+
+        def _on_tool(tool_name: str, args: dict):
+            if status_cb:
+                try:
+                    status_cb("tool_call", f"{tool_name}({args or {}})")
+                except Exception:
+                    pass
+
+        worker.tool_callback = _on_tool
+
     def _dispatch(
-        self, briefs: List[TaskBrief], exec_mode: str, steps: List[str], on_worker_done=None
+        self, briefs: List[TaskBrief], exec_mode: str, steps: List[str], on_worker_done=None, status_cb=None
     ) -> List[WorkerReport]:
         """按模式派发任务到 Worker。on_worker_done: 每个 Worker 完成时回调。"""
         if exec_mode == "parallel":
-            return self._dispatch_parallel(briefs, steps, on_worker_done)
-        return self._dispatch_sequential(briefs, steps, on_worker_done)
+            return self._dispatch_parallel(briefs, steps, on_worker_done, status_cb)
+        return self._dispatch_sequential(briefs, steps, on_worker_done, status_cb)
 
     def _dispatch_sequential(
-        self, briefs: List[TaskBrief], steps: List[str], on_worker_done=None
+        self, briefs: List[TaskBrief], steps: List[str], on_worker_done=None, status_cb=None
     ) -> List[WorkerReport]:
         """顺序派发，前序产出注入后续 brief.context。"""
         reports: List[WorkerReport] = []
@@ -285,6 +339,8 @@ class Orchestrator:
 
             worker = self._get_worker(brief.worker_hint)
             steps.append(f"{brief.task_id} -> {worker.name}")
+            if status_cb:
+                self._attach_tool_callback(worker, status_cb)
 
             # 注入黑板
             worker.blackboard = self.blackboard
@@ -292,6 +348,7 @@ class Orchestrator:
                 report = worker.run_with_board(brief)
             finally:
                 worker.blackboard = None
+                worker.tool_callback = None
 
             reports.append(report)
             artifact_store[brief.task_id] = report
@@ -305,18 +362,28 @@ class Orchestrator:
         return reports
 
     def _dispatch_parallel(
-        self, briefs: List[TaskBrief], steps: List[str], on_worker_done=None
+        self, briefs: List[TaskBrief], steps: List[str], on_worker_done=None, status_cb=None
     ) -> List[WorkerReport]:
         """并行派发（ThreadPoolExecutor 真并发）。"""
         reports: List[WorkerReport] = []
 
+        from app.llm.client import get_active_chat_model_profile, use_chat_model
+
+        selected_model = get_active_chat_model_profile()
+
         def _run_one(brief: TaskBrief) -> WorkerReport:
-            worker = self._get_worker(brief.worker_hint)
-            worker.blackboard = self.blackboard
-            try:
-                return worker.run_with_board(brief)
-            finally:
-                worker.blackboard = None
+            # contextvars do not flow into ThreadPoolExecutor workers. Re-enter
+            # the request's selection so every sub-agent uses the same model.
+            with use_chat_model(selected_model):
+                worker = self._get_worker(brief.worker_hint)
+                worker.blackboard = self.blackboard
+                if status_cb:
+                    self._attach_tool_callback(worker, status_cb)
+                try:
+                    return worker.run_with_board(brief)
+                finally:
+                    worker.blackboard = None
+                    worker.tool_callback = None
 
         with ThreadPoolExecutor(max_workers=len(briefs)) as pool:
             futures = {pool.submit(_run_one, b): b for b in briefs}

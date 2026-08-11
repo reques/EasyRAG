@@ -76,9 +76,14 @@ def intent_recognition(state):
     history = state.get("history") or []
     logger.info("[intent_recognition] query=%r history_turns=%d", query[:80], len(history) // 2)
     client = get_llm_client(tier="fast")
+    # 动态注入当前可用工具（含 MCP 工具）——prompt 里硬编码枚举会漏掉
+    # 后注册的工具，导致 LLM 把未知工具名当参数传给别的工具（如 "echo" → text_tool）
+    from app.tools.registry import get_tool_registry
+    available_tools = get_tool_registry().to_react_prompt()
     prompt = INTENT_RECOGNITION.format(
         history=_format_history_for_prompt(history),
         query=query,
+        available_tools=available_tools,
     )
     try:
         data = client.chat_json_sync([{"role": "user", "content": prompt}], temperature=0.0)
@@ -331,31 +336,6 @@ def _lookup_file_ids(docs: List[Dict[str, Any]]) -> Dict[tuple, str]:
         return {}
 
 
-def _lookup_file_ids_by_filename(filenames: List[str]) -> Dict[str, str]:
-    """按文件名反查 file_id — 增强检索路径专用。
-
-    enhanced_retriever 返回的 sources 只有 filename 没有 kb_id，
-    遍历所有 knowledge_files 按 filename 匹配，返回 {filename: file_id}。
-    """
-    if not filenames:
-        return {}
-
-    async def _query(session) -> Dict[str, str]:
-        from sqlalchemy import select
-        from backend.storage.postgres.models_knowledge import KnowledgeFile
-        rows = (await session.execute(
-            select(KnowledgeFile.id, KnowledgeFile.filename)
-            .where(KnowledgeFile.filename.in_(filenames))
-        )).all()
-        return {filename: str(fid) for fid, filename in rows}
-
-    try:
-        return _run_in_thread_isolated(_query)
-    except Exception as exc:
-        logger.warning("[_lookup_file_ids_by_filename] failed: %s", exc)
-        return {}
-
-
 def knowledge_retrieval(state):
     """Node 3: Run RAG retrieval and populate retrieved_docs.
 
@@ -376,6 +356,7 @@ def knowledge_retrieval(state):
 def _enhanced_knowledge_retrieval(state):
     """增强检索：查询分解 × 四路并行检索 × 图谱融合重排 × 知识块聚类 × 迭代补充。"""
     query = state["query"]
+    knowledge_base_ids = state.get("knowledge_base_ids") or []
     logger.info("[knowledge_retrieval:enhanced] query=%r", query[:80])
 
     try:
@@ -386,7 +367,10 @@ def _enhanced_knowledge_retrieval(state):
         )
 
         retriever = get_enhanced_retriever()
-        result = retriever.retrieve(query)
+        result = retriever.retrieve(
+            query,
+            knowledge_base_ids=knowledge_base_ids,
+        )
 
         # 知识块格式化为上下文
         if result.knowledge_blocks:
@@ -429,9 +413,10 @@ def _enhanced_knowledge_retrieval(state):
         # 反查 file_id，使前端引用可点击
         if kb_sources:
             try:
-                file_id_map = _lookup_file_ids_by_filename([s["title"] for s in kb_sources])
+                file_id_map = _lookup_file_ids(docs)
                 for s in kb_sources:
-                    s["file_id"] = file_id_map.get(s["title"], "")
+                    key = (s.get("knowledge_base_id", ""), s["title"])
+                    s["file_id"] = file_id_map.get(key, "")
             except Exception as exc:
                 logger.debug("[knowledge_retrieval:enhanced] file_id lookup failed: %s", exc)
 
@@ -465,37 +450,50 @@ def _enhanced_knowledge_retrieval(state):
 def _legacy_knowledge_retrieval(state):
     """原有检索路径：向量检索 + 可选图谱旁路。"""
     query = state["query"]
+    knowledge_base_ids = state.get("knowledge_base_ids") or []
     logger.info("[knowledge_retrieval:legacy] query=%r", query[:80])
     try:
         from app.rag.retriever import get_retriever
         retriever = get_retriever()
-        docs = retriever.retrieve(query, top_k=cfg.RETRIEVER_TOP_K)
+        docs = retriever.retrieve(
+            query,
+            top_k=cfg.RETRIEVER_TOP_K,
+            knowledge_base_ids=knowledge_base_ids,
+        )
         logger.info("[knowledge_retrieval] retrieved %d docs", len(docs))
 
         if cfg.GRAPH_ENABLED:
             try:
                 from backend.services.graph_service import query_related, format_subgraph_for_prompt
 
-                async def _graph_query():
-                    async with get_session() as session:
-                        # 跨知识库全局查询（暂未按会话锁定 kb，待多 kb 路由完善）
-                        import uuid as _uuid
-                        from sqlalchemy import select
-                        from backend.storage.postgres.models_knowledge import KnowledgeBase
-                        kb_ids = (await session.execute(select(KnowledgeBase.id))).scalars().all()
-                        subgraphs = []
-                        for kb_id in kb_ids:
-                            subgraphs.extend(await query_related(session, kb_id, query))
-                        return subgraphs
+                async def _graph_query(session):
+                    import uuid as _uuid
 
-                from app.rag.enhanced_retriever import _run_async_in_thread
-                subgraphs = _run_async_in_thread(_graph_query())
-                if subgraphs:
+                    scoped_results = []
+                    for kb_id in knowledge_base_ids:
+                        subgraph = await query_related(
+                            session, _uuid.UUID(kb_id), query
+                        )
+                        if subgraph:
+                            scoped_results.append((kb_id, subgraph))
+                    return scoped_results
+
+                scoped_subgraphs = _run_in_thread_isolated(_graph_query)
+                for kb_id, subgraph in scoped_subgraphs:
                     docs.append({
-                        "content": format_subgraph_for_prompt(subgraphs),
-                        "metadata": {"source": "knowledge_graph", "graph": True, "score": 1.0},
+                        "content": format_subgraph_for_prompt(subgraph),
+                        "metadata": {
+                            "source": "knowledge_graph",
+                            "graph": True,
+                            "score": 1.0,
+                            "knowledge_base_id": kb_id,
+                        },
                     })
-                    logger.info("[knowledge_retrieval] graph: %d entities injected", len(subgraphs))
+                    logger.info(
+                        "[knowledge_retrieval] graph: %d entities injected for kb=%s",
+                        len(subgraph),
+                        kb_id,
+                    )
             except Exception as exc:
                 logger.warning("[knowledge_retrieval] graph query failed (ignored): %s", exc)
 
@@ -717,6 +715,13 @@ def answer_generation(state):
     effective_tool = tool_result or ("Tool failed: " + tool_error if tool_error else "N/A")
     try:
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
+
+        from app.services.knowledge_catalog import format_knowledge_catalog
+
+        messages.insert(0, {
+            "role": "system",
+            "content": format_knowledge_catalog(state.get("knowledge_catalog")),
+        })
 
         # 增强检索：使用知识块格式（截断保护：防止超大 context 导致 LLM 返回空）
         knowledge_blocks = state.get("knowledge_blocks")
