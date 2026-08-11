@@ -148,6 +148,23 @@ async def start_pending_tasks(session: AsyncSession, run_id: uuid.UUID) -> None:
     await session.flush()
 
 
+async def start_task(
+    session: AsyncSession, run_id: uuid.UUID, task_key: str
+) -> None:
+    """Mark one task and its worker run as active."""
+    task = await TaskRepository(session).get_by_key(run_id, task_key)
+    if not task or task.status != "pending":
+        return
+    now = datetime.now(timezone.utc)
+    task.status = "running"
+    task.started_at = now
+    agent_run = await AgentRunRepository(session).get_by_task(task.id)
+    if agent_run and agent_run.status == "pending":
+        agent_run.status = "running"
+        agent_run.started_at = now
+    await session.flush()
+
+
 async def finish_task(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -173,7 +190,7 @@ async def finish_task(
     agent_run = await AgentRunRepository(session).get_by_task(task.id)
     if agent_run:
         agent_run.status = task.status
-        agent_run.output_summary = output_summary[:2000] or None
+        agent_run.output_summary = output_summary[:12000] or None
         agent_run.error_summary = error_summary or None
         agent_run.started_at = agent_run.started_at or now
         agent_run.completed_at = now
