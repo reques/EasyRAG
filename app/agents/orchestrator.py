@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.agents.workers.base import BaseWorker, TaskBrief, WorkerReport
 from app.agents.workers.rag_worker import RagWorker
@@ -34,11 +34,13 @@ class Orchestrator:
     # ── LLM client（lazy，可注入 mock）─────────────────────────────────────
     @property
     def llm(self):
-        if self._llm is None:
-            from app.llm.client import get_llm_client
+        if self._llm is not None:
+            return self._llm
+        from app.llm.client import get_llm_client
 
-            self._llm = get_llm_client()
-        return self._llm
+        # Resolve on every access so a process-level Orchestrator singleton
+        # cannot pin the model chosen by the first chat request.
+        return get_llm_client()
 
     @llm.setter
     def llm(self, value):
@@ -93,6 +95,8 @@ class Orchestrator:
         worker_done_callback=None,
         return_synthesize_payload: bool = False,
         tasks_callback=None,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """执行多智能体编排，返回与单 Agent 兼容的响应格式。
 
@@ -154,6 +158,12 @@ class Orchestrator:
                     "steps": steps,
                     "elapsed_seconds": round(time.perf_counter() - start, 3),
                 }
+
+            authorised_ids = list(knowledge_base_ids or [])
+            authorised_catalog = list(knowledge_catalog or [])
+            for brief in briefs:
+                brief.knowledge_base_ids = authorised_ids
+                brief.knowledge_catalog = authorised_catalog
 
             # 拆解完成 → 通知前端渲染侧边任务进度面板的待办清单
             if tasks_callback:
@@ -339,16 +349,23 @@ class Orchestrator:
         """并行派发（ThreadPoolExecutor 真并发）。"""
         reports: List[WorkerReport] = []
 
+        from app.llm.client import get_active_chat_model_profile, use_chat_model
+
+        selected_model = get_active_chat_model_profile()
+
         def _run_one(brief: TaskBrief) -> WorkerReport:
-            worker = self._get_worker(brief.worker_hint)
-            worker.blackboard = self.blackboard
-            if status_cb:
-                self._attach_tool_callback(worker, status_cb)
-            try:
-                return worker.run_with_board(brief)
-            finally:
-                worker.blackboard = None
-                worker.tool_callback = None
+            # contextvars do not flow into ThreadPoolExecutor workers. Re-enter
+            # the request's selection so every sub-agent uses the same model.
+            with use_chat_model(selected_model):
+                worker = self._get_worker(brief.worker_hint)
+                worker.blackboard = self.blackboard
+                if status_cb:
+                    self._attach_tool_callback(worker, status_cb)
+                try:
+                    return worker.run_with_board(brief)
+                finally:
+                    worker.blackboard = None
+                    worker.tool_callback = None
 
         with ThreadPoolExecutor(max_workers=len(briefs)) as pool:
             futures = {pool.submit(_run_one, b): b for b in briefs}

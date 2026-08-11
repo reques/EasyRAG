@@ -27,6 +27,8 @@ class TaskBrief:
     context: str = ""
     constraints: List[str] = field(default_factory=list)
     worker_hint: str = ""  # rag / legal / code
+    knowledge_base_ids: List[str] = field(default_factory=list)
+    knowledge_catalog: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -67,11 +69,13 @@ class BaseWorker(ABC):
     # ── LLM client（lazy，可注入 mock）─────────────────────────────────────
     @property
     def llm(self):
-        if self._llm is None:
-            from app.llm.client import get_llm_client
+        if self._llm is not None:
+            return self._llm
+        from app.llm.client import get_llm_client
 
-            self._llm = get_llm_client()
-        return self._llm
+        # Workers are held by a process-level Orchestrator singleton. Resolve
+        # the request-local model dynamically instead of caching the first one.
+        return get_llm_client()
 
     @llm.setter
     def llm(self, value):

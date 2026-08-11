@@ -16,6 +16,9 @@ class AgentState(TypedDict, total=False):
     query: str                          # original user query
     session_id: str                     # conversation session ID
     history: List[Dict[str, str]]       # prior turns [{"role":…,"content":…}]
+    user_id: str                        # authenticated user id
+    knowledge_base_ids: List[str]       # authorised retrieval scope
+    knowledge_catalog: List[Dict[str, Any]]  # authorised KB/file metadata
 
     # ── Intent / Planning ─────────────────────────────────────────────────
     intent: str                         # e.g. "knowledge_qa", "tool_use", "complex_task"

@@ -346,7 +346,7 @@ async def _run_ingestion(
         texts = [c[0] for c in chunks]
         metas = [c[1] for c in chunks]
         for m in metas:
-            m.setdefault("knowledge_base_id", str(kb_id))
+            m["knowledge_base_id"] = str(kb_id)
 
         n = get_retriever().add_documents(texts, metas)
 

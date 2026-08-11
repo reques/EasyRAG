@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from app.core.logger import get_logger
 
@@ -169,9 +169,13 @@ class BM25Retriever:
         query: str,
         top_k: int = 5,
         score_threshold: float = 0.0,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
     ) -> List[dict]:
         """BM25 检索，返回 [{"id":..., "content":..., "metadata":..., "score":...}]。"""
-        if not self._docs:
+        from app.rag.retriever import normalize_knowledge_base_ids
+
+        allowed_ids = set(normalize_knowledge_base_ids(knowledge_base_ids))
+        if not self._docs or not allowed_ids:
             return []
 
         query_tokens = [t for t in tokenize(query) if t.lower() not in self._stopwords]
@@ -187,6 +191,9 @@ class BM25Retriever:
             for doc_idx, tf in self._inverted.get(token, {}).items():
                 if self._docs[doc_idx][0] == "__DELETED__":
                     continue
+                metadata = self._docs[doc_idx][2]
+                if str(metadata.get("knowledge_base_id", "")) not in allowed_ids:
+                    continue
                 dl = max(self._doc_len[doc_idx], 1)
                 numerator = tf * (self.k1 + 1)
                 denominator = tf + self.k1 * (1 - self.b + self.b * dl / self._avgdl)
@@ -195,7 +202,7 @@ class BM25Retriever:
         # 排序
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         results = []
-        for doc_idx, score in ranked[:top_k]:
+        for doc_idx, score in ranked:
             if score < score_threshold:
                 break
             doc_id, content, metadata = self._docs[doc_idx]
@@ -208,6 +215,8 @@ class BM25Retriever:
                 "score": round(score, 4),
                 "retrieval_path": "bm25",
             })
+            if len(results) >= top_k:
+                break
 
         logger.info("[bm25] query=%r returned %d docs", query[:60], len(results))
         return results

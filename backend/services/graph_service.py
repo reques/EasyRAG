@@ -106,6 +106,7 @@ async def extract_graph_from_chunks(
                 target=tgt,
                 relation_type=rel,
                 description=(r.get("description") or ""),
+                kb_id=str(kb_id),
             )
             total_relations += 1
 
