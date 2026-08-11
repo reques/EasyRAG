@@ -124,3 +124,37 @@ def test_orchestrator_exposes_task_and_worker_records_for_sync_persistence():
     }]
     assert result["worker_reports"][0]["status"] == "done"
     assert result["worker_reports"][0]["summary"] == "分析完成"
+
+
+def test_task_status_events_carry_their_task_identity():
+    class Worker:
+        name = "rag"
+        blackboard = None
+        tool_callback = None
+
+        def run_with_board(self, brief):
+            if self.tool_callback:
+                self.tool_callback("web_search", {"query": brief.goal})
+            return WorkerReport(
+                task_id=brief.task_id,
+                worker_name=self.name,
+                status="done",
+                summary="完成",
+            )
+
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator._workers = {"rag": Worker()}
+    orchestrator._default_worker = "rag"
+    orchestrator.blackboard = None
+    events = []
+
+    orchestrator._dispatch_sequential(
+        [TaskBrief(task_id="task-7", goal="核验数据", worker_hint="rag")],
+        [],
+        status_cb=lambda step, detail, task_id="": events.append(
+            (step, detail, task_id)
+        ),
+    )
+
+    assert any(step == "task_started" and task_id == "task-7" for step, _, task_id in events)
+    assert any(step == "tool_call" and task_id == "task-7" for step, _, task_id in events)

@@ -100,7 +100,7 @@ class Orchestrator:
     ) -> Dict[str, Any]:
         """执行多智能体编排，返回与单 Agent 兼容的响应格式。
 
-        status_callback: 可选回调 fn(step, detail)，在关键步骤时调用，
+        status_callback: 可选回调 fn(step, detail, task_id="")，在关键步骤时调用，
                          供 SSE 流式端点透传状态事件到前端。
         worker_done_callback: 可选回调 fn(report: WorkerReport)，每个 Worker
                          完成时调用，供 SSE 实时推送子任务产出（边执行边输出）。
@@ -115,13 +115,9 @@ class Orchestrator:
         start = time.perf_counter()
         steps = [f"orchestrator 接收查询: {query[:80]}"]
 
-        def _status(step: str, detail: str = ""):
+        def _status(step: str, detail: str = "", task_id: str = ""):
             steps.append(f"[status] {step}: {detail}")
-            if status_callback:
-                try:
-                    status_callback(step, detail)
-                except Exception:
-                    pass
+            self._emit_task_status(status_callback, step, detail, task_id)
 
         def _worker_done(report):
             if worker_done_callback:
@@ -303,15 +299,30 @@ class Orchestrator:
         return briefs, exec_mode, final_inst
 
     # ── 派发 ─────────────────────────────────────────────────────────────────
-    def _attach_tool_callback(self, worker, status_cb) -> None:
+    @staticmethod
+    def _emit_task_status(status_cb, step: str, detail: str, task_id: str) -> None:
+        if not status_cb:
+            return
+        try:
+            status_cb(step, detail, task_id)
+        except TypeError:
+            try:
+                status_cb(step, detail)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _attach_tool_callback(self, worker, status_cb, task_id: str) -> None:
         """给 worker 注入工具调用钩子 → 桥接到 status_callback（前端侧边面板展示）。"""
 
         def _on_tool(tool_name: str, args: dict):
-            if status_cb:
-                try:
-                    status_cb("tool_call", f"{tool_name}({args or {}})")
-                except Exception:
-                    pass
+            self._emit_task_status(
+                status_cb,
+                "tool_call",
+                f"{tool_name}({args or {}})",
+                task_id,
+            )
 
         worker.tool_callback = _on_tool
 
@@ -340,7 +351,13 @@ class Orchestrator:
             worker = self._get_worker(brief.worker_hint)
             steps.append(f"{brief.task_id} -> {worker.name}")
             if status_cb:
-                self._attach_tool_callback(worker, status_cb)
+                self._emit_task_status(
+                    status_cb,
+                    "task_started",
+                    f"{worker.name} 开始执行",
+                    brief.task_id,
+                )
+                self._attach_tool_callback(worker, status_cb, brief.task_id)
 
             # 注入黑板
             worker.blackboard = self.blackboard
@@ -378,7 +395,13 @@ class Orchestrator:
                 worker = self._get_worker(brief.worker_hint)
                 worker.blackboard = self.blackboard
                 if status_cb:
-                    self._attach_tool_callback(worker, status_cb)
+                    self._emit_task_status(
+                        status_cb,
+                        "task_started",
+                        f"{worker.name} 开始执行",
+                        brief.task_id,
+                    )
+                    self._attach_tool_callback(worker, status_cb, brief.task_id)
                 try:
                     return worker.run_with_board(brief)
                 finally:

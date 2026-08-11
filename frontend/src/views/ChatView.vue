@@ -78,6 +78,18 @@
               <span v-if="msg.meta.elapsed">耗时: {{ msg.meta.elapsed }}s</span>
             </div>
           </div>
+          <div v-if="msg.content" class="message-actions">
+            <button
+              type="button"
+              class="message-copy-btn"
+              :title="copiedMessageIndex === i ? '已复制' : '复制文本'"
+              @click="copyMessage(msg.content, i)"
+            >
+              <CheckCircle2 v-if="copiedMessageIndex === i" :size="13" />
+              <Copy v-else :size="13" />
+              {{ copiedMessageIndex === i ? '已复制' : '复制' }}
+            </button>
+          </div>
           </div>
         </template>
 
@@ -149,16 +161,28 @@
     </div>
     </div><!-- /.chat-main -->
 
-    <!-- 侧边任务进度面板（多智能体请求时显示，可手动开/关） -->
-    <aside v-if="taskPanel.visible" class="task-panel">
+    <!-- 多智能体状态工作台：计划与 Agent 分层展示，过程产出默认折叠。 -->
+    <aside
+      v-if="taskPanel.visible"
+      class="task-panel"
+      :class="{ 'is-resizing': panelResizing }"
+      :style="{ width: taskPanelWidth + 'px' }"
+    >
+      <div
+        class="task-panel-resizer"
+        title="拖动调整状态栏宽度"
+        @pointerdown="startTaskPanelResize"
+      ></div>
       <div class="task-panel-header">
-        <span class="task-panel-title">
-          <Loader2 v-if="sending" :size="14" class="spin" />
-          <CheckCircle2 v-else :size="14" />
-          任务进度
-        </span>
+        <div>
+          <span class="task-panel-title">
+            <Loader2 v-if="taskPanel.status === 'running'" :size="14" class="spin" />
+            <CheckCircle2 v-else :size="14" />
+            状态 {{ taskPanelObjectCount }} 项
+          </span>
+          <span class="task-panel-subtitle">{{ runStateLabel }}</span>
+        </div>
         <span class="task-panel-actions">
-          <span class="task-panel-count">{{ taskProgress.done }}/{{ taskProgress.total }} · {{ taskProgress.pct }}%</span>
           <button class="task-panel-close" title="关闭任务面板" @click="taskPanel.visible = false">
             <X :size="14" />
           </button>
@@ -167,31 +191,72 @@
       <div class="task-panel-bar">
         <div class="task-panel-bar-fill" :style="{ width: taskProgress.pct + '%' }"></div>
       </div>
-      <div class="task-list">
-        <div
-          v-for="t in taskPanel.tasks"
-          :key="t.task_id"
-          class="task-item"
-          :class="'task-' + t.status"
-        >
-          <span class="task-status-icon">
-            <CheckCircle2 v-if="t.status === 'done'" :size="14" />
-            <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
-            <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
-            <span v-else class="task-pending-dot"></span>
+
+      <section class="workbench-section">
+        <button class="workbench-section-header" @click="taskPanel.todosExpanded = !taskPanel.todosExpanded">
+          <span><ListChecks :size="14" /> 待办</span>
+          <span class="workbench-section-meta">
+            {{ taskProgress.done }}/{{ taskProgress.total }}
+            <ChevronDown v-if="taskPanel.todosExpanded" :size="14" />
+            <ChevronRight v-else :size="14" />
           </span>
-          <div class="task-item-body">
-            <div class="task-item-title">{{ t.task_id }} · {{ workerLabel(t.worker_hint) }}</div>
-            <div class="task-item-goal">{{ t.goal }}</div>
-            <div v-if="t.tools.length" class="task-tools">
-              <div v-for="(tc, ti) in t.tools" :key="ti" class="task-tool-call">
-                <span class="task-tool-name">Call</span>
-                <span class="task-tool-args">{{ tc }}</span>
-              </div>
-            </div>
+        </button>
+        <div v-show="taskPanel.todosExpanded" class="todo-list">
+          <div v-for="t in taskPanel.tasks" :key="'todo-' + t.task_id" class="todo-row" :class="'task-' + t.status">
+            <span class="task-status-icon">
+              <CheckCircle2 v-if="t.status === 'done'" :size="14" />
+              <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
+              <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
+              <span v-else class="task-pending-dot"></span>
+            </span>
+            <span class="todo-title">{{ t.goal }}</span>
           </div>
         </div>
-      </div>
+      </section>
+
+      <section class="workbench-section">
+        <button class="workbench-section-header" @click="taskPanel.agentsExpanded = !taskPanel.agentsExpanded">
+          <span><Bot :size="14" /> 子智能体</span>
+          <span class="workbench-section-meta">
+            {{ taskPanel.tasks.length }}
+            <ChevronDown v-if="taskPanel.agentsExpanded" :size="14" />
+            <ChevronRight v-else :size="14" />
+          </span>
+        </button>
+        <div v-show="taskPanel.agentsExpanded" class="agent-list">
+          <article v-for="t in taskPanel.tasks" :key="'agent-' + t.task_id" class="agent-card" :class="'task-' + t.status">
+            <button class="agent-card-summary" @click="t.expanded = !t.expanded">
+              <span class="agent-avatar"><Bot :size="14" /></span>
+              <span class="agent-card-copy">
+                <strong>{{ workerLabel(t.worker_hint) }}探索员</strong>
+                <small>{{ t.goal }}</small>
+              </span>
+              <span class="agent-state">
+                <CheckCircle2 v-if="t.status === 'done'" :size="14" />
+                <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
+                <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
+                <span v-else class="task-pending-dot"></span>
+                <ChevronDown v-if="t.expanded" :size="14" />
+                <ChevronRight v-else :size="14" />
+              </span>
+            </button>
+            <div v-show="t.expanded" class="agent-card-detail">
+              <div v-if="t.tools.length" class="task-tools">
+                <div v-for="(tc, ti) in t.tools" :key="ti" class="task-tool-call">
+                  <span class="task-tool-name">Call</span>
+                  <span class="task-tool-args">{{ tc }}</span>
+                </div>
+              </div>
+              <div v-if="t.output" class="agent-output">
+                <span class="agent-output-label">子任务产出</span>
+                <div class="agent-output-content" v-html="renderContent(t.output)"></div>
+              </div>
+              <div v-else-if="t.status === 'running'" class="agent-waiting">正在执行并回传结果…</div>
+              <div v-else-if="t.status === 'pending'" class="agent-waiting">等待调度</div>
+            </div>
+          </article>
+        </div>
+      </section>
     </aside>
 
     <Teleport to="body">
@@ -294,11 +359,13 @@ import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
 import {
   ArrowUp,
+  Bot,
   BookOpen,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Cloud,
+  Copy,
   HardDrive,
   ListChecks,
   Loader2,
@@ -339,6 +406,74 @@ const sending = ref(false)
 const conversationId = ref(null)
 const msgContainer = ref(null)
 const inputEl = ref(null)
+const copiedMessageIndex = ref(null)
+let copyFeedbackTimer = null
+
+async function copyMessage(content, index) {
+  if (!content) return
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(content)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = content
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    copiedMessageIndex.value = index
+    if (copyFeedbackTimer) window.clearTimeout(copyFeedbackTimer)
+    copyFeedbackTimer = window.setTimeout(() => {
+      copiedMessageIndex.value = null
+      copyFeedbackTimer = null
+    }, 1600)
+  } catch {
+    copiedMessageIndex.value = null
+  }
+}
+
+const TASK_PANEL_WIDTH_KEY = 'easyrag-task-panel-width'
+const savedTaskPanelWidth = Number(localStorage.getItem(TASK_PANEL_WIDTH_KEY))
+const taskPanelWidth = ref(
+  Number.isFinite(savedTaskPanelWidth)
+    ? Math.min(520, Math.max(280, savedTaskPanelWidth))
+    : 340
+)
+const panelResizing = ref(false)
+let panelResizeMoveHandler = null
+let panelResizeUpHandler = null
+
+function stopTaskPanelResize() {
+  if (!panelResizing.value) return
+  panelResizing.value = false
+  document.body.classList.remove('task-panel-resizing')
+  if (panelResizeMoveHandler) window.removeEventListener('pointermove', panelResizeMoveHandler)
+  if (panelResizeUpHandler) window.removeEventListener('pointerup', panelResizeUpHandler)
+  if (panelResizeUpHandler) window.removeEventListener('pointercancel', panelResizeUpHandler)
+  panelResizeMoveHandler = null
+  panelResizeUpHandler = null
+  localStorage.setItem(TASK_PANEL_WIDTH_KEY, String(taskPanelWidth.value))
+}
+
+function startTaskPanelResize(event) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  const startX = event.clientX
+  const startWidth = taskPanelWidth.value
+  panelResizing.value = true
+  document.body.classList.add('task-panel-resizing')
+  panelResizeMoveHandler = moveEvent => {
+    const nextWidth = startWidth + startX - moveEvent.clientX
+    taskPanelWidth.value = Math.min(520, Math.max(280, Math.round(nextWidth)))
+  }
+  panelResizeUpHandler = stopTaskPanelResize
+  window.addEventListener('pointermove', panelResizeMoveHandler)
+  window.addEventListener('pointerup', panelResizeUpHandler, { once: true })
+  window.addEventListener('pointercancel', panelResizeUpHandler, { once: true })
+}
 
 // 对话模型目录由后端环境配置生成；浏览器只保存公开 model_id，不接触供应商密钥。
 const MODEL_STORAGE_KEY = 'easyrag-chat-model-id'
@@ -498,8 +633,21 @@ const statusSteps = ref([])
 const taskPanel = ref({
   visible: false,
   run_id: '',
-  tasks: [],      // [{task_id, goal, worker_hint, status: pending|running|done|error, tools: []}]
+  status: 'idle',
+  todosExpanded: true,
+  agentsExpanded: true,
+  tasks: [],
 })
+function emptyTaskPanel() {
+  return {
+    visible: false,
+    run_id: '',
+    status: 'idle',
+    todosExpanded: true,
+    agentsExpanded: true,
+    tasks: [],
+  }
+}
 function findTask(taskId) {
   return taskPanel.value.tasks.find(t => t.task_id === taskId)
 }
@@ -523,6 +671,7 @@ const STEP_LABELS = {
   decompose_done: '拆解完成',
   dispatch: '派发子任务',
   dispatch_done: '派发完成',
+  task_started: '子任务执行',
   synthesize: '汇总结果',
   synthesize_done: '汇总完成',
   fallback: '回退',
@@ -551,6 +700,34 @@ const taskProgress = computed(() => {
   const done = tasks.filter(t => t.status === 'done' || t.status === 'error').length
   return { done, total: tasks.length, pct: Math.round(done / tasks.length * 100) }
 })
+const taskPanelObjectCount = computed(() => taskPanel.value.tasks.length * 2)
+const runStateLabel = computed(() => {
+  if (taskPanel.value.status === 'running') return '执行中'
+  if (taskPanel.value.status === 'failed') return '部分任务失败'
+  if (taskPanel.value.status === 'cancelled') return '已取消'
+  return taskPanel.value.tasks.length ? '已完成' : '等待计划'
+})
+
+function frontendTaskStatus(status) {
+  if (status === 'completed' || status === 'done' || status === 'done_with_concerns') return 'done'
+  if (status === 'failed' || status === 'error' || status === 'blocked') return 'error'
+  if (status === 'running') return 'running'
+  return 'pending'
+}
+
+function taskFromRun(task, agentRuns) {
+  const agent = (agentRuns || []).find(item => item.task_id === task.task_id)
+  return {
+    task_id: task.task_id,
+    goal: task.goal,
+    worker_hint: task.worker_hint || agent?.worker_name || '',
+    status: frontendTaskStatus(task.status),
+    tools: [],
+    output: agent?.output_summary || '',
+    error: task.error_summary || agent?.error_summary || '',
+    expanded: false,
+  }
+}
 
 // 流式进行中: 最后一条 assistant 消息是否已开始收到内容
 const lastAssistantHasContent = computed(() => {
@@ -606,7 +783,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   conversationId.value = newId
   messages.value = []
   // 切换会话 → 清空上一会话的任务面板（否则面板残留 pin 在右边）
-  taskPanel.value = { visible: false, run_id: '', tasks: [] }
+  taskPanel.value = emptyTaskPanel()
 
   if (newId) {
     try {
@@ -622,11 +799,25 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
           runId: m.meta?.run_id || '',
         } : null,
         steps: m.meta?.steps || [],
-        stepsExpanded: true,
+        stepsExpanded: false,
         stepsLoading: false,
         time: formatTime(m.created_at),
         ts: m.created_at ? Date.parse(m.created_at) : null,
       }))
+      try {
+        const runData = await api.get(`/chat/conversations/${newId}/runs`)
+        const latestRun = runData.runs?.[0]
+        if (latestRun?.tasks?.length) {
+          taskPanel.value = {
+            visible: true,
+            run_id: latestRun.id,
+            status: latestRun.status,
+            todosExpanded: true,
+            agentsExpanded: true,
+            tasks: latestRun.tasks.map(task => taskFromRun(task, latestRun.agent_runs)),
+          }
+        }
+      } catch { /* 旧会话可能没有 Run，保持无面板 */ }
       scrollBottom()
     } catch { /* 忽略 */ }
   }
@@ -653,7 +844,7 @@ async function send() {
     sources: [],
     meta: { modelName: selectedModel.value?.name || '' },
     steps: [],
-    stepsExpanded: true,
+    stepsExpanded: false,
     stepsLoading: true,
     time: formatTime(new Date(asstTs).toISOString()),
     ts: asstTs,
@@ -664,7 +855,7 @@ async function send() {
   let gotError = ''
   // 重置当前轮次的状态缓冲 + 任务面板
   statusSteps.value = []
-  taskPanel.value = { visible: false, run_id: '', tasks: [] }
+  taskPanel.value = emptyTaskPanel()
 
   try {
     await api.streamChat('/chat/stream', {
@@ -689,38 +880,39 @@ async function send() {
         taskPanel.value = {
           visible: true,
           run_id: ev.run_id || taskPanel.value.run_id || '',
+          status: 'running',
+          todosExpanded: true,
+          agentsExpanded: true,
           tasks: (ev.tasks || []).map(t => ({
             task_id: t.task_id,
             goal: t.goal,
             worker_hint: t.worker_hint,
             status: 'pending',
             tools: [],
+            output: '',
+            error: '',
+            expanded: false,
           })),
         }
       } else if (ev.type === 'tool_call') {
-        // 工具调用记录：挂到当前运行中的子任务下
-        const running = taskPanel.value.tasks.find(t => t.status === 'running')
-        if (running) running.tools.push(ev.detail)
+        const task = findTask(ev.task_id)
+        if (task) task.tools.push(ev.detail)
       } else if (ev.type === 'status') {
         // 状态事件：落到当前 assistant 消息的 steps（随消息保留）
         const st = { step: ev.step, detail: ev.detail }
         statusSteps.value.push(st)
         const m = messages.value[msgIndex]
         messages.value[msgIndex] = { ...m, steps: [...(m.steps || []), st] }
-        // 派发开始 → 所有子任务标记运行中
-        if (ev.step === 'dispatch') {
-          taskPanel.value.tasks.forEach(t => { t.status = 'running' })
-        }
+        if (ev.step === 'task_started') setTaskStatus(ev.task_id, 'running')
         scrollBottom()
       } else if (ev.type === 'worker_output') {
-        // 子任务产出：作为中间结果追加到消息内容，边执行边输出
-        const m = messages.value[msgIndex]
-        const header = `\n\n---\n**子任务 ${ev.task_id}（${ev.worker}）产出：**\n\n`
-        m.content += header + ev.content
-        messages.value[msgIndex] = { ...m }
-        // 任务面板：该子任务完成
-        setTaskStatus(ev.task_id, 'done')
-        scrollBottom()
+        // 过程产出只进入右侧工作台，默认折叠，不污染最终回答正文。
+        const task = findTask(ev.task_id)
+        if (task) {
+          task.output = ev.content || ''
+          task.error = ev.status === 'error' ? ev.content : ''
+          task.status = frontendTaskStatus(ev.status)
+        }
       } else if (ev.type === 'delta') {
         // 触发响应式更新: 替换数组元素
         const m = messages.value[msgIndex]
@@ -742,12 +934,12 @@ async function send() {
           steps: (ev.steps && ev.steps.length) ? ev.steps : (m.steps || []),
           stepsLoading: false,
         }
-        // 任务面板：全部子任务标记完成
-        taskPanel.value.tasks.forEach(t => {
-          if (t.status === 'running' || t.status === 'pending') t.status = 'done'
-        })
+        taskPanel.value.status = taskPanel.value.tasks.some(t => t.status === 'error')
+          ? 'failed'
+          : 'completed'
       } else if (ev.type === 'error') {
         gotError = ev.detail || '生成失败'
+        if (taskPanel.value.tasks.length) taskPanel.value.status = 'failed'
       }
     })
 
@@ -784,5 +976,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', closeModelMenuOnOutsideClick)
+  stopTaskPanelResize()
+  if (copyFeedbackTimer) window.clearTimeout(copyFeedbackTimer)
 })
 </script>

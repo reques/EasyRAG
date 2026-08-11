@@ -557,7 +557,7 @@ async def send_message_stream(
                     create_tasks as persist_tasks,
                     finalize_run,
                     finish_task,
-                    start_pending_tasks,
+                    start_task,
                 )
 
                 orchestrator = get_orchestrator()
@@ -570,8 +570,8 @@ async def send_message_stream(
                 status_list: list[dict] = []  # 完整状态列表，供落库
                 _ORCH_SENTINEL = object()
 
-                def _on_status(step: str, detail: str):
-                    ev = {"step": step, "detail": detail}
+                def _on_status(step: str, detail: str, task_id: str = ""):
+                    ev = {"step": step, "detail": detail, "task_id": task_id}
                     status_list.append(ev)
                     status_queue.put({"type": "status", **ev})
 
@@ -624,8 +624,12 @@ async def send_message_stream(
                                     output_summary=ev.get("content", ""),
                                     error_summary=ev.get("error", ""),
                                 )
-                            elif ev.get("step") == "dispatch":
-                                await start_pending_tasks(session, multi_run_id)
+                            elif ev.get("step") == "task_started":
+                                await start_task(
+                                    session,
+                                    multi_run_id,
+                                    ev.get("task_id", ""),
+                                )
                             await session.commit()
                     except Exception as exc:
                         logger.warning(
@@ -653,11 +657,13 @@ async def send_message_stream(
                         return {
                             "type": "tool_call",
                             "run_id": str(multi_run_id),
+                            "task_id": ev.get("task_id", ""),
                             "detail": ev.get("detail", ""),
                         }
                     return {
                         "type": "status",
                         "run_id": str(multi_run_id),
+                        "task_id": ev.get("task_id", ""),
                         "step": ev["step"],
                         "detail": ev["detail"],
                     }
@@ -738,6 +744,8 @@ async def send_message_stream(
                         ok_reports = [r for r in reports if r.ok()]
                         if len(ok_reports) == 1 and not payload["final_inst"]:
                             answer = ok_reports[0].detail or ok_reports[0].summary
+                            if answer:
+                                yield _sse({"type": "delta", "content": answer})
                         elif not ok_reports:
                             answer = "所有子任务执行失败，无法生成回答。"
                             yield _sse({"type": "delta", "content": answer})
@@ -753,9 +761,6 @@ async def send_message_stream(
                             )
                             try:
                                 llm = get_llm_client(profile=selected_model)
-                                # 综合回答前推分隔标题（前端 m.content 已有各子任务产出）
-                                if len(worker_outputs) > 1:
-                                    yield _sse({"type": "delta", "content": "\n\n---\n**综合回答：**\n\n"})
                                 parts: list[str] = []
                                 async for chunk in llm.chat_stream(
                                     [{"role": "user", "content": prompt}]
@@ -778,18 +783,8 @@ async def send_message_stream(
                         if answer:
                             yield _sse({"type": "delta", "content": answer})
 
-                    # 完整答案 = worker 中间产出 + 汇总结果（与前端实时渲染的内容一致）
-                    # 单任务场景：worker_output 已推送过产出，answer 即该产出 → 不重复拼接
-                    multi_task = len(worker_outputs) > 1
-                    if multi_task:
-                        mid = "".join(
-                            f"\n\n---\n**子任务 {w['task_id']}（{w['worker']}）产出：**\n\n{w['content']}"
-                            for w in worker_outputs
-                        )
-                        full_answer = mid.lstrip("\n") + "\n\n---\n**综合回答：**\n\n" + answer
-                    else:
-                        # 单任务：worker_output 已推送产出，answer 与其相同或为空
-                        full_answer = worker_outputs[0]["content"] if worker_outputs else answer
+                    # 子任务产出作为独立过程数据保存；聊天正文只持久化最终回答。
+                    full_answer = answer
 
                     elapsed = round(time.perf_counter() - start, 3)
 
@@ -799,6 +794,7 @@ async def send_message_stream(
                             meta = json.dumps({
                                 "intent": result.get("intent", "multi_agent"),
                                 "run_id": str(multi_run_id),
+                                "worker_outputs": worker_outputs,
                                 "sources": result.get("sources", []),
                                 # status_list 是 {step, detail} 对象数组，前端可直接渲染；
                                 # result["steps"] 是 orchestrator 内部字符串日志，格式不兼容
