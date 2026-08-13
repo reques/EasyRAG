@@ -562,14 +562,15 @@ body.task-panel-resizing {
   gap: 8px;
 }
 .task-panel-close {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 22px;
+  gap: 4px;
   height: 22px;
+  padding: 0 8px;
   border: none;
   border-radius: 6px;
   background: transparent;
+  font-size: 12px;
   color: var(--gray-500, #6b7280);
   cursor: pointer;
   transition: background .15s ease, color .15s ease;
@@ -578,10 +579,10 @@ body.task-panel-resizing {
   background: var(--gray-150, #e5e7eb);
   color: var(--gray-1000, #1a1a1a);
 }
-/* 任务面板重新打开的入口按钮（消息区顶部） */
+/* 状态栏展开入口按钮（面板收起时贴右停留） */
 .task-panel-toggle {
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
   padding: 10px 22px 0;
 }
 .task-panel-toggle-btn {
@@ -600,6 +601,11 @@ body.task-panel-resizing {
 .task-panel-toggle-btn:hover {
   border-color: var(--main-400, #0b8fae);
   color: var(--main-700, #046a82);
+}
+.task-panel-toggle-meta {
+  font-size: 11px;
+  color: var(--gray-400, #9ca3af);
+  font-variant-numeric: tabular-nums;
 }
 .task-panel-bar {
   height: 5px;
