@@ -1,0 +1,42 @@
+name: easyrag-mineru
+
+services:
+  mineru-api:
+    build:
+      context: .
+      args:
+        MINERU_VERSION: ${MINERU_VERSION:-3.4.4}
+        MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-modelscope}
+    image: easyrag/mineru-pipeline:${MINERU_VERSION:-3.4.4}
+    container_name: easyrag-mineru-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MINERU_PORT:-18000}:8000"
+    environment:
+      MINERU_MODEL_SOURCE: local
+      MINERU_API_OUTPUT_ROOT: /opt/mineru/output
+      MINERU_API_TASK_RETENTION_SECONDS: ${MINERU_TASK_RETENTION_SECONDS:-86400}
+      MINERU_API_TASK_CLEANUP_INTERVAL_SECONDS: ${MINERU_TASK_CLEANUP_INTERVAL_SECONDS:-300}
+      MINERU_API_MAX_CONCURRENT_REQUESTS: ${MINERU_MAX_CONCURRENT_REQUESTS:-1}
+      MINERU_PROCESSING_WINDOW_SIZE: ${MINERU_PROCESSING_WINDOW_SIZE:-16}
+      CUDA_VISIBLE_DEVICES: "0"
+    volumes:
+      - mineru-output:/opt/mineru/output
+    shm_size: "8gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/health > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+
+volumes:
+  mineru-output:
+    name: easyrag-mineru-output

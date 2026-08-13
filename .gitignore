@@ -34,3 +34,4 @@ frontend/dist/
 # Temp
 *.log
 image.png
+deploy/mineru/test-output/

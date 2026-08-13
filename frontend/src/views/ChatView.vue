@@ -4,11 +4,14 @@
     <div class="chat-main">
     <!-- 消息列表 -->
     <div class="chat-messages" ref="msgContainer" :class="{ 'is-empty': messages.length === 0 && !sending }">
-      <!-- 任务面板开关：本轮有任务记录但面板被手动关闭时，提供重新打开的入口 -->
+      <!-- 侧边状态栏展开入口：有任务且面板收起时显示 -->
       <div v-if="taskPanel.tasks.length && !taskPanel.visible" class="task-panel-toggle">
         <button class="task-panel-toggle-btn" @click="taskPanel.visible = true">
           <ListChecks :size="14" />
-          任务进度（{{ taskProgress.done }}/{{ taskProgress.total }}）
+          展开状态栏
+          <span v-if="taskPanel.tasks.length" class="task-panel-toggle-meta">
+            {{ taskProgress.done }}/{{ taskProgress.total }}
+          </span>
         </button>
       </div>
       <div class="chat-column">
@@ -183,8 +186,9 @@
           <span class="task-panel-subtitle">{{ runStateLabel }}</span>
         </div>
         <span class="task-panel-actions">
-          <button class="task-panel-close" title="关闭任务面板" @click="taskPanel.visible = false">
-            <X :size="14" />
+          <button class="task-panel-close" title="收起状态栏" @click="taskPanel.visible = false">
+            <ChevronRight :size="14" />
+            <span>收起</span>
           </button>
         </span>
       </div>
@@ -371,7 +375,6 @@ import {
   Loader2,
   Plus,
   Trash2,
-  X,
 } from 'lucide-vue-next'
 import api from '../api'
 
@@ -782,6 +785,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   if (newId === oldId) return
   conversationId.value = newId
   messages.value = []
+  input.value = ''
   // 切换会话 → 清空上一会话的任务面板（否则面板残留 pin 在右边）
   taskPanel.value = emptyTaskPanel()
 
@@ -809,7 +813,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         const latestRun = runData.runs?.[0]
         if (latestRun?.tasks?.length) {
           taskPanel.value = {
-            visible: true,
+            visible: false,
             run_id: latestRun.id,
             status: latestRun.status,
             todosExpanded: true,

@@ -8,6 +8,7 @@ Each tool is registered as a ToolDefinition containing:
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -59,35 +60,62 @@ class ToolDefinition:
 
 
 class ToolRegistry:
-    """Registry that maps tool names to their definitions."""
+    """Registry that maps tool names to their definitions.
+
+    Thread-safe: all read/write operations are guarded by an RLock so that
+    MCP server stop (unregister, main thread) and LangGraph node traversal
+    (list_all/to_react_prompt, worker thread) can run concurrently without
+    raising ``RuntimeError: dictionary changed size during iteration``.
+    """
 
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}
+        self._lock = threading.RLock()
 
     def register(self, tool: ToolDefinition) -> None:
-        self._tools[tool.name] = tool
+        with self._lock:
+            self._tools[tool.name] = tool
         logger.debug("Tool registered: %s", tool.name)
 
+    def unregister(self, name: str) -> None:
+        """Remove a tool by name (no-op if not present).
+
+        Used by MCPManager.stop() to cleanly remove a server's tools without
+        touching the private ``_tools`` dict directly.
+        """
+        with self._lock:
+            self._tools.pop(name, None)
+        logger.debug("Tool unregistered: %s", name)
+
     def get(self, name: str) -> ToolDefinition:
-        if name not in self._tools:
-            raise ToolNotFoundError(name, "tool not registered")
-        return self._tools[name]
+        with self._lock:
+            if name not in self._tools:
+                raise ToolNotFoundError(name, "tool not registered")
+            return self._tools[name]
 
     def list_names(self, available_only: bool = True) -> List[str]:
         """Return tool names. available_only=True 时只含 check_fn 通过的工具。"""
+        with self._lock:
+            snapshot = list(self._tools.values())
         if not available_only:
-            return list(self._tools.keys())
-        return [t.name for t in self._tools.values() if t.is_available()]
+            return [t.name for t in snapshot]
+        return [t.name for t in snapshot if t.is_available()]
 
     def list_all(self, available_only: bool = True) -> List[ToolDefinition]:
         """Return all ToolDefinition objects (for schema/prompt building).
         available_only=True 时只含 check_fn 通过的工具。"""
+        with self._lock:
+            snapshot = list(self._tools.values())
         if not available_only:
-            return list(self._tools.values())
-        return [t for t in self._tools.values() if t.is_available()]
+            return snapshot
+        return [t for t in snapshot if t.is_available()]
 
     def invoke(self, name: str, **kwargs: Any) -> str:
         """Execute a registered tool by name.
+
+        The tool lookup is performed under the registry lock, but the actual
+        ``fn`` call runs *outside* the lock so a slow tool (e.g. web_search
+        HTTP request) never blocks other registry readers.
 
         Args:
             name:   Tool name.
@@ -100,7 +128,7 @@ class ToolRegistry:
             ToolNotFoundError:   Tool not registered.
             ToolExecutionError:  Tool unavailable (check_fn failed) or raised during execution.
         """
-        tool = self.get(name)
+        tool = self.get(name)  # acquires+releases lock internally
         if not tool.is_available():
             raise ToolExecutionError(
                 f"Tool '{name}' is not available (check_fn failed — missing config or dependency)"
@@ -124,9 +152,7 @@ class ToolRegistry:
     def to_react_prompt(self) -> str:
         """生成 ReAct reasoning prompt 用的工具描述文本（仅含可用工具）。"""
         lines = []
-        for t in self._tools.values():
-            if not t.is_available():
-                continue
+        for t in self.list_all():
             args = ", ".join(
                 f"{k}: {v[0]}" for k, v in t.arg_schema.items()
             ) or "无参数"
