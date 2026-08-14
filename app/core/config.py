@@ -100,6 +100,16 @@ class Settings(BaseSettings):
     # ── RAG ──────────────────────────────────────────────────────────────
     RETRIEVER_TOP_K: int = 4
     RAG_SCORE_THRESHOLD: float = 0.0
+    # Optional Ragas evaluation. Keep disabled so the API process never needs
+    # to import Ragas unless explicitly configured.
+    RAGAS_ENABLED: bool = False
+    RAGAS_EXECUTION_MODE: Literal["process", "in_process"] = "process"
+    RAGAS_PYTHON_EXECUTABLE: str = ""
+    RAGAS_METRICS: str = "id_context_precision,id_context_recall"
+    RAGAS_TIMEOUT: float = 300.0
+    RAGAS_LLM_BASE_URL: str = ""
+    RAGAS_LLM_API_KEY: str = ""
+    RAGAS_LLM_MODEL: str = ""
     # 阶段 2C: 知识图谱
     GRAPH_ENABLED: bool = False            # 上传时是否抽取实体/关系（慢，需 LLM 调用）
     GRAPH_MAX_CHUNKS_PER_FILE: int = 30    # 单文件最多送入抽取的 chunk 数（成本控制）
@@ -113,6 +123,19 @@ class Settings(BaseSettings):
     #   parent_child 父子分块（小块索引用于检索，返回所属大块作为上下文）
     CHUNK_STRATEGY: Literal["fixed", "recursive", "markdown", "parent_child"] = "recursive"
     PARENT_CHUNK_SIZE: int = 1500   # parent_child 策略下父块（上下文块）大小
+
+    # Document parsing / MinerU
+    # Keep MinerU behind a feature flag until the ingestion pipeline is wired to it.
+    MINERU_ENABLED: bool = False
+    MINERU_API_URL: str = "http://127.0.0.1:18000"
+    MINERU_BACKEND: str = "pipeline"
+    MINERU_LANG: str = "ch"
+    MINERU_CONNECT_TIMEOUT: float = 10.0
+    MINERU_REQUEST_TIMEOUT: float = 60.0
+    MINERU_RESULT_DOWNLOAD_TIMEOUT: float = 600.0
+    MINERU_TASK_TIMEOUT: float = 3600.0
+    MINERU_POLL_INTERVAL: float = 2.0
+    MINERU_FALLBACK_TO_LOCAL: bool = True
 
     # ── 增强检索 (阶段 3) ──────────────────────────────────────────────────
     # 是否启用增强检索（查询分解 × 四路并行 × 图谱融合重排 × 知识块聚类 × 迭代补充）

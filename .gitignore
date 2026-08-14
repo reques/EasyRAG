@@ -9,6 +9,7 @@ build/
 # Environment
 .env
 *.env.local
+.venv-ragas/
 
 # OS
 .DS_Store

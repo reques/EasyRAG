@@ -84,6 +84,10 @@ async def update_file_progress(
     progress: int,
     status: Optional[str] = None,
     error_message: Optional[str] = None,
+    stage: Optional[str] = None,
+    message: Optional[str] = None,
+    current: Optional[int] = None,
+    total: Optional[int] = None,
 ) -> None:
     """更新文件处理进度（后台索引任务用）。每次调用独立提交，供轮询读取。"""
     repo = KnowledgeFileRepository(session)
@@ -95,4 +99,12 @@ async def update_file_progress(
         f.status = status
     if error_message is not None:
         f.error_message = error_message
+    if stage is not None:
+        f.processing_stage = stage
+    if message is not None:
+        f.progress_message = message
+    if current is not None:
+        f.progress_current = max(0, current)
+    if total is not None:
+        f.progress_total = max(0, total)
     await session.commit()

@@ -18,6 +18,12 @@ from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.core.logger import get_logger
+from app.rag.parsers import (
+    DocumentParserError,
+    EmptyDocumentError,
+    TransientDocumentParserError,
+    UnsupportedDocumentError,
+)
 
 logger = get_logger(__name__)
 cfg = get_settings()
@@ -159,13 +165,14 @@ def kb_health():
 
 @router.post("/upload", response_model=IngestResponse, status_code=status.HTTP_201_CREATED)
 async def upload_file(
-    file: UploadFile = File(..., description="Document to ingest (.txt, .md, .pdf, .docx)"),
+    file: UploadFile = File(..., description="Document to ingest"),
     chunk_size: int = Form(default=0, ge=0, description="Override chunk size (0 = use config)"),
     chunk_overlap: int = Form(default=0, ge=0, description="Override chunk overlap (0 = use config)"),
+    parser: str = Form(default="auto", description="Parser: auto/mineru/local"),
 ):
     """Upload a document file and store its chunks in the vector database.
 
-    Supported formats: ``.txt``, ``.md``, ``.pdf``, ``.docx``
+    Supported formats are determined by the configured parser router.
 
     The file is parsed, split into overlapping text chunks, embedded, and
     stored in the configured vector store (memory / Milvus / Chroma).
@@ -173,9 +180,12 @@ async def upload_file(
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No filename provided.")
 
-    allowed_extensions = {".txt", ".md", ".pdf", ".docx"}
+    from app.rag.parsers import get_parser_router
+
+    parser_router = get_parser_router()
+    allowed_extensions = parser_router.supported_extensions
     ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in allowed_extensions:
+    if not parser_router.supports(file.filename):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported file type '{ext}'. Allowed: {sorted(allowed_extensions)}",
@@ -188,12 +198,17 @@ async def upload_file(
     logger.info("[kb/upload] file=%s size=%d bytes", file.filename, len(raw))
 
     try:
-        from app.rag.chunker import parse_and_chunk
+        from app.rag.chunker import chunk_parsed_document
         from app.rag.retriever import get_retriever
 
-        chunks = parse_and_chunk(
-            raw=raw,
-            filename=file.filename,
+        parsed_document = await parser_router.parse(
+            raw,
+            file.filename,
+            content_type=file.content_type,
+            preferred_parser=parser,
+        )
+        chunks = chunk_parsed_document(
+            parsed_document,
             chunk_size=chunk_size or None,
             chunk_overlap=chunk_overlap or None,
         )
@@ -211,10 +226,33 @@ async def upload_file(
 
         return IngestResponse(
             indexed=n,
-            message=f"Successfully indexed {n} chunks from '{file.filename}'.",
+            message=(
+                f"Successfully indexed {n} chunks from '{file.filename}' "
+                f"with {parsed_document.provenance.parser_name}."
+            ),
         )
     except HTTPException:
         raise
+    except UnsupportedDocumentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=str(exc),
+        ) from exc
+    except EmptyDocumentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except TransientDocumentParserError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except DocumentParserError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except Exception as exc:

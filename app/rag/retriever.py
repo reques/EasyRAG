@@ -10,6 +10,7 @@ The active backend is selected by ``Settings.VECTOR_STORE_TYPE``.
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -22,6 +23,29 @@ logger = get_logger(__name__)
 cfg = get_settings()
 
 DocList = List[Dict[str, Any]]  # [{"content": str, "metadata": dict}]
+
+
+def get_document_chunk_id(
+    knowledge_base_id: uuid.UUID | str,
+    content: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Return a stable public ID for a retrieved chunk.
+
+    Older Milvus collections only persist source and content, so the ID must
+    remain reproducible even when richer chunk metadata is unavailable.
+    """
+    meta = metadata or {}
+    explicit_id = meta.get("chunk_id")
+    if explicit_id:
+        return str(explicit_id)
+    payload = "\x1f".join((
+        str(uuid.UUID(str(knowledge_base_id))),
+        str(meta.get("source") or ""),
+        str(meta.get("chunk_index") if meta.get("chunk_index") is not None else ""),
+        str(content or ""),
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def normalize_knowledge_base_ids(
@@ -89,6 +113,7 @@ class BaseRetriever:
         query: str,
         top_k: int = 4,
         knowledge_base_ids: Optional[Sequence[str]] = None,
+        score_threshold: Optional[float] = None,
     ) -> DocList:
         raise NotImplementedError
 
@@ -132,6 +157,7 @@ class MemoryRetriever(BaseRetriever):
         query: str,
         top_k: int = 4,
         knowledge_base_ids: Optional[Sequence[str]] = None,
+        score_threshold: Optional[float] = None,
     ) -> DocList:
         allowed_ids = set(normalize_knowledge_base_ids(knowledge_base_ids))
         if not self._vecs or not allowed_ids:
@@ -151,11 +177,16 @@ class MemoryRetriever(BaseRetriever):
         norms = np.where(norms == 0, 1e-9, norms)
         scores = (mat / norms) @ (q_vec / (np.linalg.norm(q_vec) + 1e-9))
         top_idx = np.argsort(scores)[::-1][:top_k]
+        threshold = (
+            cfg.RAG_SCORE_THRESHOLD
+            if score_threshold is None
+            else score_threshold
+        )
         results: DocList = []
         for local_idx in top_idx:
             idx = allowed_indices[int(local_idx)]
             score = float(scores[local_idx])
-            if score < cfg.RAG_SCORE_THRESHOLD:
+            if score < threshold:
                 continue
             results.append({
                 "content": self._texts[idx],
@@ -280,6 +311,7 @@ class MilvusRetriever(BaseRetriever):
         query: str,
         top_k: int = 4,
         knowledge_base_ids: Optional[Sequence[str]] = None,
+        score_threshold: Optional[float] = None,
     ) -> DocList:
         allowed_ids = normalize_knowledge_base_ids(knowledge_base_ids)
         if not allowed_ids:
@@ -299,6 +331,11 @@ class MilvusRetriever(BaseRetriever):
             expr=scope_expr,
             output_fields=["content", "source", "knowledge_base_id"],
         )
+        threshold = (
+            cfg.RAG_SCORE_THRESHOLD
+            if score_threshold is None
+            else score_threshold
+        )
         docs: DocList = []
         for hit in results[0]:
             hit_kb_id = hit.entity.get("knowledge_base_id", "") or ""
@@ -306,7 +343,7 @@ class MilvusRetriever(BaseRetriever):
                 logger.warning("[MilvusRetriever] discarded out-of-scope hit")
                 continue
             score = float(hit.score)
-            if score < cfg.RAG_SCORE_THRESHOLD:
+            if score < threshold:
                 continue
             docs.append({
                 "content": hit.entity.get("content", ""),
@@ -411,6 +448,7 @@ class ChromaRetriever(BaseRetriever):
         query: str,
         top_k: int = 4,
         knowledge_base_ids: Optional[Sequence[str]] = None,
+        score_threshold: Optional[float] = None,
     ) -> DocList:
         allowed_ids = normalize_knowledge_base_ids(knowledge_base_ids)
         if not allowed_ids:
@@ -428,6 +466,11 @@ class ChromaRetriever(BaseRetriever):
             where=where,
             include=["documents", "metadatas", "distances"],
         )
+        threshold = (
+            cfg.RAG_SCORE_THRESHOLD
+            if score_threshold is None
+            else score_threshold
+        )
         docs: DocList = []
         for text, meta, dist in zip(
             res["documents"][0], res["metadatas"][0], res["distances"][0]
@@ -436,7 +479,7 @@ class ChromaRetriever(BaseRetriever):
                 logger.warning("[ChromaRetriever] discarded out-of-scope hit")
                 continue
             score = 1.0 - float(dist)  # chroma returns L2 distance with cosine space
-            if score < cfg.RAG_SCORE_THRESHOLD:
+            if score < threshold:
                 continue
             docs.append({"content": text, "metadata": {**meta, "score": score}})
         logger.info("[ChromaRetriever] query returned %d docs", len(docs))

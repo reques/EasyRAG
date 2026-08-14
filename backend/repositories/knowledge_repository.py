@@ -120,3 +120,18 @@ class KnowledgeFileRepository(BaseRepository[KnowledgeFile]):
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def list_by_ids_for_kb(
+        self,
+        kb_id: uuid.UUID,
+        file_ids: Sequence[uuid.UUID],
+    ) -> Sequence[KnowledgeFile]:
+        """Return only requested files that belong to the given KB."""
+        if not file_ids:
+            return []
+        stmt = select(KnowledgeFile).where(
+            KnowledgeFile.knowledge_base_id == kb_id,
+            KnowledgeFile.id.in_(file_ids),
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
