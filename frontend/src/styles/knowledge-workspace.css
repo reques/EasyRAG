@@ -411,12 +411,18 @@
 .kbw-file-link:disabled:hover strong { text-decoration: none; }
 
 .kbw-type-badge { padding: 3px 7px; border: 1px solid #e2e4e6; border-radius: 5px; background: #f7f8f9; color: #696d73; font-size: 9px; font-weight: 730; text-transform: uppercase; }
+.kbw-parser-cell { display: inline-flex; align-items: center; gap: 6px; }
+.kbw-parser-cell small { color: #969aa0; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.kbw-parser-badge { padding: 3px 7px; border: 1px solid #e0e2e4; border-radius: 5px; background: #f7f8f9; color: #686c72; font-size: 9px; font-weight: 700; }
+.kbw-parser-badge.is-mineru { border-color: #cfd2d5; background: #ededee; color: #25272a; }
 .kbw-status-badge { display: inline-flex; align-items: center; gap: 6px; color: #55595f; font-size: 10px; }
 .kbw-status-badge i { width: 6px; height: 6px; border-radius: 50%; background: #a8abb0; }
 .kbw-status-badge.completed i { background: #222427; }
 .kbw-status-badge.processing i { background: #686c72; box-shadow: 0 0 0 3px #ededee; animation: kbw-pulse 1.5s ease infinite; }
 .kbw-status-badge.failed { color: #313337; }
 .kbw-status-badge.failed i { border: 1px solid #60646a; background: transparent; }
+.kbw-file-status-cell { display: inline-flex; flex-direction: column; gap: 4px; }
+.kbw-file-status-cell small { max-width: 210px; overflow: hidden; color: #92969c; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes kbw-pulse { 50% { box-shadow: 0 0 0 6px transparent; } }
 
 .kbw-icon-danger { width: 30px; height: 30px; display: inline-grid; place-items: center; border: 0; border-radius: 7px; background: transparent; color: #96999f; }
@@ -498,6 +504,19 @@
 .kbw-contract-foot { margin: 0 17px 17px; display: flex; align-items: flex-start; gap: 7px; color: #85898f; font-size: 10px; line-height: 1.55; }
 .kbw-contract-foot svg { flex: 0 0 auto; margin-top: 1px; }
 .kbw-result-panel { min-height: 290px; }
+.kbw-retrieval-results { padding: 14px; display: grid; gap: 10px; background: #f8f9fa; }
+.kbw-retrieval-hit { overflow: hidden; border: 1px solid #e3e5e7; border-radius: 10px; background: #fff; }
+.kbw-retrieval-hit > header { min-height: 62px; padding: 11px 14px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #eceef0; }
+.kbw-hit-source { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.kbw-hit-rank { min-width: 35px; height: 28px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; border-radius: 7px; background: #222427; color: #fff; font: 700 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.kbw-hit-source > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.kbw-hit-source strong { overflow: hidden; color: #303236; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.kbw-hit-source small { color: #93979d; font-size: 9px; }
+.kbw-hit-score { min-width: 74px; padding-left: 13px; display: flex; flex-direction: column; align-items: flex-end; border-left: 1px solid #eceef0; }
+.kbw-hit-score small { color: #999da3; font-size: 8px; }
+.kbw-hit-score strong { color: #292b2e; font: 700 13px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.kbw-retrieval-hit > p { max-height: 190px; margin: 0; padding: 14px; overflow: auto; color: #50545a; font-size: 11px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
+.kbw-retrieval-hit > footer { padding: 8px 14px; display: flex; flex-wrap: wrap; gap: 6px 14px; border-top: 1px solid #f0f1f2; background: #fafafa; color: #898d93; font-size: 8px; }
 
 .kbw-graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 14px; }
 .kbw-graph-canvas { min-height: 520px; }
@@ -604,6 +623,19 @@
 .kbw-dropzone { min-height: 158px; margin: 0; background: #fafafa; }
 .kbw-dropzone:hover { background: #f5f6f7; color: #303236; border-color: #bfc2c7; }
 .kbw-dropzone .file-label-hint strong { color: #4a4d52; font-size: 12px; font-style: normal; }
+.kbw-parser-picker { margin-top: 14px; }
+.kbw-parser-picker-heading { margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.kbw-parser-picker-heading strong { color: #3f4247; font-size: 11px; font-weight: 680; }
+.kbw-parser-picker-heading span { color: #92969c; font-size: 9px; }
+.kbw-parser-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.kbw-parser-option { min-width: 0; padding: 9px 8px; border: 1px solid #e1e3e5; border-radius: 8px; background: #fafafa; cursor: pointer; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+.kbw-parser-option:hover { border-color: #bec2c6; background: #f5f6f7; }
+.kbw-parser-option.is-selected { border-color: #777b81; background: #f0f1f2; box-shadow: inset 0 0 0 1px #777b81; }
+.kbw-parser-option.is-disabled { opacity: .42; cursor: not-allowed; }
+.kbw-parser-option input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.kbw-parser-option > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.kbw-parser-option strong { overflow: hidden; color: #303236; font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.kbw-parser-option small { color: #858990; font-size: 8px; line-height: 1.35; }
 .kbw-selected-file { width: 100%; display: flex; align-items: center; gap: 10px; }
 .kbw-selected-file > svg { width: 38px; height: 38px; padding: 10px; border-radius: 9px; background: #eceeef; color: #55595f; }
 .kbw-selected-file > span { min-width: 0; display: flex; flex-direction: column; }
@@ -693,6 +725,9 @@
   .kbw-metric-grid article { min-height: 72px; padding: 12px; }
   .kbw-metric-icon { display: none; }
   .kbw-field-grid { grid-template-columns: 1fr; }
+  .kbw-retrieval-results { padding: 8px; }
+  .kbw-retrieval-hit > header { align-items: flex-start; }
+  .kbw-hit-source small { line-height: 1.5; }
   .kbw-map-card { padding: 28px 18px; }
   .kbw-map-branches { grid-template-columns: 1fr; }
   .kbw-map-branches::before,

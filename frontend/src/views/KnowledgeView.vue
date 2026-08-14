@@ -140,7 +140,7 @@
               <p>上传、查看和管理 Agent 可检索的源文件。</p>
             </div>
             <div class="kbw-heading-actions">
-              <button class="kbw-secondary-button" :disabled="filesLoading" @click="loadFiles">
+              <button class="kbw-secondary-button" :disabled="filesLoading" @click="loadFiles()">
                 <RefreshCw :size="14" :class="{ spin: filesLoading }" /> 刷新
               </button>
               <button class="kbw-primary-button" @click="showUpload = true">
@@ -197,6 +197,7 @@
                   <tr>
                     <th>文件名</th>
                     <th>类型</th>
+                    <th>解析器</th>
                     <th>分块</th>
                     <th>字符数</th>
                     <th>状态</th>
@@ -218,11 +219,25 @@
                       </button>
                     </td>
                     <td><span class="kbw-type-badge">{{ file.file_type || 'FILE' }}</span></td>
+                    <td>
+                      <span class="kbw-parser-cell" :title="parserDetails(file)">
+                        <span :class="['kbw-parser-badge', { 'is-mineru': file.parser_name === 'mineru' }]">
+                          {{ parserLabel(file) }}
+                        </span>
+                        <small v-if="file.parser_version">v{{ file.parser_version }}</small>
+                        <small v-if="file.parser_task_id">任务 {{ shortId(file.parser_task_id) }}</small>
+                      </span>
+                    </td>
                     <td>{{ formatNumber(file.chunk_count) }}</td>
                     <td>{{ formatNumber(file.char_count) }}</td>
                     <td>
-                      <span :class="['kbw-status-badge', file.status]">
-                        <i></i>{{ statusLabel(file.status) }}
+                      <span class="kbw-file-status-cell">
+                        <span :class="['kbw-status-badge', file.status]">
+                          <i></i>{{ statusLabel(file.status) }}
+                        </span>
+                        <small v-if="file.status === 'processing'">
+                          {{ file.progress }}% · {{ file.progress_message || stageLabel(file.processing_stage) }}
+                        </small>
                       </span>
                     </td>
                     <td>{{ formatDate(file.created_at) }}</td>
@@ -243,9 +258,9 @@
             <div>
               <span class="kbw-eyebrow">RETRIEVAL LAB</span>
               <h2>检索测试</h2>
-              <p>在接入后端前先确定测试参数、结果结构和交互方式。</p>
+              <p>对当前知识库执行真实向量检索，检查召回内容与排序。</p>
             </div>
-            <span class="kbw-module-status"><CircleDashed :size="14" /> 接口待接入</span>
+            <span class="kbw-module-status"><CheckCircle2 :size="14" /> 已接入后端</span>
           </div>
 
           <div class="kbw-split-layout">
@@ -278,8 +293,9 @@
                   </select>
                 </label>
               </div>
-              <button class="kbw-primary-button is-wide" @click="runRetrievalPreview">
-                <Play :size="14" /> 开始测试
+              <button class="kbw-primary-button is-wide" :disabled="retrievalLoading" @click="runRetrievalPreview">
+                <LoaderCircle v-if="retrievalLoading" :size="14" class="spin" />
+                <Play v-else :size="14" /> {{ retrievalLoading ? '检索中' : '开始测试' }}
               </button>
             </article>
 
@@ -291,7 +307,7 @@
               <pre>{{ retrievalContract }}</pre>
               <div class="kbw-contract-foot">
                 <Info :size="14" />
-                <span>当前仅生成前端请求参数，不会调用未实现的检索接口。</span>
+                <span>请求只会检索当前知识库，不会读取其他知识库的内容。</span>
               </div>
             </article>
           </div>
@@ -299,12 +315,50 @@
           <article class="kbw-panel-card kbw-result-panel">
             <div class="kbw-panel-title">
               <div><ListFilter :size="17" /><strong>召回结果</strong></div>
-              <span>0 条</span>
+              <span v-if="retrievalRun">{{ retrievalRun.total }} 条 · {{ retrievalRun.elapsed_ms }} ms</span>
+              <span v-else>0 条</span>
             </div>
-            <div class="kbw-result-empty">
+            <div v-if="retrievalLoading" class="kbw-result-empty">
+              <LoaderCircle :size="28" class="spin" />
+              <strong>正在执行检索</strong>
+              <span>正在生成查询向量并从当前知识库召回内容。</span>
+            </div>
+            <div v-else-if="retrievalError" class="kbw-result-empty">
+              <CircleAlert :size="28" />
+              <strong>检索失败</strong>
+              <span>{{ retrievalError }}</span>
+              <button class="kbw-secondary-button" @click="runRetrievalPreview">重新测试</button>
+            </div>
+            <div v-else-if="!retrievalRun?.results?.length" class="kbw-result-empty">
               <Waypoints :size="28" />
-              <strong>{{ retrievalAttempted ? '检索接口尚未接入' : '等待一次测试查询' }}</strong>
-              <span>{{ retrievalAttempted ? '前端参数已经准备好，后续接入接口即可展示真实分块与相似度。' : '结果区将展示命中文件、分块正文、相似度和元数据。' }}</span>
+              <strong>{{ retrievalAttempted ? '没有符合条件的召回结果' : '等待一次测试查询' }}</strong>
+              <span>{{ retrievalAttempted ? '可以降低最低相似度或换一个更贴近文档内容的问题。' : '结果区将展示命中文件、分块正文、相似度、排名和耗时。' }}</span>
+            </div>
+            <div v-else class="kbw-retrieval-results">
+              <article v-for="hit in retrievalRun.results" :key="`${hit.rank}-${hit.file_id || hit.source || 'hit'}`" class="kbw-retrieval-hit">
+                <header>
+                  <div class="kbw-hit-source">
+                    <span class="kbw-hit-rank">#{{ hit.rank }}</span>
+                    <div>
+                      <strong :title="hit.source || '未知来源'">{{ hit.source || '未知来源' }}</strong>
+                      <small>
+                        <template v-if="hit.chunk_index !== null && hit.chunk_index !== undefined">分块 {{ hit.chunk_index }}</template>
+                        <template v-if="pageRange(hit)"> · {{ pageRange(hit) }}</template>
+                        <template v-if="hit.parser_name"> · {{ parserDisplayName(hit.parser_name) }}</template>
+                      </small>
+                    </div>
+                  </div>
+                  <div class="kbw-hit-score">
+                    <small>相似度</small>
+                    <strong>{{ formatSimilarity(hit.score) }}</strong>
+                  </div>
+                </header>
+                <p>{{ hit.content || '该分块没有可展示的正文。' }}</p>
+                <footer v-if="hit.section_path || hit.retrieval_path">
+                  <span v-if="hit.section_path">章节：{{ hit.section_path }}</span>
+                  <span v-if="hit.retrieval_path">路径：{{ hit.retrieval_path }}</span>
+                </footer>
+              </article>
             </div>
           </article>
         </section>
@@ -535,7 +589,7 @@
           @dragleave.prevent="onDragLeave"
           @drop.prevent="onDrop"
         >
-          <input type="file" :disabled="uploading" accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.bmp,.webp" @change="onFileSelect" />
+          <input type="file" :disabled="uploading" accept=".txt,.md,.pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.bmp,.webp,.gif,.tif,.tiff,.jp2" @change="onFileSelect" />
           <span v-if="!uploadFile" class="file-label-hint">
             <UploadCloud :size="23" class="file-label-icon" />
             <strong>{{ dragOver ? '松开以上传' : '点击选择或拖拽文件到这里' }}</strong>
@@ -545,6 +599,31 @@
             <FileText :size="20" /><span><strong>{{ uploadFile.name }}</strong><small>{{ formatSize(uploadFile.size) }}</small></span>
           </span>
         </label>
+        <div class="kbw-parser-picker">
+          <div class="kbw-parser-picker-heading">
+            <strong>文档解析器</strong>
+            <span>PDF 默认使用 MinerU</span>
+          </div>
+          <div class="kbw-parser-options" role="radiogroup" aria-label="选择文档解析器">
+            <label
+              v-for="option in parserOptions"
+              :key="option.value"
+              :class="[
+                'kbw-parser-option',
+                { 'is-selected': uploadParserChoice === option.value, 'is-disabled': !parserOptionAvailable(option.value) },
+              ]"
+            >
+              <input
+                v-model="uploadParserChoice"
+                type="radio"
+                name="document-parser"
+                :value="option.value"
+                :disabled="uploading || !parserOptionAvailable(option.value)"
+              />
+              <span><strong>{{ option.label }}</strong><small>{{ option.description }}</small></span>
+            </label>
+          </div>
+        </div>
         <div v-if="uploading || uploadPhase !== 'idle'" class="upload-progress">
           <div class="upload-progress-label"><span>{{ progressLabel }}</span><span>{{ displayProgress }}%</span></div>
           <div class="progress-track">
@@ -554,6 +633,26 @@
               :style="{ width: `${displayProgress}%` }"
             ></div>
           </div>
+          <div v-if="uploadParser?.parser_name" class="kbw-upload-parser" :title="parserDetails(uploadParser)">
+            <span>当前解析器</span>
+            <strong>{{ parserLabel(uploadParser) }}</strong>
+            <small v-if="uploadParser.parser_version">v{{ uploadParser.parser_version }}</small>
+            <small v-if="uploadParser.parser_backend">{{ uploadParser.parser_backend }}</small>
+            <small v-if="uploadParser.parser_task_id">任务 {{ shortId(uploadParser.parser_task_id) }}</small>
+          </div>
+          <div v-if="uploadPhase === 'indexing'" class="kbw-live-progress-meta">
+            <span><i></i>{{ stageLabel(uploadParser?.processing_stage) }}</span>
+            <span v-if="uploadParser?.progress_total">
+              {{ uploadParser.progress_current }}/{{ uploadParser.progress_total }} 项
+            </span>
+            <span>已用时 {{ formatDuration(uploadElapsedSeconds) }}</span>
+          </div>
+          <p v-if="uploadConnectionIssue" class="kbw-progress-warning">
+            暂时无法获取最新进度，正在自动重试；后台任务不会因此中断。
+          </p>
+          <p v-else-if="uploadProgressIdleSeconds >= 30 && uploadPhase === 'indexing'" class="kbw-progress-hint">
+            当前步骤已运行 {{ formatDuration(uploadProgressIdleSeconds) }}，复杂文档或模型调用可能需要更长时间。
+          </p>
         </div>
         <p v-if="uploadMsg" :class="['kbw-inline-notice', uploadOk ? 'is-success' : 'is-error']">{{ uploadMsg }}</p>
         <div class="modal-actions">
@@ -678,8 +777,19 @@ const uploadOk = ref(false)
 const uploadPhase = ref('idle')
 const transferProgress = ref(0)
 const indexProgress = ref(0)
+const uploadParser = ref(null)
+const uploadParserChoice = ref('mineru')
+const uploadSourceKbName = ref('')
+const uploadElapsedSeconds = ref(0)
+const uploadProgressIdleSeconds = ref(0)
+const uploadConnectionIssue = ref(false)
 const dragOver = ref(false)
 let pollTimer = null
+let uploadClockTimer = null
+let lastProgressSignature = ''
+let lastProgressChangedAt = 0
+let knowledgeSelectionRevision = 0
+let fileRequestRevision = 0
 
 const showPreview = ref(false)
 const previewFile = ref(null)
@@ -698,6 +808,10 @@ const retrievalQuery = ref('')
 const retrievalTopK = ref(5)
 const retrievalThreshold = ref(0.3)
 const retrievalAttempted = ref(false)
+const retrievalLoading = ref(false)
+const retrievalRun = ref(null)
+const retrievalError = ref('')
+let retrievalRequestRevision = 0
 const showEvaluationSetup = ref(false)
 const moduleNotice = ref('')
 let noticeTimer = null
@@ -709,7 +823,22 @@ const criteria = reactive([
   { id: 'faithfulness', name: '回答忠实度', description: '检查回答是否得到上下文支持。', group: '生成质量', icon: CheckCircle2, enabled: true },
 ])
 
-const ACCEPT_EXTS = ['.txt', '.md', '.pdf', '.docx', '.png', '.jpg', '.jpeg', '.bmp', '.webp']
+const ACCEPT_EXTS = [
+  '.txt', '.md', '.pdf', '.docx', '.pptx', '.xlsx',
+  '.png', '.jpg', '.jpeg', '.bmp', '.webp', '.gif', '.tif', '.tiff', '.jp2',
+]
+const MINERU_EXTS = new Set([
+  '.pdf', '.docx', '.pptx', '.xlsx', '.png', '.jpg', '.jpeg',
+  '.bmp', '.webp', '.gif', '.tif', '.tiff', '.jp2',
+])
+const LOCAL_PARSER_EXTS = new Set([
+  '.txt', '.md', '.pdf', '.docx', '.png', '.jpg', '.jpeg', '.bmp', '.webp',
+])
+const parserOptions = [
+  { value: 'mineru', label: 'MinerU', description: '版面、表格与公式识别' },
+  { value: 'auto', label: '自动推荐', description: '优先 MinerU，可自动回退' },
+  { value: 'local', label: '本地解析', description: '适合纯文本和简单文档' },
+]
 
 const filteredKbs = computed(() => {
   const keyword = catalogQuery.value.trim().toLowerCase()
@@ -737,16 +866,29 @@ const displayProgress = computed(() => {
   return 0
 })
 
-const progressLabel = computed(() => ({
-  transferring: '正在上传文件', indexing: indexProgress.value > 0 ? '正在解析并建立索引' : '已上传，等待索引',
-  done: '处理完成', failed: '处理失败', idle: '',
-}[uploadPhase.value]))
+const progressLabel = computed(() => {
+  if (uploadPhase.value === 'transferring') return '正在上传文件'
+  if (uploadPhase.value === 'indexing') {
+    if (uploadParser.value?.progress_message) return uploadParser.value.progress_message
+    if (!uploadParser.value?.parser_name) return '已上传，等待分配解析器'
+    const name = parserLabel(uploadParser.value)
+    return indexProgress.value < 30
+      ? `${name} 正在解析文档`
+      : `${name} 解析完成，正在建立索引`
+  }
+  if (uploadPhase.value === 'done') return '处理完成'
+  if (uploadPhase.value === 'failed') return '处理失败'
+  return ''
+})
 
 const retrievalContract = computed(() => JSON.stringify({
-  knowledge_base_id: activeKb.value?.id,
-  query: retrievalQuery.value || '<用户问题>',
-  top_k: retrievalTopK.value,
-  score_threshold: retrievalThreshold.value,
+  method: 'POST',
+  endpoint: `/api/v1/knowledge/bases/${activeKb.value?.id || '<knowledge_base_id>'}/retrieval/test`,
+  body: {
+    query: retrievalQuery.value || '<用户问题>',
+    top_k: retrievalTopK.value,
+    score_threshold: retrievalThreshold.value,
+  },
 }, null, 2))
 
 const graphPreviewNodes = computed(() => {
@@ -798,6 +940,44 @@ function shortId(value) {
   return text.length > 12 ? `${text.slice(0, 8)}…` : text || '—'
 }
 
+function stageLabel(stage) {
+  return {
+    queued: '等待处理',
+    parsing: '文档解析',
+    chunking: '内容分块',
+    indexing: '向量索引',
+    graph: '知识图谱抽取',
+    completed: '处理完成',
+    failed: '处理失败',
+  }[stage] || '准备处理'
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Number(totalSeconds || 0))
+  if (seconds < 60) return `${seconds}秒`
+  const minutes = Math.floor(seconds / 60)
+  const remaining = seconds % 60
+  return `${minutes}分${String(remaining).padStart(2, '0')}秒`
+}
+
+function parserLabel(file) {
+  if (file?.parser_name === 'mineru') return 'MinerU'
+  if (file?.parser_name === 'local') return '本地解析器'
+  return file?.parser_name || '未记录'
+}
+
+function parserDetails(file) {
+  if (!file?.parser_name) return '该文件尚未记录解析器信息'
+  return [
+    `解析器：${parserLabel(file)}`,
+    file.parser_version ? `版本：${file.parser_version}` : '',
+    file.parser_backend ? `后端：${file.parser_backend}` : '',
+    file.parse_method ? `方式：${file.parse_method}` : '',
+    file.parser_task_id ? `任务 ID：${file.parser_task_id}` : '',
+    file.parser_warnings ? `警告：${file.parser_warnings}` : '',
+  ].filter(Boolean).join('\n')
+}
+
 function shortCollectionName(value) {
   const text = String(value || '默认集合')
   return text.length > 22 ? `${text.slice(0, 20)}…` : text
@@ -806,6 +986,23 @@ function shortCollectionName(value) {
 function truncate(value, length) {
   const text = String(value || '')
   return text.length > length ? `${text.slice(0, length - 1)}…` : text
+}
+
+function formatSimilarity(value) {
+  const score = Number(value)
+  return Number.isFinite(score) ? score.toFixed(4) : '—'
+}
+
+function pageRange(hit) {
+  const start = hit?.page_start
+  const end = hit?.page_end
+  if (start === null || start === undefined) return ''
+  if (end === null || end === undefined || Number(end) === Number(start)) return `第 ${start} 页`
+  return `第 ${start}–${end} 页`
+}
+
+function parserDisplayName(value) {
+  return String(value || '').toLowerCase() === 'mineru' ? 'MinerU' : String(value || '')
 }
 
 function notify(message) {
@@ -830,16 +1027,30 @@ async function loadKbs() {
   }
 }
 
-async function loadFiles() {
-  if (!activeKb.value) return
+async function loadFiles(kbId = activeKb.value?.id, selectionRevision = knowledgeSelectionRevision) {
+  if (!kbId) return
+  const requestRevision = ++fileRequestRevision
   filesLoading.value = true
   try {
-    fileList.value = await api.get(`/knowledge/bases/${activeKb.value.id}/files`)
+    const files = await api.get(`/knowledge/bases/${kbId}/files`)
+    if (
+      requestRevision === fileRequestRevision
+      && selectionRevision === knowledgeSelectionRevision
+      && String(activeKb.value?.id || '') === String(kbId)
+    ) {
+      fileList.value = files
+    }
   } catch (error) {
-    fileList.value = []
-    notify(error.response?.data?.detail || '文件列表加载失败。')
+    if (
+      requestRevision === fileRequestRevision
+      && selectionRevision === knowledgeSelectionRevision
+      && String(activeKb.value?.id || '') === String(kbId)
+    ) {
+      fileList.value = []
+      notify(error.response?.data?.detail || '文件列表加载失败。')
+    }
   } finally {
-    filesLoading.value = false
+    if (requestRevision === fileRequestRevision) filesLoading.value = false
   }
 }
 
@@ -866,15 +1077,22 @@ async function createKb() {
 }
 
 async function selectKb(kb, syncRoute = true) {
+  const selectionRevision = ++knowledgeSelectionRevision
+  resetRetrievalState()
   activeKb.value = kb
+  fileList.value = []
   activeTab.value = validTabs.has(String(route.query.tab)) ? String(route.query.tab) : 'files'
   if (syncRoute) {
     await router.replace({ query: { ...route.query, kb: kb.id, tab: activeTab.value, file: undefined } })
   }
-  await loadFiles()
+  if (selectionRevision !== knowledgeSelectionRevision) return
+  await loadFiles(kb.id, selectionRevision)
 }
 
 async function leaveKb() {
+  knowledgeSelectionRevision += 1
+  fileRequestRevision += 1
+  resetRetrievalState()
   activeKb.value = null
   activeTab.value = 'files'
   fileList.value = []
@@ -905,13 +1123,54 @@ async function copyKbId() {
   notify('知识库 ID 已复制。')
 }
 
-function runRetrievalPreview() {
-  if (!retrievalQuery.value.trim()) {
+function resetRetrievalState() {
+  retrievalRequestRevision += 1
+  retrievalLoading.value = false
+  retrievalAttempted.value = false
+  retrievalRun.value = null
+  retrievalError.value = ''
+}
+
+async function runRetrievalPreview() {
+  const query = retrievalQuery.value.trim()
+  const kbId = String(activeKb.value?.id || '')
+  if (!query) {
     notify('请先输入一个用于检索测试的问题。')
     return
   }
+  if (!kbId) {
+    notify('请先选择一个知识库。')
+    return
+  }
+
+  const requestRevision = ++retrievalRequestRevision
   retrievalAttempted.value = true
-  frontendOnly('检索测试')
+  retrievalLoading.value = true
+  retrievalRun.value = null
+  retrievalError.value = ''
+
+  try {
+    const response = await api.post(`/knowledge/bases/${kbId}/retrieval/test`, {
+      query,
+      top_k: retrievalTopK.value,
+      score_threshold: retrievalThreshold.value,
+    })
+    if (
+      requestRevision === retrievalRequestRevision
+      && String(activeKb.value?.id || '') === kbId
+    ) {
+      retrievalRun.value = response
+    }
+  } catch (error) {
+    if (
+      requestRevision === retrievalRequestRevision
+      && String(activeKb.value?.id || '') === kbId
+    ) {
+      retrievalError.value = error.response?.data?.detail || '检索服务暂时不可用，请稍后重试。'
+    }
+  } finally {
+    if (requestRevision === retrievalRequestRevision) retrievalLoading.value = false
+  }
 }
 
 function toggleCriterion(criterion) {
@@ -927,8 +1186,27 @@ function openEvaluationSetup() {
   showEvaluationSetup.value = true
 }
 
+function fileExtension(file) {
+  if (!file?.name || !file.name.includes('.')) return ''
+  return `.${file.name.split('.').pop().toLowerCase()}`
+}
+
+function parserOptionAvailable(parser, file = uploadFile.value) {
+  if (!file) return true
+  const extension = fileExtension(file)
+  if (parser === 'mineru') return MINERU_EXTS.has(extension)
+  if (parser === 'local') return LOCAL_PARSER_EXTS.has(extension)
+  return ACCEPT_EXTS.includes(extension)
+}
+
+function setUploadFile(file) {
+  uploadFile.value = file || null
+  if (!file || parserOptionAvailable(uploadParserChoice.value, file)) return
+  uploadParserChoice.value = MINERU_EXTS.has(fileExtension(file)) ? 'mineru' : 'local'
+}
+
 function onFileSelect(event) {
-  uploadFile.value = event.target.files?.[0] || null
+  setUploadFile(event.target.files?.[0] || null)
   uploadMsg.value = ''
 }
 
@@ -953,7 +1231,7 @@ function onDrop(event) {
     uploadOk.value = false
     return
   }
-  uploadFile.value = file
+  setUploadFile(file)
   uploadMsg.value = ''
 }
 
@@ -967,6 +1245,8 @@ function closeUpload() {
     uploadPhase.value = 'idle'
     transferProgress.value = 0
     indexProgress.value = 0
+    uploadParser.value = null
+    uploadParserChoice.value = 'mineru'
   }
 }
 
@@ -974,6 +1254,24 @@ function stopPolling() {
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
+  }
+}
+
+function startUploadClock() {
+  if (uploadClockTimer) clearInterval(uploadClockTimer)
+  uploadElapsedSeconds.value = 0
+  uploadProgressIdleSeconds.value = 0
+  lastProgressChangedAt = Date.now()
+  uploadClockTimer = setInterval(() => {
+    uploadElapsedSeconds.value += 1
+    uploadProgressIdleSeconds.value = Math.floor((Date.now() - lastProgressChangedAt) / 1000)
+  }, 1000)
+}
+
+function stopUploadClock() {
+  if (uploadClockTimer) {
+    clearInterval(uploadClockTimer)
+    uploadClockTimer = null
   }
 }
 
@@ -985,54 +1283,82 @@ async function doUpload() {
   uploadPhase.value = 'transferring'
   transferProgress.value = 0
   indexProgress.value = 0
+  uploadParser.value = null
+  uploadConnectionIssue.value = false
+  lastProgressSignature = ''
+  startUploadClock()
   const kbId = activeKb.value.id
+  uploadSourceKbName.value = activeKb.value.name || '原知识库'
   try {
     const formData = new FormData()
     formData.append('file', uploadFile.value)
-    await api.upload(`/knowledge/bases/${kbId}/upload`, formData, (event) => {
+    formData.append('parser', uploadParserChoice.value)
+    const uploadResult = await api.upload(`/knowledge/bases/${kbId}/upload`, formData, (event) => {
       if (event.total) transferProgress.value = Math.round((event.loaded / event.total) * 100)
     })
     uploadPhase.value = 'indexing'
-    await pollIndexing(kbId)
+    await pollIndexing(kbId, uploadResult.file_id)
   } catch (error) {
     uploadPhase.value = 'failed'
     uploadMsg.value = error.response?.data?.detail || '上传失败，请稍后重试。'
     uploadOk.value = false
     uploading.value = false
+    stopUploadClock()
   }
 }
 
-async function pollIndexing(kbId) {
+async function pollIndexing(kbId, fileId) {
   stopPolling()
   return new Promise((resolve) => {
     pollTimer = setInterval(async () => {
       try {
         const files = await api.get(`/knowledge/bases/${kbId}/files`)
-        fileList.value = files
-        const target = files.find((file) => file.status === 'processing' || file.status === 'pending')
-        if (target) {
+        if (String(activeKb.value?.id || '') === String(kbId)) {
+          fileList.value = files
+        }
+        const target = files.find((file) => file.id === fileId)
+        if (!target) return
+        uploadConnectionIssue.value = false
+        uploadParser.value = target
+        const progressSignature = [
+          target.progress,
+          target.processing_stage,
+          target.progress_current,
+          target.progress_total,
+          target.progress_message,
+        ].join('|')
+        if (progressSignature !== lastProgressSignature) {
+          lastProgressSignature = progressSignature
+          lastProgressChangedAt = Date.now()
+          uploadProgressIdleSeconds.value = 0
+        }
+        if (target.status === 'processing' || target.status === 'pending') {
           indexProgress.value = target.progress ?? 0
           return
         }
         stopPolling()
-        const latest = files[0]
+        const latest = target
         if (latest?.status === 'failed') {
           uploadPhase.value = 'failed'
           uploadMsg.value = `索引失败：${latest.error_message || '未知错误'}`
           uploadOk.value = false
         } else {
           uploadPhase.value = 'done'
-          uploadMsg.value = `上传完成，已建立 ${latest?.chunk_count ?? 0} 个分块。`
+          const parser = parserLabel(latest)
+          const version = latest?.parser_version ? ` ${latest.parser_version}` : ''
+          uploadMsg.value = `上传完成，${parser}${version} 已解析并建立 ${latest?.chunk_count ?? 0} 个分块。`
           uploadOk.value = true
           uploadFile.value = null
-          notify('文件索引已完成。')
+          notify(`「${uploadSourceKbName.value}」中的文件索引已完成。`)
         }
         uploading.value = false
+        stopUploadClock()
         resolve()
       } catch {
+        uploadConnectionIssue.value = true
         // 短暂网络抖动时保留轮询，下一轮继续尝试。
       }
-    }, 1500)
+    }, 1000)
   })
 }
 
@@ -1126,6 +1452,7 @@ watch(() => [route.query.kb, route.query.tab, route.query.file], () => {
 
 onBeforeUnmount(() => {
   stopPolling()
+  stopUploadClock()
   closeObjectUrl()
   if (noticeTimer) clearTimeout(noticeTimer)
 })

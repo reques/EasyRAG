@@ -35,9 +35,23 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         from sqlalchemy import text
         engine = await get_engine()
         async with engine.begin() as conn:
-            await conn.execute(text(
-                "ALTER TABLE knowledge_files ADD COLUMN IF NOT EXISTS text_content TEXT"
-            ))
+            incremental_columns = (
+                "text_content TEXT",
+                "parser_name VARCHAR(32)",
+                "parser_version VARCHAR(64)",
+                "parser_task_id VARCHAR(128)",
+                "parser_backend VARCHAR(64)",
+                "parse_method VARCHAR(32)",
+                "parser_warnings TEXT",
+                "processing_stage VARCHAR(32)",
+                "progress_message VARCHAR(512)",
+                "progress_current INTEGER NOT NULL DEFAULT 0",
+                "progress_total INTEGER NOT NULL DEFAULT 0",
+            )
+            for column in incremental_columns:
+                await conn.execute(text(
+                    f"ALTER TABLE knowledge_files ADD COLUMN IF NOT EXISTS {column}"
+                ))
         logger.info("[lifespan] incremental migrations applied")
     except Exception as exc:
         logger.warning("[lifespan] database init skipped: %s", exc)
