@@ -30,6 +30,7 @@ http.interceptors.response.use(
 export default {
   get: (url, params) => http.get(url, { params }).then((r) => r.data),
   post: (url, data) => http.post(url, data).then((r) => r.data),
+  put: (url, data) => http.put(url, data).then((r) => r.data),
   delete: (url) => http.delete(url).then((r) => r.data),
   upload: (url, formData, onUploadProgress) =>
     http.post(url, formData, {

@@ -104,6 +104,18 @@ MiniMax-M2.7、DeepSeek-V4-Flash、Qwen-3.6-Flash 和 GLM-5.2 之间切换；未
 本地 OpenAI 兼容服务，或其他云端 OpenAI 兼容接口；这些动态配置按用户保存在 PostgreSQL，
 API Key 加密保存，不写入 `.env`、也不会返回前端。修改内置模型 `.env` 后需要重启后端。
 
+对话输入框还提供显式 Skill 选择：点击“Skill”可从基础技能中选择知识库研究、联网研究、
+数据分析、专业写作或法律分析，同一条消息最多组合 3 个 Skill；已经选择的 Skill 会以标签
+显示在输入框中，点击标签上的关闭按钮即可移除。页面会记住当前浏览器最近一次选择，但每次
+请求仍以后端收到的 `skill_ids` 为准。
+
+点击 Skill 菜单底部的“配置与添加 Skill”可创建账号私有的自定义 Skill。配置时填写名称、
+用途说明和详细指令，并按最小权限原则勾选允许使用的工具；保存后 Skill 会存入 PostgreSQL，
+立即出现在对话选择器中，无需修改 `.env` 或重启服务。也可以从内置 Skill 复制一份再调整。
+自定义 Skill 的指令会作为当前请求的系统上下文注入，工具白名单则在后端执行层强制校验，
+因此取消某项工具权限并不只是前端展示变化。删除自定义 Skill 不会删除历史消息，历史消息仍
+保留当时的 Skill 名称快照。
+
 ---
 
 ## 项目结构
@@ -139,6 +151,9 @@ EasyRAG/
 | `POST /api/v1/chat/send` | 同步对话（完整 LangGraph 工作流） |
 | `POST /api/v1/chat/stream` | SSE 流式对话（意图识别 → 检索/工具 → 逐 token 生成） |
 | `GET /api/v1/chat/conversations` | 会话列表 / 历史 |
+| `GET /api/v1/chat/skills` | 获取内置及当前用户自定义 Skill 目录 |
+| `POST /api/v1/chat/skills` | 创建自定义 Skill |
+| `PUT/DELETE /api/v1/chat/skills/{skill_id}` | 更新或删除当前用户的自定义 Skill |
 | `POST /api/v1/knowledge/bases` | 创建知识库 |
 | `POST /api/v1/knowledge/bases/{id}/upload` | 上传文件（202 异步，进度轮询） |
 | `GET /api/v1/knowledge/bases/{id}/files` | 文件列表（含索引进度/状态） |

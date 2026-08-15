@@ -269,6 +269,11 @@ class AgentService:
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
 
         from app.services.knowledge_catalog import format_knowledge_catalog
+        from app.skills.context import get_active_skill_prompt
+
+        skill_prompt = get_active_skill_prompt()
+        if skill_prompt:
+            messages.insert(0, {"role": "system", "content": skill_prompt})
 
         messages.insert(0, {
             "role": "system",

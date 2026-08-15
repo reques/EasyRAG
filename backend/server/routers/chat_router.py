@@ -21,6 +21,8 @@ from app.llm.models import (
     get_chat_model_profile,
     list_chat_model_profiles,
 )
+from app.skills.catalog import SkillProfile, get_builtin_skill, list_builtin_skills
+from app.skills.context import SkillRuntimeContext
 from backend.services.chat_service import (
     create_conversation,
     add_message,
@@ -42,6 +44,13 @@ from backend.services.model_config_service import (
     validate_and_normalize_base_url,
 )
 from backend.storage.postgres.models_model_config import CustomModelConfig
+from backend.repositories.skill_config_repository import CustomSkillConfigRepository
+from backend.services.skill_config_service import (
+    SkillConfigValidationError,
+    encode_tool_names,
+    profile_from_custom_skill,
+)
+from backend.storage.postgres.models_skill_config import CustomSkillConfig
 
 logger = get_logger(__name__)
 cfg = get_settings()
@@ -62,6 +71,7 @@ class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096)
     conversation_id: Optional[str] = None  # None = 创建新会话
     model_id: Optional[str] = Field(default=None, max_length=64)
+    skill_ids: list[str] = Field(default_factory=list, max_length=3)
 
 
 class ChatResponse(BaseModel):
@@ -74,6 +84,7 @@ class ChatResponse(BaseModel):
     steps: list[str] = []
     sources: list[dict] = []
     elapsed_seconds: float = 0.0
+    skills: list[dict] = Field(default_factory=list)
 
 
 class ConversationSummary(BaseModel):
@@ -108,6 +119,39 @@ class CustomModelCreate(BaseModel):
     api_key: str = Field(default="", max_length=8192)
     requires_api_key: bool = True
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+
+
+class ChatSkillInfo(BaseModel):
+    id: str
+    name: str
+    description: str
+    instructions: str
+    tool_names: list[str] = Field(default_factory=list)
+    category: str = "通用"
+    icon: str = "sparkles"
+    source: str = "builtin"
+    can_edit: bool = False
+
+
+class ChatSkillToolInfo(BaseModel):
+    name: str
+    description: str
+    available: bool
+
+
+class ChatSkillListResponse(BaseModel):
+    max_selected: int = 3
+    skills: list[ChatSkillInfo]
+    tools: list[ChatSkillToolInfo]
+
+
+class CustomSkillUpsert(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    description: str = Field(default="", max_length=300)
+    instructions: str = Field(..., min_length=1, max_length=6000)
+    tool_names: list[str] = Field(default_factory=list, max_length=8)
+    category: str = Field(default="自定义", max_length=32)
+    icon: str = Field(default="sparkles", max_length=32)
 
 
 async def _resolve_request_model(
@@ -145,7 +189,163 @@ async def _resolve_request_model(
         ) from exc
 
 
+async def _resolve_request_skills(
+    skill_ids: list[str], user_id: uuid.UUID, session: AsyncSession
+) -> list[SkillProfile]:
+    """Resolve selected built-in/custom Skills with owner checks."""
+    normalized = list(dict.fromkeys(skill_id.strip() for skill_id in skill_ids if skill_id.strip()))
+    if len(normalized) > 3:
+        raise HTTPException(status_code=400, detail="每次最多选择 3 个 Skill")
+
+    repo = CustomSkillConfigRepository(session)
+    profiles: list[SkillProfile] = []
+    for skill_id in normalized:
+        if len(skill_id) > 64:
+            raise HTTPException(status_code=400, detail="Skill ID 格式不正确")
+        profile = get_builtin_skill(skill_id)
+        if profile is None and skill_id.startswith("custom:"):
+            record = await repo.get_by_public_id(user_id, skill_id)
+            if record is not None:
+                try:
+                    profile = profile_from_custom_skill(record)
+                except SkillConfigValidationError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if profile is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Skill {skill_id} 不存在或无权访问",
+            )
+        profiles.append(profile)
+
+    if sum(len(profile.instructions) for profile in profiles) > 12000:
+        raise HTTPException(status_code=400, detail="所选 Skill 指令总长度超过限制")
+    return profiles
+
+
+def _selected_skill_payload(
+    profiles: list[SkillProfile],
+) -> list[dict[str, str]]:
+    return [{"id": profile.id, "name": profile.name} for profile in profiles]
+
+
+def _normalize_custom_skill_request(
+    req: CustomSkillUpsert,
+) -> dict[str, Any]:
+    name = req.name.strip()
+    instructions = req.instructions.strip()
+    if not name or not instructions:
+        raise HTTPException(status_code=400, detail="Skill 名称和工作指令不能为空")
+    try:
+        tool_names_json = encode_tool_names(req.tool_names)
+    except SkillConfigValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "name": name,
+        "description": req.description.strip(),
+        "instructions": instructions,
+        "tool_names_json": tool_names_json,
+        "category": req.category.strip() or "自定义",
+        "icon": req.icon.strip() or "sparkles",
+    }
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/skills", response_model=ChatSkillListResponse)
+async def list_chat_skills(
+    current_user: User = Depends(get_current_user),
+):
+    """Return built-in and owner-scoped custom Skills plus tool metadata."""
+    profiles = list_builtin_skills()
+    async with get_session() as session:
+        records = await CustomSkillConfigRepository(session).list_by_owner(
+            current_user.id
+        )
+    for record in records:
+        try:
+            profiles.append(profile_from_custom_skill(record))
+        except SkillConfigValidationError:
+            logger.warning("[chat/skills] skipped invalid custom Skill %s", record.id)
+
+    from app.tools.registry import get_tool_registry
+
+    registry = get_tool_registry()
+    tools = [
+        ChatSkillToolInfo(
+            name=tool.name,
+            description=tool.description,
+            available=tool.is_available(),
+        )
+        for tool in registry.list_all(available_only=False)
+    ]
+    return ChatSkillListResponse(
+        skills=[ChatSkillInfo(**profile.to_public_dict()) for profile in profiles],
+        tools=tools,
+    )
+
+
+@router.post(
+    "/skills",
+    response_model=ChatSkillInfo,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_custom_chat_skill(
+    req: CustomSkillUpsert,
+    current_user: User = Depends(get_current_user),
+):
+    values = _normalize_custom_skill_request(req)
+    async with get_session() as session:
+        repo = CustomSkillConfigRepository(session)
+        if await repo.get_by_name(current_user.id, values["name"]):
+            raise HTTPException(status_code=409, detail="已存在同名自定义 Skill")
+        record = CustomSkillConfig(owner_id=current_user.id, **values)
+        try:
+            await repo.add(record)
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="已存在同名自定义 Skill") from exc
+    return ChatSkillInfo(**profile_from_custom_skill(record).to_public_dict())
+
+
+@router.put("/skills/{skill_id}", response_model=ChatSkillInfo)
+async def update_custom_chat_skill(
+    skill_id: str,
+    req: CustomSkillUpsert,
+    current_user: User = Depends(get_current_user),
+):
+    values = _normalize_custom_skill_request(req)
+    async with get_session() as session:
+        repo = CustomSkillConfigRepository(session)
+        record = await repo.get_by_public_id(current_user.id, skill_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="自定义 Skill 不存在或无权访问")
+        duplicate = await repo.get_by_name(current_user.id, values["name"])
+        if duplicate is not None and duplicate.id != record.id:
+            raise HTTPException(status_code=409, detail="已存在同名自定义 Skill")
+        for key, value in values.items():
+            setattr(record, key, value)
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="已存在同名自定义 Skill") from exc
+    return ChatSkillInfo(**profile_from_custom_skill(record).to_public_dict())
+
+
+@router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_custom_chat_skill(
+    skill_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    async with get_session() as session:
+        repo = CustomSkillConfigRepository(session)
+        record = await repo.get_by_public_id(current_user.id, skill_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="自定义 Skill 不存在或无权访问")
+        await repo.delete(record)
+        await session.commit()
+    return None
 
 @router.get("/models", response_model=ChatModelListResponse)
 async def list_chat_models(
@@ -265,6 +465,11 @@ async def send_message(
         selected_model = await _resolve_request_model(
             req.model_id, current_user.id, session
         )
+        selected_skills = await _resolve_request_skills(
+            req.skill_ids, current_user.id, session
+        )
+        skill_context = SkillRuntimeContext.from_profiles(selected_skills)
+        skill_payload = _selected_skill_payload(selected_skills)
         # 获取或创建会话
         conv_id = None
         is_new = False
@@ -282,7 +487,13 @@ async def send_message(
             is_new = True
 
         # 保存用户消息
-        user_message = await add_message(session, conv_id, "user", req.query)
+        user_message = await add_message(
+            session,
+            conv_id,
+            "user",
+            req.query,
+            metadata_json=json.dumps({"skills": skill_payload}, ensure_ascii=False),
+        )
         await session.commit()
         user_message_id = user_message.id
 
@@ -321,9 +532,10 @@ async def send_message(
     try:
         from app.services.agent_service import get_agent_service
         from app.llm.client import use_chat_model
+        from app.skills.context import use_skill_context
 
         agent = get_agent_service()
-        with use_chat_model(selected_model):
+        with use_chat_model(selected_model), use_skill_context(skill_context):
             result = agent.run(
                 query=req.query,
                 session_id=str(conv_id),
@@ -400,7 +612,7 @@ async def send_message(
             llm = get_llm_client(profile=selected_model)
             from app.services.knowledge_catalog import format_knowledge_catalog
 
-            fallback_answer = llm.chat_sync([
+            fallback_messages = [
                 {
                     "role": "system",
                     "content": format_knowledge_catalog(knowledge_catalog),
@@ -412,7 +624,13 @@ async def send_message(
                     "如果问题涉及法律条款，请引用具体法条编号。"
                     ),
                 },
-            ])
+            ]
+            if skill_context.active:
+                fallback_messages.insert(0, {
+                    "role": "system",
+                    "content": skill_context.render_prompt(),
+                })
+            fallback_answer = llm.chat_sync(fallback_messages)
             if fallback_answer and fallback_answer.strip():
                 answer = fallback_answer
                 logger.info("[chat/send] direct LLM fallback succeeded (%d chars)", len(fallback_answer))
@@ -442,6 +660,7 @@ async def send_message(
             "sources": result.get("sources", []),
             "model_id": selected_model.id,
             "model_name": selected_model.name,
+            "skills": skill_payload,
         }, ensure_ascii=False)
         await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
         await session.commit()
@@ -456,6 +675,7 @@ async def send_message(
         steps=result.get("steps", []),
         sources=result.get("sources", []),
         elapsed_seconds=elapsed,
+        skills=skill_payload,
     )
 
 
@@ -484,6 +704,11 @@ async def send_message_stream(
         selected_model = await _resolve_request_model(
             req.model_id, current_user.id, session
         )
+        selected_skills = await _resolve_request_skills(
+            req.skill_ids, current_user.id, session
+        )
+        skill_context = SkillRuntimeContext.from_profiles(selected_skills)
+        skill_payload = _selected_skill_payload(selected_skills)
         # 获取或创建会话
         if req.conversation_id:
             conv = await get_conversation(session, uuid.UUID(req.conversation_id))
@@ -499,7 +724,13 @@ async def send_message_stream(
             conv_id = conv.id
             is_new = True
 
-        user_message = await add_message(session, conv_id, "user", req.query)
+        user_message = await add_message(
+            session,
+            conv_id,
+            "user",
+            req.query,
+            metadata_json=json.dumps({"skills": skill_payload}, ensure_ascii=False),
+        )
         await session.commit()
         user_message_id = user_message.id
         db_history = await get_compressed_history(session, conv_id)
@@ -534,6 +765,7 @@ async def send_message_stream(
     async def _event_gen_inner():
         from app.services.agent_service import get_agent_service
         from app.llm.client import get_llm_client, use_chat_model
+        from app.skills.context import use_skill_context
 
         loop = asyncio.get_event_loop()
         agent = get_agent_service()
@@ -547,6 +779,7 @@ async def send_message_stream(
             "run_id": str(multi_run_id) if multi_run_id else "",
             "model_id": selected_model.id,
             "model_name": selected_model.name,
+            "skills": skill_payload,
         })
 
         if use_multi:
@@ -672,7 +905,7 @@ async def send_message_stream(
                 # return_synthesize_payload=True：synthesize 交给主事件循环流式生成
                 def _run_orch():
                     try:
-                        with use_chat_model(selected_model):
+                        with use_chat_model(selected_model), use_skill_context(skill_context):
                             return orchestrator.run(
                                 req.query,
                                 history=db_history,
@@ -759,6 +992,8 @@ async def send_message_stream(
                                 f"各子任务产出：\n{combined}\n\n"
                                 f"汇总要求：{payload['final_inst'] or '综合各子任务结果，给出完整、连贯的回答。'}"
                             )
+                            if skill_context.active:
+                                prompt = skill_context.render_prompt() + "\n\n" + prompt
                             try:
                                 llm = get_llm_client(profile=selected_model)
                                 parts: list[str] = []
@@ -802,6 +1037,7 @@ async def send_message_stream(
                                 "execution_mode": result.get("execution_mode", ""),
                                 "model_id": selected_model.id,
                                 "model_name": selected_model.name,
+                                "skills": skill_payload,
                             }, ensure_ascii=False)
                             await add_message(session, conv_id, "assistant", full_answer, metadata_json=meta)
                             await session.commit()
@@ -833,6 +1069,7 @@ async def send_message_stream(
                         "execution_mode": result.get("execution_mode", ""),
                         "model_id": selected_model.id,
                         "model_name": selected_model.name,
+                        "skills": skill_payload,
                     })
 
                     # 新会话标题后台生成
@@ -889,7 +1126,7 @@ async def send_message_stream(
 
         def _prepare():
             try:
-                with use_chat_model(selected_model):
+                with use_chat_model(selected_model), use_skill_context(skill_context):
                     return agent.prepare_context(
                         req.query,
                         db_history,
@@ -995,6 +1232,7 @@ async def send_message_stream(
                     "steps": collected_steps,
                     "model_id": selected_model.id,
                     "model_name": selected_model.name,
+                    "skills": skill_payload,
                 }, ensure_ascii=False)
                 await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
                 await session.commit()
@@ -1009,6 +1247,7 @@ async def send_message_stream(
             "elapsed_seconds": elapsed,
             "model_id": selected_model.id,
             "model_name": selected_model.name,
+            "skills": skill_payload,
         })
 
         # 4. 新会话标题生成 — 在 done 之后的后台协程里做，不阻塞 SSE 流。
