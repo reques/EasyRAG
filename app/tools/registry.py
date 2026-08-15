@@ -98,17 +98,32 @@ class ToolRegistry:
         with self._lock:
             snapshot = list(self._tools.values())
         if not available_only:
-            return [t.name for t in snapshot]
-        return [t.name for t in snapshot if t.is_available()]
+            candidates = snapshot
+        else:
+            candidates = [t for t in snapshot if t.is_available()]
+        from app.skills.context import get_active_skill_context
+
+        skill_context = get_active_skill_context()
+        return [
+            tool.name
+            for tool in candidates
+            if skill_context.allows_tool(tool.name)
+        ]
 
     def list_all(self, available_only: bool = True) -> List[ToolDefinition]:
         """Return all ToolDefinition objects (for schema/prompt building).
         available_only=True 时只含 check_fn 通过的工具。"""
         with self._lock:
             snapshot = list(self._tools.values())
-        if not available_only:
-            return snapshot
-        return [t for t in snapshot if t.is_available()]
+        candidates = snapshot if not available_only else [
+            tool for tool in snapshot if tool.is_available()
+        ]
+        from app.skills.context import get_active_skill_context
+
+        skill_context = get_active_skill_context()
+        return [
+            tool for tool in candidates if skill_context.allows_tool(tool.name)
+        ]
 
     def invoke(self, name: str, **kwargs: Any) -> str:
         """Execute a registered tool by name.
@@ -129,6 +144,12 @@ class ToolRegistry:
             ToolExecutionError:  Tool unavailable (check_fn failed) or raised during execution.
         """
         tool = self.get(name)  # acquires+releases lock internally
+        from app.skills.context import get_active_skill_context
+
+        if not get_active_skill_context().allows_tool(name):
+            raise ToolExecutionError(
+                f"Tool '{name}' is not allowed by the selected Skills"
+            )
         if not tool.is_available():
             raise ToolExecutionError(
                 f"Tool '{name}' is not available (check_fn failed — missing config or dependency)"
