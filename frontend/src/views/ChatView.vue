@@ -1,12 +1,19 @@
 <template>
-  <div class="chat-view" :class="{ 'has-task-panel': taskPanel.visible }">
+  <div class="chat-view" :class="{ 'has-task-panel': taskPanel.tasks.length > 0 }">
     <!-- 消息区 -->
     <div class="chat-main">
     <!-- 消息列表 -->
     <div class="chat-messages" ref="msgContainer" :class="{ 'is-empty': messages.length === 0 && !sending }">
       <!-- 侧边状态栏展开入口：有任务且面板收起时显示 -->
       <div v-if="taskPanel.tasks.length && !taskPanel.visible" class="task-panel-toggle">
-        <button class="task-panel-toggle-btn" @click="taskPanel.visible = true">
+        <button
+          type="button"
+          class="task-panel-toggle-btn"
+          title="展开任务状态栏"
+          aria-label="展开任务状态栏"
+          :aria-expanded="taskPanel.visible"
+          @click="taskPanel.visible = true"
+        >
           <ListChecks :size="14" />
           展开状态栏
           <span v-if="taskPanel.tasks.length" class="task-panel-toggle-meta">
@@ -52,6 +59,11 @@
                 </div>
               </div>
             </div>
+            <div v-if="msg.role === 'user' && msg.skills?.length" class="message-skill-strip">
+              <span v-for="skill in msg.skills" :key="skill.id" class="message-skill-chip">
+                <WandSparkles :size="11" /> {{ skill.name }}
+              </span>
+            </div>
             <div class="message-text" v-html="renderContent(msg.content)"></div>
             <!-- 知识库 / 检索引用块 -->
             <div v-if="msg.sources && msg.sources.length" class="message-sources">
@@ -75,8 +87,9 @@
                 </li>
               </ol>
             </div>
-            <div v-if="msg.meta && (msg.meta.intent || msg.meta.elapsed || msg.meta.modelName)" class="message-meta">
+            <div v-if="msg.meta && (msg.meta.intent || msg.meta.elapsed || msg.meta.modelName || msg.meta.skillNames?.length)" class="message-meta">
               <span v-if="msg.meta.modelName">模型: {{ msg.meta.modelName }}</span>
+              <span v-if="msg.meta.skillNames?.length">Skill: {{ msg.meta.skillNames.join('、') }}</span>
               <span v-if="msg.meta.intent">意图: {{ msg.meta.intent }}</span>
               <span v-if="msg.meta.elapsed">耗时: {{ msg.meta.elapsed }}s</span>
             </div>
@@ -108,6 +121,15 @@
     <!-- 输入区：空状态时垂直居中，有消息后固定底部 -->
     <div class="chat-input" :class="{ 'chat-input--center': messages.length === 0 && !sending }">
       <div class="chat-input-inner">
+        <div v-if="selectedSkills.length" class="selected-skill-row">
+          <span v-for="skill in selectedSkills" :key="skill.id" class="selected-skill-chip">
+            <WandSparkles :size="12" />
+            {{ skill.name }}
+            <button type="button" :title="`移除 ${skill.name}`" @click="removeSkill(skill.id)">
+              <X :size="12" />
+            </button>
+          </span>
+        </div>
         <textarea
           v-model="input"
           @keydown.enter.exact.prevent="send"
@@ -117,6 +139,7 @@
           @input="autoResize"
         ></textarea>
         <div class="chat-input-actions">
+          <div class="composer-control-group">
           <div ref="modelPickerEl" class="model-picker-shell">
             <button
               type="button"
@@ -156,6 +179,60 @@
               </button>
             </div>
           </div>
+          <div ref="skillPickerEl" class="skill-picker-shell">
+            <button
+              type="button"
+              class="skill-picker"
+              :class="{ open: skillMenuOpen, active: selectedSkills.length }"
+              :disabled="sending || skillsLoading"
+              @click="toggleSkillMenu"
+            >
+              <WandSparkles :size="14" />
+              <span>{{ skillsLoading ? '加载 Skill…' : 'Skill' }}</span>
+              <span v-if="selectedSkills.length" class="skill-picker-count">{{ selectedSkills.length }}</span>
+              <ChevronDown :size="13" />
+            </button>
+            <div v-if="skillMenuOpen" class="skill-dropdown">
+              <div class="skill-dropdown-head">
+                <div>
+                  <strong>为本次对话选择 Skill</strong>
+                  <small>最多选择 {{ maxSelectedSkills }} 个</small>
+                </div>
+                <button type="button" title="管理 Skill" @click="openSkillConfigModal">
+                  <Settings2 :size="15" />
+                </button>
+              </div>
+              <label class="skill-search">
+                <Search :size="13" />
+                <input v-model="skillSearch" type="search" placeholder="搜索 Skill" />
+              </label>
+              <div v-if="skillLoadError" class="skill-inline-error">{{ skillLoadError }}</div>
+              <div v-else class="skill-dropdown-list">
+                <button
+                  v-for="skill in filteredSkills"
+                  :key="skill.id"
+                  type="button"
+                  class="skill-dropdown-item"
+                  :class="{ selected: selectedSkillIds.includes(skill.id) }"
+                  @click="toggleSkill(skill)"
+                >
+                  <span class="skill-item-icon"><WandSparkles :size="14" /></span>
+                  <span class="skill-item-copy">
+                    <strong>{{ skill.name }}</strong>
+                    <small>{{ skill.description }}</small>
+                    <em v-if="skill.tool_names?.length">{{ skill.tool_names.join(' · ') }}</em>
+                  </span>
+                  <CheckCircle2 v-if="selectedSkillIds.includes(skill.id)" :size="15" />
+                  <span v-else class="skill-empty-check"></span>
+                </button>
+                <div v-if="!filteredSkills.length" class="skill-empty-state">没有匹配的 Skill</div>
+              </div>
+              <button type="button" class="skill-manage-entry" @click="openSkillConfigModal">
+                <Settings2 :size="14" /> 配置与添加 Skill
+              </button>
+            </div>
+          </div>
+          </div>
           <button @click="send" :disabled="!input.trim() || sending || !selectedModelId" class="btn-send" title="发送">
             <ArrowUp :size="16" />
           </button>
@@ -165,12 +242,13 @@
     </div><!-- /.chat-main -->
 
     <!-- 多智能体状态工作台：计划与 Agent 分层展示，过程产出默认折叠。 -->
-    <aside
-      v-if="taskPanel.visible"
-      class="task-panel"
-      :class="{ 'is-resizing': panelResizing }"
-      :style="{ width: taskPanelWidth + 'px' }"
-    >
+    <Transition name="task-panel-drawer">
+      <aside
+        v-if="taskPanel.visible"
+        class="task-panel"
+        :class="{ 'is-resizing': panelResizing }"
+        :style="{ width: taskPanelWidth + 'px' }"
+      >
       <div
         class="task-panel-resizer"
         title="拖动调整状态栏宽度"
@@ -261,7 +339,8 @@
           </article>
         </div>
       </section>
-    </aside>
+      </aside>
+    </Transition>
 
     <Teleport to="body">
       <div v-if="customModelModalOpen" class="modal-overlay" @click.self="closeCustomModelModal">
@@ -353,6 +432,98 @@
         </div>
       </div>
     </Teleport>
+
+    <Teleport to="body">
+      <div v-if="skillConfigModalOpen" class="modal-overlay" @click.self="closeSkillConfigModal">
+        <div class="modal skill-config-modal">
+          <div class="skill-config-header">
+            <div>
+              <span class="skill-config-kicker"><WandSparkles :size="13" /> AGENT SKILLS</span>
+              <h3>Skill 配置</h3>
+              <p>用工作指令定义 Agent 的做事方式，并只授予完成任务需要的工具。</p>
+            </div>
+            <button type="button" class="model-config-close" @click="closeSkillConfigModal">×</button>
+          </div>
+
+          <div class="skill-config-layout">
+            <section class="skill-library-panel">
+              <div class="skill-panel-title">
+                <div><strong>Skill 库</strong><small>{{ skillOptions.length }} 项</small></div>
+                <button type="button" @click="startNewSkill"><Plus :size="13" /> 新建</button>
+              </div>
+              <div class="skill-library-list">
+                <article v-for="skill in skillOptions" :key="skill.id" class="skill-library-card" :class="{ active: editingSkillId === skill.id }">
+                  <button type="button" class="skill-library-main" @click="skill.can_edit ? editSkill(skill) : previewBuiltinSkill(skill)">
+                    <span class="skill-item-icon"><WandSparkles :size="14" /></span>
+                    <span>
+                      <strong>{{ skill.name }}</strong>
+                      <small>{{ skill.category }} · {{ skill.source === 'builtin' ? '内置' : '自定义' }}</small>
+                    </span>
+                  </button>
+                  <span v-if="skill.can_edit" class="skill-library-actions">
+                    <button type="button" title="编辑" @click="editSkill(skill)"><Pencil :size="13" /></button>
+                    <button type="button" title="删除" @click="deleteCustomSkill(skill)"><Trash2 :size="13" /></button>
+                  </span>
+                </article>
+              </div>
+            </section>
+
+            <form class="skill-editor" @submit.prevent="saveCustomSkill">
+              <div class="skill-editor-heading">
+                <div>
+                  <strong>{{ skillFormReadOnly ? '内置 Skill 预览' : (editingSkillId ? '编辑自定义 Skill' : '创建自定义 Skill') }}</strong>
+                  <small>{{ skillFormReadOnly ? '内置配置不可修改，可作为自定义 Skill 的参考。' : '保存后会同步到后端，并出现在对话框选择器中。' }}</small>
+                </div>
+                <span v-if="skillFormReadOnly" class="builtin-skill-badge"><ShieldCheck :size="12" /> 内置</span>
+              </div>
+
+              <div class="skill-form-grid">
+                <label>
+                  <span>名称</span>
+                  <input v-model="customSkillForm.name" type="text" maxlength="80" placeholder="例如：竞品研究" :disabled="skillFormReadOnly" required />
+                </label>
+                <label>
+                  <span>分类</span>
+                  <input v-model="customSkillForm.category" type="text" maxlength="32" placeholder="例如：研究" :disabled="skillFormReadOnly" />
+                </label>
+              </div>
+              <label>
+                <span>一句话说明</span>
+                <input v-model="customSkillForm.description" type="text" maxlength="300" placeholder="告诉用户这个 Skill 适合解决什么问题" :disabled="skillFormReadOnly" />
+              </label>
+              <label>
+                <span>工作指令</span>
+                <textarea v-model="customSkillForm.instructions" rows="8" maxlength="6000" placeholder="描述工作步骤、质量标准、输出格式和边界…" :disabled="skillFormReadOnly" required></textarea>
+                <small class="model-form-hint">建议写清：先做什么、如何核验、最终交付什么，以及不能做什么。</small>
+              </label>
+
+              <fieldset class="skill-tool-fieldset" :disabled="skillFormReadOnly">
+                <legend>允许使用的工具</legend>
+                <p>未勾选的工具会在模型规划和实际调用两个阶段被拦截。</p>
+                <label v-for="tool in skillTools" :key="tool.name" class="skill-tool-option" :class="{ unavailable: !tool.available }">
+                  <input v-model="customSkillForm.tool_names" type="checkbox" :value="tool.name" />
+                  <span>
+                    <strong>{{ tool.name }}</strong>
+                    <small>{{ tool.description }}</small>
+                  </span>
+                  <em>{{ tool.available ? '可用' : '未配置' }}</em>
+                </label>
+                <div v-if="!skillTools.length" class="skill-empty-state">当前没有已注册工具，Skill 仍可作为工作指令使用。</div>
+              </fieldset>
+
+              <div v-if="skillConfigError" class="model-config-error">{{ skillConfigError }}</div>
+              <div class="modal-actions">
+                <button type="button" class="btn-secondary" @click="closeSkillConfigModal">关闭</button>
+                <button v-if="skillFormReadOnly" type="button" class="btn-primary-sm" @click="duplicateBuiltinSkill">复制为自定义</button>
+                <button v-else type="submit" class="btn-primary-sm" :disabled="savingCustomSkill">
+                  {{ savingCustomSkill ? '保存中…' : (editingSkillId ? '保存修改' : '创建 Skill') }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -373,8 +544,14 @@ import {
   HardDrive,
   ListChecks,
   Loader2,
+  Pencil,
   Plus,
+  Search,
+  Settings2,
+  ShieldCheck,
   Trash2,
+  WandSparkles,
+  X,
 } from 'lucide-vue-next'
 import api from '../api'
 
@@ -625,6 +802,197 @@ function closeModelMenuOnOutsideClick(event) {
   if (modelPickerEl.value && !modelPickerEl.value.contains(event.target)) {
     modelMenuOpen.value = false
   }
+  if (skillPickerEl.value && !skillPickerEl.value.contains(event.target)) {
+    skillMenuOpen.value = false
+  }
+}
+
+// Skill 目录和选择结果都只保存公开 ID；指令与工具权限由后端在每次请求时重新解析。
+const SKILL_STORAGE_KEY = 'easyrag-chat-skill-ids'
+let storedSkillIds = []
+try {
+  const parsed = JSON.parse(localStorage.getItem(SKILL_STORAGE_KEY) || '[]')
+  if (Array.isArray(parsed)) storedSkillIds = parsed.filter(item => typeof item === 'string')
+} catch { /* 损坏的本地缓存直接忽略 */ }
+
+const skillOptions = ref([])
+const skillTools = ref([])
+const selectedSkillIds = ref(storedSkillIds)
+const maxSelectedSkills = ref(3)
+const skillsLoading = ref(true)
+const skillLoadError = ref('')
+const skillMenuOpen = ref(false)
+const skillPickerEl = ref(null)
+const skillSearch = ref('')
+const skillConfigModalOpen = ref(false)
+const savingCustomSkill = ref(false)
+const skillConfigError = ref('')
+const editingSkillId = ref('')
+const skillFormReadOnly = ref(false)
+const customSkillForm = reactive({
+  name: '',
+  description: '',
+  instructions: '',
+  tool_names: [],
+  category: '自定义',
+  icon: 'sparkles',
+})
+
+const selectedSkills = computed(() => selectedSkillIds.value
+  .map(id => skillOptions.value.find(skill => skill.id === id))
+  .filter(Boolean))
+const filteredSkills = computed(() => {
+  const query = skillSearch.value.trim().toLowerCase()
+  if (!query) return skillOptions.value
+  return skillOptions.value.filter(skill => [
+    skill.name,
+    skill.description,
+    skill.category,
+    ...(skill.tool_names || []),
+  ].some(value => String(value || '').toLowerCase().includes(query)))
+})
+
+watch(selectedSkillIds, (ids) => {
+  localStorage.setItem(SKILL_STORAGE_KEY, JSON.stringify(ids))
+}, { deep: true })
+
+async function loadSkills(preferredSkillId = '') {
+  skillsLoading.value = true
+  skillLoadError.value = ''
+  try {
+    const data = await api.get('/chat/skills')
+    skillOptions.value = data.skills || []
+    skillTools.value = data.tools || []
+    maxSelectedSkills.value = data.max_selected || 3
+    const validIds = new Set(skillOptions.value.map(skill => skill.id))
+    selectedSkillIds.value = selectedSkillIds.value
+      .filter(id => validIds.has(id))
+      .slice(0, maxSelectedSkills.value)
+    if (
+      preferredSkillId
+      && validIds.has(preferredSkillId)
+      && !selectedSkillIds.value.includes(preferredSkillId)
+      && selectedSkillIds.value.length < maxSelectedSkills.value
+    ) {
+      selectedSkillIds.value = [...selectedSkillIds.value, preferredSkillId]
+    }
+  } catch (error) {
+    skillOptions.value = []
+    skillTools.value = []
+    selectedSkillIds.value = []
+    skillLoadError.value = error.response?.data?.detail || `Skill 列表加载失败：${error.message}`
+  } finally {
+    skillsLoading.value = false
+  }
+}
+
+function toggleSkillMenu() {
+  modelMenuOpen.value = false
+  skillMenuOpen.value = !skillMenuOpen.value
+}
+
+function toggleSkill(skill) {
+  if (selectedSkillIds.value.includes(skill.id)) {
+    removeSkill(skill.id)
+    return
+  }
+  if (selectedSkillIds.value.length >= maxSelectedSkills.value) return
+  selectedSkillIds.value = [...selectedSkillIds.value, skill.id]
+}
+
+function removeSkill(skillId) {
+  selectedSkillIds.value = selectedSkillIds.value.filter(id => id !== skillId)
+}
+
+function assignSkillForm(skill = null) {
+  Object.assign(customSkillForm, {
+    name: skill?.name || '',
+    description: skill?.description || '',
+    instructions: skill?.instructions || '',
+    tool_names: [...(skill?.tool_names || [])],
+    category: skill?.category || '自定义',
+    icon: skill?.icon || 'sparkles',
+  })
+}
+
+function startNewSkill() {
+  editingSkillId.value = ''
+  skillFormReadOnly.value = false
+  skillConfigError.value = ''
+  assignSkillForm()
+}
+
+function previewBuiltinSkill(skill) {
+  editingSkillId.value = skill.id
+  skillFormReadOnly.value = true
+  skillConfigError.value = ''
+  assignSkillForm(skill)
+}
+
+function editSkill(skill) {
+  editingSkillId.value = skill.id
+  skillFormReadOnly.value = false
+  skillConfigError.value = ''
+  assignSkillForm(skill)
+}
+
+function duplicateBuiltinSkill() {
+  customSkillForm.name = `${customSkillForm.name} 副本`
+  editingSkillId.value = ''
+  skillFormReadOnly.value = false
+  skillConfigError.value = ''
+}
+
+function openSkillConfigModal() {
+  skillMenuOpen.value = false
+  skillConfigModalOpen.value = true
+  const firstCustom = skillOptions.value.find(skill => skill.can_edit)
+  if (firstCustom) editSkill(firstCustom)
+  else startNewSkill()
+}
+
+function closeSkillConfigModal() {
+  if (savingCustomSkill.value) return
+  skillConfigModalOpen.value = false
+  skillConfigError.value = ''
+}
+
+async function saveCustomSkill() {
+  if (savingCustomSkill.value || skillFormReadOnly.value) return
+  savingCustomSkill.value = true
+  skillConfigError.value = ''
+  const payload = {
+    name: customSkillForm.name.trim(),
+    description: customSkillForm.description.trim(),
+    instructions: customSkillForm.instructions.trim(),
+    tool_names: [...customSkillForm.tool_names],
+    category: customSkillForm.category.trim() || '自定义',
+    icon: customSkillForm.icon || 'sparkles',
+  }
+  try {
+    const saved = editingSkillId.value
+      ? await api.put(`/chat/skills/${editingSkillId.value}`, payload)
+      : await api.post('/chat/skills', payload)
+    await loadSkills(saved.id)
+    editSkill(skillOptions.value.find(skill => skill.id === saved.id) || saved)
+  } catch (error) {
+    skillConfigError.value = error.response?.data?.detail || error.message || 'Skill 保存失败'
+  } finally {
+    savingCustomSkill.value = false
+  }
+}
+
+async function deleteCustomSkill(skill) {
+  if (!window.confirm(`确定删除自定义 Skill“${skill.name}”吗？`)) return
+  skillConfigError.value = ''
+  try {
+    await api.delete(`/chat/skills/${skill.id}`)
+    removeSkill(skill.id)
+    await loadSkills()
+    startNewSkill()
+  } catch (error) {
+    skillConfigError.value = error.response?.data?.detail || error.message || 'Skill 删除失败'
+  }
 }
 
 // 状态步骤面板（思考过程时间线）
@@ -797,10 +1165,12 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         role: m.role,
         content: m.content,
         sources: m.meta?.sources || [],
-        meta: (m.meta?.intent || m.meta?.model_name || m.meta?.run_id) ? {
+        skills: m.meta?.skills || [],
+        meta: (m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.skills?.length) ? {
           intent: m.meta?.intent || '',
           modelName: m.meta?.model_name || '',
           runId: m.meta?.run_id || '',
+          skillNames: (m.meta?.skills || []).map(skill => skill.name),
         } : null,
         steps: m.meta?.steps || [],
         stepsExpanded: false,
@@ -831,12 +1201,19 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
 async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
+  const requestSkills = selectedSkills.value.map(skill => ({ id: skill.id, name: skill.name }))
   input.value = ''
   resetInputHeight()
   sending.value = true
 
   const userTs = Date.now()
-  messages.value.push({ role: 'user', content: text, time: formatTime(new Date(userTs).toISOString()), ts: userTs })
+  messages.value.push({
+    role: 'user',
+    content: text,
+    skills: requestSkills,
+    time: formatTime(new Date(userTs).toISOString()),
+    ts: userTs,
+  })
   // 先插入一条空的 assistant 消息, 流式 delta 逐步填充其 content
   // steps: 本轮思考过程（绑定在这条消息上，不会被下一轮覆盖）
   // 注意: assistant 的时间戳独立取"当前时刻"——不要复用 user 的 ts,
@@ -846,7 +1223,10 @@ async function send() {
     role: 'assistant',
     content: '',
     sources: [],
-    meta: { modelName: selectedModel.value?.name || '' },
+    meta: {
+      modelName: selectedModel.value?.name || '',
+      skillNames: requestSkills.map(skill => skill.name),
+    },
     steps: [],
     stepsExpanded: false,
     stepsLoading: true,
@@ -866,6 +1246,7 @@ async function send() {
       query: text,
       conversation_id: conversationId.value,
       model_id: selectedModelId.value,
+      skill_ids: requestSkills.map(skill => skill.id),
     }, (ev) => {
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
@@ -876,6 +1257,7 @@ async function send() {
             ...(m.meta || {}),
             runId: ev.run_id || m.meta?.runId || '',
             modelName: ev.model_name || m.meta?.modelName || '',
+            skillNames: (ev.skills || requestSkills).map(skill => skill.name),
           },
         }
         taskPanel.value.run_id = ev.run_id || ''
@@ -933,6 +1315,7 @@ async function send() {
             elapsed: ev.elapsed_seconds,
             runId: ev.run_id || m.meta?.runId || '',
             modelName: ev.model_name || m.meta?.modelName || '',
+            skillNames: (ev.skills || requestSkills).map(skill => skill.name),
           },
           // 兜底：流式中断时 status 事件可能不全，用 done 携带的完整 steps 补齐
           steps: (ev.steps && ev.steps.length) ? ev.steps : (m.steps || []),
@@ -975,6 +1358,7 @@ onActivated(() => {
 
 onMounted(() => {
   loadModels()
+  loadSkills()
   document.addEventListener('click', closeModelMenuOnOutsideClick)
 })
 

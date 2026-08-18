@@ -598,6 +598,7 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 
 **验证：**
 - `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
+
 - 使用本地只读模拟响应在 1440×1000 视口检查文件管理与 RAG 评估页：目录数据、页签路由、
   统计卡片、文件表格、处理中状态和评估空态均正常渲染。
 
@@ -634,6 +635,7 @@ Qwen-3.6-Flash、GLM-5.2 接入后端环境配置；同一次请求中的单 Age
 - `python -m pytest -q`：**21/21 通过**。
 - `python -m compileall -q app backend tests`、`git diff --check` 通过。
 - `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
+
 - 安装 `requirements-stage1.txt` 后成功加载 FastAPI 应用，并确认
   `GET /api/v1/chat/models` 路由及响应模型已注册。
 
@@ -674,3 +676,50 @@ Qwen-3.6-Flash、GLM-5.2 接入后端环境配置；同一次请求中的单 Age
 - FastAPI 应用加载成功，确认 `GET/POST /api/v1/chat/models`、
   `DELETE /api/v1/chat/models/{model_id}` 已注册，应用版本为 `0.3.1`。
 - `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
+
+#### 2026-08-15 — Skill 配置管理与对话显式选择
+
+**目标：** 在对话输入框中显式选择本次请求使用的 Skill，并提供可视化配置入口；先内置一组
+可直接使用的基础 Skill，同时允许每个用户创建、修改和删除自己的 Skill。Skill 不仅影响
+提示词，还必须在后端约束本次请求可以调用的工具，避免仅靠前端隐藏形成伪权限。
+
+**设计决策：** 采用“代码内置 Skill + PostgreSQL 用户 Skill”的混合目录。内置 Skill 随
+版本发布，保证开箱即用；自定义 Skill 按 `owner_id` 持久化，不修改 `.env`。每条消息最多
+选择 3 个 Skill，后端根据已授权的 ID 解析运行时上下文，将多项指令合并，并对工具白名单
+取并集。未选择 Skill 时保持原有 Agent 自动路由行为，避免升级后改变既有对话语义。
+
+**实现：**
+1. 新增 Skill 目录与请求级上下文，预置知识库研究、联网研究、数据分析、专业写作和法律分析
+   5 项基础 Skill；每项均声明用途说明、详细指令与允许工具。
+2. 新增 `custom_skill_configs` 表、仓储和服务层；自定义项支持名称、分类、描述、指令、图标、
+   启用状态与工具白名单，所有查询和写操作均附带当前用户 owner 条件。
+3. 新增 `GET/POST /chat/skills`、`PUT/DELETE /chat/skills/{skill_id}`；对话请求新增
+   `skill_ids`，同步及 SSE 路径都会在消息写库前校验 Skill，并把名称快照写入消息 metadata。
+4. Skill 指令已贯穿意图识别、LangGraph 节点、单 Agent、多 Agent Worker、任务分解、并行
+   执行和最终汇总；并行线程会显式传播 Skill 上下文，避免 `contextvars` 在线程池中丢失。
+5. 工具注册表在执行层按当前 Skill 白名单过滤和拒绝调用；多选 Skill 使用权限并集。未选择
+   Skill 时继续提供原有工具集合，保持向后兼容。
+6. `ChatView.vue` 新增可搜索的 Skill 菜单、已选标签、最多 3 项限制、浏览器选择记忆，以及
+   Skill 配置弹窗。弹窗可查看基础库、复制内置 Skill、创建/编辑/删除自定义 Skill，并逐项
+   配置工具权限；消息区同步展示实际使用的 Skill。
+7. README 补充用户配置流程与 API 说明，设计细节记录于
+   `docs/plans/2026-08-15-skill-configuration-design.md`。
+
+**验证：**
+- `python -m pytest -q tests/test_skill_configuration.py tests/test_chat_model_selection.py tests/test_custom_model_config.py`：**17/17 通过**。
+- 完整测试集：**74 passed, 28 skipped**；跳过项为当前测试解释器未安装 `pytest-asyncio` 的
+  既有异步用例，不包含本次 Skill 测试。
+- `python -m compileall -q app backend tests` 通过。
+- `cd frontend && npm run build` 通过（Vite，1808 modules transformed）。
+- 当前开发数据库已增量创建 `custom_skill_configs`；针对运行中的 v0.3.1 后端完成临时账号
+  冒烟测试，5 项内置 Skill 列表与自定义 Skill 创建、查询、修改、删除全部通过，测试数据已清理。
+
+#### 2026-08-15 — 状态栏展开按钮固定悬浮
+
+**调整：** 对话页在存在任务且状态栏收起时，将“展开状态栏”从消息流顶部改为固定在视口
+右侧垂直居中的悬浮按钮。消息滚动不再影响入口位置；面板展开后入口仍按原逻辑隐藏，并补充
+键盘焦点、悬浮反馈、进入动画和移动端右侧间距。
+
+**动效优化：** 状态栏改用 Vue Transition 抽屉过渡，展开和收起时在约 520ms 内同步改变
+宽度、右侧位移、透明度、内边距及边框，聊天主区域随之平滑伸缩；悬浮入口延迟淡入，避免与
+正在收起的面板重叠。拖拽改宽期间禁用过渡，并兼容系统“减少动态效果”设置。

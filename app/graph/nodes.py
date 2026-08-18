@@ -85,6 +85,11 @@ def intent_recognition(state):
         query=query,
         available_tools=available_tools,
     )
+    from app.skills.context import get_active_skill_prompt
+
+    skill_prompt = get_active_skill_prompt()
+    if skill_prompt:
+        prompt = skill_prompt + "\n\n" + prompt
     try:
         data = client.chat_json_sync([{"role": "user", "content": prompt}], temperature=0.0)
         intent = str(data.get("intent", "knowledge_qa"))
@@ -183,6 +188,11 @@ def agent_reasoning(state):
         observations=obs_text,
         query=query,
     )
+    from app.skills.context import get_active_skill_prompt
+
+    skill_prompt = get_active_skill_prompt()
+    if skill_prompt:
+        prompt = skill_prompt + "\n\n" + prompt
     try:
         data = client.chat_json_sync([{"role": "user", "content": prompt}])
         action = data.get("action") or {}
@@ -565,13 +575,13 @@ def tool_selection(state):
     if any(w in q for w in [
         "search", "news", "latest", "today's", "current events", "look up",
         "搜索", "检索", "新闻", "最新", "最近", "今天的新闻",
-    ]):
+    ]) and "web_search" in available:
         return {
             "tool_name": "web_search",
             "tool_args": {"query": state["query"]},
             "steps": _append_step(state, "tool_selection -> inferred web_search"),
         }
-    if any(w in q for w in ["calculat", "compute", "sqrt", "pow", "计算", "等于多少", "多少"]):
+    if any(w in q for w in ["calculat", "compute", "sqrt", "pow", "计算", "等于多少", "多少"]) and "calculator" in available:
         return {
             "tool_name": "calculator",
             "tool_args": {"expression": state["query"]},
@@ -580,13 +590,13 @@ def tool_selection(state):
     if any(w in q for w in [
         "time", "date", "today", "now", "weekday",
         "几点", "时间", "日期", "今天", "现在", "星期", "周几",
-    ]):
+    ]) and "datetime_tool" in available:
         return {
             "tool_name": "datetime_tool",
             "tool_args": {},
             "steps": _append_step(state, "tool_selection -> inferred datetime_tool"),
         }
-    if any(w in q for w in ["word count", "char count", "text stat"]):
+    if any(w in q for w in ["word count", "char count", "text stat"]) and "text_tool" in available:
         return {
             "tool_name": "text_tool",
             "tool_args": {"operation": "stats", "text": state["query"]},
@@ -717,6 +727,11 @@ def answer_generation(state):
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
 
         from app.services.knowledge_catalog import format_knowledge_catalog
+        from app.skills.context import get_active_skill_prompt
+
+        skill_prompt = get_active_skill_prompt()
+        if skill_prompt:
+            messages.insert(0, {"role": "system", "content": skill_prompt})
 
         messages.insert(0, {
             "role": "system",

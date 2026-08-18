@@ -259,8 +259,14 @@ class Orchestrator:
         self, query: str, history: Optional[List[Dict[str, str]]]
     ) -> tuple[List[TaskBrief], str, str]:
         """LLM 拆解查询为 TaskBrief 列表。"""
+        from app.skills.context import get_active_skill_prompt
+
+        skill_prompt = get_active_skill_prompt()
+        system_prompt = "你是一个任务拆解专家，输出严格 JSON。"
+        if skill_prompt:
+            system_prompt += "\n\n" + skill_prompt
         messages = [
-            {"role": "system", "content": "你是一个任务拆解专家，输出严格 JSON。"},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": self._DECOMPOSE_PROMPT.format(query=query)},
         ]
 
@@ -385,13 +391,15 @@ class Orchestrator:
         reports: List[WorkerReport] = []
 
         from app.llm.client import get_active_chat_model_profile, use_chat_model
+        from app.skills.context import get_active_skill_context, use_skill_context
 
         selected_model = get_active_chat_model_profile()
+        selected_skills = get_active_skill_context()
 
         def _run_one(brief: TaskBrief) -> WorkerReport:
             # contextvars do not flow into ThreadPoolExecutor workers. Re-enter
             # the request's selection so every sub-agent uses the same model.
-            with use_chat_model(selected_model):
+            with use_chat_model(selected_model), use_skill_context(selected_skills):
                 worker = self._get_worker(brief.worker_hint)
                 worker.blackboard = self.blackboard
                 if status_cb:
@@ -493,6 +501,11 @@ class Orchestrator:
             f"各子任务产出：\n{combined}\n\n"
             f"汇总要求：{final_inst or '综合各子任务结果，给出完整、连贯的回答。'}"
         )
+        from app.skills.context import get_active_skill_prompt
+
+        skill_prompt = get_active_skill_prompt()
+        if skill_prompt:
+            prompt = skill_prompt + "\n\n" + prompt
 
         try:
             answer = self.llm.chat_sync(
