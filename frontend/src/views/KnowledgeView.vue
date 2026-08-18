@@ -1037,6 +1037,10 @@ async function loadGraphStatus() {
     graphStatus.indexed = data.indexed || 0
     graphStatus.pg_entities = data.pg_entities || 0
     graphStatus.pg_relations = data.pg_relations || 0
+    // 页面刷新后若看到 running 且没有活动轮询，自动恢复轮询
+    if (data.run && data.run.status === 'running' && !graphPollTimer) {
+      startGraphPolling()
+    }
   } catch (error) {
     notify(error.response?.data?.detail || '图谱状态加载失败。')
   } finally {
@@ -1063,10 +1067,17 @@ async function startGraphBuild() {
 
 function startGraphPolling() {
   stopGraphPolling()
+  // 超时保护：3s × 200 = 10 分钟，防止"僵尸 running"导致无限轮询
+  const MAX_GRAPH_POLL_TICKS = 200
+  let ticks = 0
   graphPollTimer = setInterval(async () => {
+    ticks += 1
     await loadGraphStatus()
     if (graphStatus.run && ['completed', 'failed'].includes(graphStatus.run.status)) {
       stopGraphPolling()
+    } else if (ticks >= MAX_GRAPH_POLL_TICKS) {
+      stopGraphPolling()
+      notify('图谱构建超时（10 分钟），可能已被中断。请刷新状态后重新构建。')
     }
   }, 3000)
 }

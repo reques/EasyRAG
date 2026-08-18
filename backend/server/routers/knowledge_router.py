@@ -451,7 +451,10 @@ async def build_kb_graph(
     kb = await _require_owned_kb(kb_id, current_user)
     from backend.services.graph_build_service import create_build_run, run_build
 
-    run_id = await create_build_run(kb.id, extractor)
+    try:
+        run_id = await create_build_run(kb.id, extractor)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     background_tasks.add_task(run_build, run_id)
     return GraphBuildResponse(run_id=str(run_id), status="pending")
 

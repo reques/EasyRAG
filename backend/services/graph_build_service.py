@@ -44,8 +44,19 @@ async def create_build_run(
     kb_id: uuid.UUID,
     extractor: str = "llm",
 ) -> uuid.UUID:
-    """创建构建运行记录（status=pending），返回 run id。"""
+    """创建构建运行记录（status=pending），返回 run id。
+
+    同一知识库已有 pending/running 记录时拒绝创建（防重复触发/僵尸状态）。
+    """
     async with get_session() as session:
+        active = (await session.execute(
+            select(GraphBuildRun).where(
+                GraphBuildRun.knowledge_base_id == kb_id,
+                GraphBuildRun.status.in_(["pending", "running"]),
+            ).limit(1)
+        )).scalars().all()
+        if active:
+            raise ValueError("该知识库已有进行中的图谱构建，请等待其完成后再试")
         run = GraphBuildRun(
             knowledge_base_id=kb_id,
             status="pending",
@@ -55,6 +66,26 @@ async def create_build_run(
         await session.commit()
         await session.refresh(run)
         return run.id
+
+
+async def mark_interrupted_runs() -> int:
+    """把遗留的 pending/running 构建记录标记为 failed（服务重启/强杀导致）。
+
+    服务启动时调用：后台任务随进程死亡，状态不可能再被更新，
+    不清理的话前端会永远显示"正在构建"。
+    """
+    async with get_session() as session:
+        result = await session.execute(
+            GraphBuildRun.__table__.update()
+            .where(GraphBuildRun.status.in_(["pending", "running"]))
+            .values(
+                status="failed",
+                error_message="服务重启，构建中断",
+                finished_at=datetime.now(timezone.utc),
+            )
+        )
+        await session.commit()
+        return result.rowcount or 0
 
 
 async def run_build(run_id: uuid.UUID) -> None:
