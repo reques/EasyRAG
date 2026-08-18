@@ -746,9 +746,40 @@ async def send_message_stream(
                                 f"## {r.task_id} ({r.worker_name})\n{r.detail or r.summary}"
                                 for r in ok_reports
                             )
+                            # ── 压缩子任务产出 ──
+                            # 多任务时 prompt 可能很长，先用 fast model 摘要压缩，
+                            # 减少综合阶段的输入 tokens，给输出留足空间避免截断
+                            prompt_input = combined
+                            if len(ok_reports) > 1:
+                                fast_llm = get_llm_client(tier="fast", profile=selected_model)
+
+                                async def _summarize(report):
+                                    content = report.detail or report.summary or ""
+                                    if len(content) <= 500:
+                                        return f"## {report.task_id} ({report.worker_name})\n{content}"
+                                    try:
+                                        resp = await fast_llm.chat(
+                                            [{"role": "user", "content": (
+                                                "用2-3句话概括以下内容的核心要点，保留关键事实和数据：\n\n"
+                                                f"{content}"
+                                            )}],
+                                            temperature=0.1,
+                                            max_tokens=300,
+                                        )
+                                        summary = resp.strip() or content[:300]
+                                        return f"## {report.task_id} ({report.worker_name})\n{summary}"
+                                    except Exception:
+                                        logger.warning("[chat/stream] fast summary failed for %s", report.task_id)
+                                        return f"## {report.task_id} ({report.worker_name})\n{content[:300]}"
+
+                                summaries = await asyncio.gather(
+                                    *[_summarize(r) for r in ok_reports]
+                                )
+                                prompt_input = "\n\n".join(summaries)
+
                             prompt = (
                                 f"用户原始查询：{payload['query']}\n\n"
-                                f"各子任务产出：\n{combined}\n\n"
+                                f"各子任务产出：\n{prompt_input}\n\n"
                                 f"汇总要求：{payload['final_inst'] or '综合各子任务结果，给出完整、连贯的回答。'}"
                             )
                             try:
@@ -758,7 +789,8 @@ async def send_message_stream(
                                     yield _sse({"type": "delta", "content": "\n\n---\n**综合回答：**\n\n"})
                                 parts: list[str] = []
                                 async for chunk in llm.chat_stream(
-                                    [{"role": "user", "content": prompt}]
+                                    [{"role": "user", "content": prompt}],
+                                    max_tokens=16384,
                                 ):
                                     parts.append(chunk)
                                     yield _sse({"type": "delta", "content": chunk})
