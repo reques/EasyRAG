@@ -50,3 +50,5 @@ bilibili-api-python==17.3.0
 lark==1.2.2
 lazy_loader==0.4
 pyarrow==20.0.0
+# Neo4j GraphRAG（图谱存储 + 检索集成；含 neo4j driver）
+neo4j-graphrag>=1.0.0

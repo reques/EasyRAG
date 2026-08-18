@@ -161,6 +161,43 @@ class KnowledgeRelation(Base):
     )
 
 
+class GraphBuildRun(Base):
+    """图谱构建运行记录（GraphRAG 阶段 5）— 从已入库 chunks 构建 Neo4j 图谱的任务状态。
+
+    status: pending / running / completed / failed
+    """
+
+    __tablename__ = "graph_build_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    extractor: Mapped[str] = mapped_column(String(64), default="llm", nullable=False)
+
+    total_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    entities_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    relations_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    entities_indexed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    relations_indexed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class EvaluationRun(Base):
     """检索评估运行（阶段 2D）— 一次命名评估的聚合指标 + 逐条明细。
 
