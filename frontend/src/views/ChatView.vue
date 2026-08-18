@@ -1,14 +1,24 @@
 <template>
-  <div class="chat-view" :class="{ 'has-task-panel': taskPanel.visible }">
+  <div class="chat-view" :class="{ 'has-task-panel': taskPanel.tasks.length > 0 }">
     <!-- 消息区 -->
     <div class="chat-main">
     <!-- 消息列表 -->
     <div class="chat-messages" ref="msgContainer" :class="{ 'is-empty': messages.length === 0 && !sending }">
-      <!-- 任务面板开关：本轮有任务记录但面板被手动关闭时，提供重新打开的入口 -->
+      <!-- 侧边状态栏展开入口：有任务且面板收起时显示 -->
       <div v-if="taskPanel.tasks.length && !taskPanel.visible" class="task-panel-toggle">
-        <button class="task-panel-toggle-btn" @click="taskPanel.visible = true">
+        <button
+          type="button"
+          class="task-panel-toggle-btn"
+          title="展开任务状态栏"
+          aria-label="展开任务状态栏"
+          :aria-expanded="taskPanel.visible"
+          @click="taskPanel.visible = true"
+        >
           <ListChecks :size="14" />
-          任务进度（{{ taskProgress.done }}/{{ taskProgress.total }}）
+          展开状态栏
+          <span v-if="taskPanel.tasks.length" class="task-panel-toggle-meta">
+            {{ taskProgress.done }}/{{ taskProgress.total }}
+          </span>
         </button>
       </div>
       <div class="chat-column">
@@ -49,6 +59,11 @@
                 </div>
               </div>
             </div>
+            <div v-if="msg.role === 'user' && msg.skills?.length" class="message-skill-strip">
+              <span v-for="skill in msg.skills" :key="skill.id" class="message-skill-chip">
+                <WandSparkles :size="11" /> {{ skill.name }}
+              </span>
+            </div>
             <div class="message-text" v-html="renderContent(msg.content)"></div>
             <!-- 知识库 / 检索引用块 -->
             <div v-if="msg.sources && msg.sources.length" class="message-sources">
@@ -72,11 +87,24 @@
                 </li>
               </ol>
             </div>
-            <div v-if="msg.meta && (msg.meta.intent || msg.meta.elapsed || msg.meta.modelName)" class="message-meta">
+            <div v-if="msg.meta && (msg.meta.intent || msg.meta.elapsed || msg.meta.modelName || msg.meta.skillNames?.length)" class="message-meta">
               <span v-if="msg.meta.modelName">模型: {{ msg.meta.modelName }}</span>
+              <span v-if="msg.meta.skillNames?.length">Skill: {{ msg.meta.skillNames.join('、') }}</span>
               <span v-if="msg.meta.intent">意图: {{ msg.meta.intent }}</span>
               <span v-if="msg.meta.elapsed">耗时: {{ msg.meta.elapsed }}s</span>
             </div>
+          </div>
+          <div v-if="msg.content" class="message-actions">
+            <button
+              type="button"
+              class="message-copy-btn"
+              :title="copiedMessageIndex === i ? '已复制' : '复制文本'"
+              @click="copyMessage(msg.content, i)"
+            >
+              <CheckCircle2 v-if="copiedMessageIndex === i" :size="13" />
+              <Copy v-else :size="13" />
+              {{ copiedMessageIndex === i ? '已复制' : '复制' }}
+            </button>
           </div>
           </div>
         </template>
@@ -93,6 +121,15 @@
     <!-- 输入区：空状态时垂直居中，有消息后固定底部 -->
     <div class="chat-input" :class="{ 'chat-input--center': messages.length === 0 && !sending }">
       <div class="chat-input-inner">
+        <div v-if="selectedSkills.length" class="selected-skill-row">
+          <span v-for="skill in selectedSkills" :key="skill.id" class="selected-skill-chip">
+            <WandSparkles :size="12" />
+            {{ skill.name }}
+            <button type="button" :title="`移除 ${skill.name}`" @click="removeSkill(skill.id)">
+              <X :size="12" />
+            </button>
+          </span>
+        </div>
         <textarea
           v-model="input"
           @keydown.enter.exact.prevent="send"
@@ -102,6 +139,7 @@
           @input="autoResize"
         ></textarea>
         <div class="chat-input-actions">
+          <div class="composer-control-group">
           <div ref="modelPickerEl" class="model-picker-shell">
             <button
               type="button"
@@ -141,6 +179,60 @@
               </button>
             </div>
           </div>
+          <div ref="skillPickerEl" class="skill-picker-shell">
+            <button
+              type="button"
+              class="skill-picker"
+              :class="{ open: skillMenuOpen, active: selectedSkills.length }"
+              :disabled="sending || skillsLoading"
+              @click="toggleSkillMenu"
+            >
+              <WandSparkles :size="14" />
+              <span>{{ skillsLoading ? '加载 Skill…' : 'Skill' }}</span>
+              <span v-if="selectedSkills.length" class="skill-picker-count">{{ selectedSkills.length }}</span>
+              <ChevronDown :size="13" />
+            </button>
+            <div v-if="skillMenuOpen" class="skill-dropdown">
+              <div class="skill-dropdown-head">
+                <div>
+                  <strong>为本次对话选择 Skill</strong>
+                  <small>最多选择 {{ maxSelectedSkills }} 个</small>
+                </div>
+                <button type="button" title="管理 Skill" @click="openSkillConfigModal">
+                  <Settings2 :size="15" />
+                </button>
+              </div>
+              <label class="skill-search">
+                <Search :size="13" />
+                <input v-model="skillSearch" type="search" placeholder="搜索 Skill" />
+              </label>
+              <div v-if="skillLoadError" class="skill-inline-error">{{ skillLoadError }}</div>
+              <div v-else class="skill-dropdown-list">
+                <button
+                  v-for="skill in filteredSkills"
+                  :key="skill.id"
+                  type="button"
+                  class="skill-dropdown-item"
+                  :class="{ selected: selectedSkillIds.includes(skill.id) }"
+                  @click="toggleSkill(skill)"
+                >
+                  <span class="skill-item-icon"><WandSparkles :size="14" /></span>
+                  <span class="skill-item-copy">
+                    <strong>{{ skill.name }}</strong>
+                    <small>{{ skill.description }}</small>
+                    <em v-if="skill.tool_names?.length">{{ skill.tool_names.join(' · ') }}</em>
+                  </span>
+                  <CheckCircle2 v-if="selectedSkillIds.includes(skill.id)" :size="15" />
+                  <span v-else class="skill-empty-check"></span>
+                </button>
+                <div v-if="!filteredSkills.length" class="skill-empty-state">没有匹配的 Skill</div>
+              </div>
+              <button type="button" class="skill-manage-entry" @click="openSkillConfigModal">
+                <Settings2 :size="14" /> 配置与添加 Skill
+              </button>
+            </div>
+          </div>
+          </div>
           <button @click="send" :disabled="!input.trim() || sending || !selectedModelId" class="btn-send" title="发送">
             <ArrowUp :size="16" />
           </button>
@@ -149,50 +241,106 @@
     </div>
     </div><!-- /.chat-main -->
 
-    <!-- 侧边任务进度面板（多智能体请求时显示，可手动开/关） -->
-    <aside v-if="taskPanel.visible" class="task-panel">
+    <!-- 多智能体状态工作台：计划与 Agent 分层展示，过程产出默认折叠。 -->
+    <Transition name="task-panel-drawer">
+      <aside
+        v-if="taskPanel.visible"
+        class="task-panel"
+        :class="{ 'is-resizing': panelResizing }"
+        :style="{ width: taskPanelWidth + 'px' }"
+      >
+      <div
+        class="task-panel-resizer"
+        title="拖动调整状态栏宽度"
+        @pointerdown="startTaskPanelResize"
+      ></div>
       <div class="task-panel-header">
-        <span class="task-panel-title">
-          <Loader2 v-if="sending" :size="14" class="spin" />
-          <CheckCircle2 v-else :size="14" />
-          任务进度
-        </span>
+        <div>
+          <span class="task-panel-title">
+            <Loader2 v-if="taskPanel.status === 'running'" :size="14" class="spin" />
+            <CheckCircle2 v-else :size="14" />
+            状态 {{ taskPanelObjectCount }} 项
+          </span>
+          <span class="task-panel-subtitle">{{ runStateLabel }}</span>
+        </div>
         <span class="task-panel-actions">
-          <span class="task-panel-count">{{ taskProgress.done }}/{{ taskProgress.total }} · {{ taskProgress.pct }}%</span>
-          <button class="task-panel-close" title="关闭任务面板" @click="taskPanel.visible = false">
-            <X :size="14" />
+          <button class="task-panel-close" title="收起状态栏" @click="taskPanel.visible = false">
+            <ChevronRight :size="14" />
+            <span>收起</span>
           </button>
         </span>
       </div>
       <div class="task-panel-bar">
         <div class="task-panel-bar-fill" :style="{ width: taskProgress.pct + '%' }"></div>
       </div>
-      <div class="task-list">
-        <div
-          v-for="t in taskPanel.tasks"
-          :key="t.task_id"
-          class="task-item"
-          :class="'task-' + t.status"
-        >
-          <span class="task-status-icon">
-            <CheckCircle2 v-if="t.status === 'done'" :size="14" />
-            <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
-            <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
-            <span v-else class="task-pending-dot"></span>
+
+      <section class="workbench-section">
+        <button class="workbench-section-header" @click="taskPanel.todosExpanded = !taskPanel.todosExpanded">
+          <span><ListChecks :size="14" /> 待办</span>
+          <span class="workbench-section-meta">
+            {{ taskProgress.done }}/{{ taskProgress.total }}
+            <ChevronDown v-if="taskPanel.todosExpanded" :size="14" />
+            <ChevronRight v-else :size="14" />
           </span>
-          <div class="task-item-body">
-            <div class="task-item-title">{{ t.task_id }} · {{ workerLabel(t.worker_hint) }}</div>
-            <div class="task-item-goal">{{ t.goal }}</div>
-            <div v-if="t.tools.length" class="task-tools">
-              <div v-for="(tc, ti) in t.tools" :key="ti" class="task-tool-call">
-                <span class="task-tool-name">Call</span>
-                <span class="task-tool-args">{{ tc }}</span>
-              </div>
-            </div>
+        </button>
+        <div v-show="taskPanel.todosExpanded" class="todo-list">
+          <div v-for="t in taskPanel.tasks" :key="'todo-' + t.task_id" class="todo-row" :class="'task-' + t.status">
+            <span class="task-status-icon">
+              <CheckCircle2 v-if="t.status === 'done'" :size="14" />
+              <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
+              <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
+              <span v-else class="task-pending-dot"></span>
+            </span>
+            <span class="todo-title">{{ t.goal }}</span>
           </div>
         </div>
-      </div>
-    </aside>
+      </section>
+
+      <section class="workbench-section">
+        <button class="workbench-section-header" @click="taskPanel.agentsExpanded = !taskPanel.agentsExpanded">
+          <span><Bot :size="14" /> 子智能体</span>
+          <span class="workbench-section-meta">
+            {{ taskPanel.tasks.length }}
+            <ChevronDown v-if="taskPanel.agentsExpanded" :size="14" />
+            <ChevronRight v-else :size="14" />
+          </span>
+        </button>
+        <div v-show="taskPanel.agentsExpanded" class="agent-list">
+          <article v-for="t in taskPanel.tasks" :key="'agent-' + t.task_id" class="agent-card" :class="'task-' + t.status">
+            <button class="agent-card-summary" @click="t.expanded = !t.expanded">
+              <span class="agent-avatar"><Bot :size="14" /></span>
+              <span class="agent-card-copy">
+                <strong>{{ workerLabel(t.worker_hint) }}探索员</strong>
+                <small>{{ t.goal }}</small>
+              </span>
+              <span class="agent-state">
+                <CheckCircle2 v-if="t.status === 'done'" :size="14" />
+                <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
+                <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
+                <span v-else class="task-pending-dot"></span>
+                <ChevronDown v-if="t.expanded" :size="14" />
+                <ChevronRight v-else :size="14" />
+              </span>
+            </button>
+            <div v-show="t.expanded" class="agent-card-detail">
+              <div v-if="t.tools.length" class="task-tools">
+                <div v-for="(tc, ti) in t.tools" :key="ti" class="task-tool-call">
+                  <span class="task-tool-name">Call</span>
+                  <span class="task-tool-args">{{ tc }}</span>
+                </div>
+              </div>
+              <div v-if="t.output" class="agent-output">
+                <span class="agent-output-label">子任务产出</span>
+                <div class="agent-output-content" v-html="renderContent(t.output)"></div>
+              </div>
+              <div v-else-if="t.status === 'running'" class="agent-waiting">正在执行并回传结果…</div>
+              <div v-else-if="t.status === 'pending'" class="agent-waiting">等待调度</div>
+            </div>
+          </article>
+        </div>
+      </section>
+      </aside>
+    </Transition>
 
     <Teleport to="body">
       <div v-if="customModelModalOpen" class="modal-overlay" @click.self="closeCustomModelModal">
@@ -284,6 +432,98 @@
         </div>
       </div>
     </Teleport>
+
+    <Teleport to="body">
+      <div v-if="skillConfigModalOpen" class="modal-overlay" @click.self="closeSkillConfigModal">
+        <div class="modal skill-config-modal">
+          <div class="skill-config-header">
+            <div>
+              <span class="skill-config-kicker"><WandSparkles :size="13" /> AGENT SKILLS</span>
+              <h3>Skill 配置</h3>
+              <p>用工作指令定义 Agent 的做事方式，并只授予完成任务需要的工具。</p>
+            </div>
+            <button type="button" class="model-config-close" @click="closeSkillConfigModal">×</button>
+          </div>
+
+          <div class="skill-config-layout">
+            <section class="skill-library-panel">
+              <div class="skill-panel-title">
+                <div><strong>Skill 库</strong><small>{{ skillOptions.length }} 项</small></div>
+                <button type="button" @click="startNewSkill"><Plus :size="13" /> 新建</button>
+              </div>
+              <div class="skill-library-list">
+                <article v-for="skill in skillOptions" :key="skill.id" class="skill-library-card" :class="{ active: editingSkillId === skill.id }">
+                  <button type="button" class="skill-library-main" @click="skill.can_edit ? editSkill(skill) : previewBuiltinSkill(skill)">
+                    <span class="skill-item-icon"><WandSparkles :size="14" /></span>
+                    <span>
+                      <strong>{{ skill.name }}</strong>
+                      <small>{{ skill.category }} · {{ skill.source === 'builtin' ? '内置' : '自定义' }}</small>
+                    </span>
+                  </button>
+                  <span v-if="skill.can_edit" class="skill-library-actions">
+                    <button type="button" title="编辑" @click="editSkill(skill)"><Pencil :size="13" /></button>
+                    <button type="button" title="删除" @click="deleteCustomSkill(skill)"><Trash2 :size="13" /></button>
+                  </span>
+                </article>
+              </div>
+            </section>
+
+            <form class="skill-editor" @submit.prevent="saveCustomSkill">
+              <div class="skill-editor-heading">
+                <div>
+                  <strong>{{ skillFormReadOnly ? '内置 Skill 预览' : (editingSkillId ? '编辑自定义 Skill' : '创建自定义 Skill') }}</strong>
+                  <small>{{ skillFormReadOnly ? '内置配置不可修改，可作为自定义 Skill 的参考。' : '保存后会同步到后端，并出现在对话框选择器中。' }}</small>
+                </div>
+                <span v-if="skillFormReadOnly" class="builtin-skill-badge"><ShieldCheck :size="12" /> 内置</span>
+              </div>
+
+              <div class="skill-form-grid">
+                <label>
+                  <span>名称</span>
+                  <input v-model="customSkillForm.name" type="text" maxlength="80" placeholder="例如：竞品研究" :disabled="skillFormReadOnly" required />
+                </label>
+                <label>
+                  <span>分类</span>
+                  <input v-model="customSkillForm.category" type="text" maxlength="32" placeholder="例如：研究" :disabled="skillFormReadOnly" />
+                </label>
+              </div>
+              <label>
+                <span>一句话说明</span>
+                <input v-model="customSkillForm.description" type="text" maxlength="300" placeholder="告诉用户这个 Skill 适合解决什么问题" :disabled="skillFormReadOnly" />
+              </label>
+              <label>
+                <span>工作指令</span>
+                <textarea v-model="customSkillForm.instructions" rows="8" maxlength="6000" placeholder="描述工作步骤、质量标准、输出格式和边界…" :disabled="skillFormReadOnly" required></textarea>
+                <small class="model-form-hint">建议写清：先做什么、如何核验、最终交付什么，以及不能做什么。</small>
+              </label>
+
+              <fieldset class="skill-tool-fieldset" :disabled="skillFormReadOnly">
+                <legend>允许使用的工具</legend>
+                <p>未勾选的工具会在模型规划和实际调用两个阶段被拦截。</p>
+                <label v-for="tool in skillTools" :key="tool.name" class="skill-tool-option" :class="{ unavailable: !tool.available }">
+                  <input v-model="customSkillForm.tool_names" type="checkbox" :value="tool.name" />
+                  <span>
+                    <strong>{{ tool.name }}</strong>
+                    <small>{{ tool.description }}</small>
+                  </span>
+                  <em>{{ tool.available ? '可用' : '未配置' }}</em>
+                </label>
+                <div v-if="!skillTools.length" class="skill-empty-state">当前没有已注册工具，Skill 仍可作为工作指令使用。</div>
+              </fieldset>
+
+              <div v-if="skillConfigError" class="model-config-error">{{ skillConfigError }}</div>
+              <div class="modal-actions">
+                <button type="button" class="btn-secondary" @click="closeSkillConfigModal">关闭</button>
+                <button v-if="skillFormReadOnly" type="button" class="btn-primary-sm" @click="duplicateBuiltinSkill">复制为自定义</button>
+                <button v-else type="submit" class="btn-primary-sm" :disabled="savingCustomSkill">
+                  {{ savingCustomSkill ? '保存中…' : (editingSkillId ? '保存修改' : '创建 Skill') }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -294,16 +534,23 @@ import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
 import {
   ArrowUp,
+  Bot,
   BookOpen,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Cloud,
+  Copy,
   HardDrive,
   ListChecks,
   Loader2,
+  Pencil,
   Plus,
+  Search,
+  Settings2,
+  ShieldCheck,
   Trash2,
+  WandSparkles,
   X,
 } from 'lucide-vue-next'
 import api from '../api'
@@ -339,6 +586,74 @@ const sending = ref(false)
 const conversationId = ref(null)
 const msgContainer = ref(null)
 const inputEl = ref(null)
+const copiedMessageIndex = ref(null)
+let copyFeedbackTimer = null
+
+async function copyMessage(content, index) {
+  if (!content) return
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(content)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = content
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    copiedMessageIndex.value = index
+    if (copyFeedbackTimer) window.clearTimeout(copyFeedbackTimer)
+    copyFeedbackTimer = window.setTimeout(() => {
+      copiedMessageIndex.value = null
+      copyFeedbackTimer = null
+    }, 1600)
+  } catch {
+    copiedMessageIndex.value = null
+  }
+}
+
+const TASK_PANEL_WIDTH_KEY = 'easyrag-task-panel-width'
+const savedTaskPanelWidth = Number(localStorage.getItem(TASK_PANEL_WIDTH_KEY))
+const taskPanelWidth = ref(
+  Number.isFinite(savedTaskPanelWidth)
+    ? Math.min(520, Math.max(280, savedTaskPanelWidth))
+    : 340
+)
+const panelResizing = ref(false)
+let panelResizeMoveHandler = null
+let panelResizeUpHandler = null
+
+function stopTaskPanelResize() {
+  if (!panelResizing.value) return
+  panelResizing.value = false
+  document.body.classList.remove('task-panel-resizing')
+  if (panelResizeMoveHandler) window.removeEventListener('pointermove', panelResizeMoveHandler)
+  if (panelResizeUpHandler) window.removeEventListener('pointerup', panelResizeUpHandler)
+  if (panelResizeUpHandler) window.removeEventListener('pointercancel', panelResizeUpHandler)
+  panelResizeMoveHandler = null
+  panelResizeUpHandler = null
+  localStorage.setItem(TASK_PANEL_WIDTH_KEY, String(taskPanelWidth.value))
+}
+
+function startTaskPanelResize(event) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  const startX = event.clientX
+  const startWidth = taskPanelWidth.value
+  panelResizing.value = true
+  document.body.classList.add('task-panel-resizing')
+  panelResizeMoveHandler = moveEvent => {
+    const nextWidth = startWidth + startX - moveEvent.clientX
+    taskPanelWidth.value = Math.min(520, Math.max(280, Math.round(nextWidth)))
+  }
+  panelResizeUpHandler = stopTaskPanelResize
+  window.addEventListener('pointermove', panelResizeMoveHandler)
+  window.addEventListener('pointerup', panelResizeUpHandler, { once: true })
+  window.addEventListener('pointercancel', panelResizeUpHandler, { once: true })
+}
 
 // 对话模型目录由后端环境配置生成；浏览器只保存公开 model_id，不接触供应商密钥。
 const MODEL_STORAGE_KEY = 'easyrag-chat-model-id'
@@ -487,6 +802,197 @@ function closeModelMenuOnOutsideClick(event) {
   if (modelPickerEl.value && !modelPickerEl.value.contains(event.target)) {
     modelMenuOpen.value = false
   }
+  if (skillPickerEl.value && !skillPickerEl.value.contains(event.target)) {
+    skillMenuOpen.value = false
+  }
+}
+
+// Skill 目录和选择结果都只保存公开 ID；指令与工具权限由后端在每次请求时重新解析。
+const SKILL_STORAGE_KEY = 'easyrag-chat-skill-ids'
+let storedSkillIds = []
+try {
+  const parsed = JSON.parse(localStorage.getItem(SKILL_STORAGE_KEY) || '[]')
+  if (Array.isArray(parsed)) storedSkillIds = parsed.filter(item => typeof item === 'string')
+} catch { /* 损坏的本地缓存直接忽略 */ }
+
+const skillOptions = ref([])
+const skillTools = ref([])
+const selectedSkillIds = ref(storedSkillIds)
+const maxSelectedSkills = ref(3)
+const skillsLoading = ref(true)
+const skillLoadError = ref('')
+const skillMenuOpen = ref(false)
+const skillPickerEl = ref(null)
+const skillSearch = ref('')
+const skillConfigModalOpen = ref(false)
+const savingCustomSkill = ref(false)
+const skillConfigError = ref('')
+const editingSkillId = ref('')
+const skillFormReadOnly = ref(false)
+const customSkillForm = reactive({
+  name: '',
+  description: '',
+  instructions: '',
+  tool_names: [],
+  category: '自定义',
+  icon: 'sparkles',
+})
+
+const selectedSkills = computed(() => selectedSkillIds.value
+  .map(id => skillOptions.value.find(skill => skill.id === id))
+  .filter(Boolean))
+const filteredSkills = computed(() => {
+  const query = skillSearch.value.trim().toLowerCase()
+  if (!query) return skillOptions.value
+  return skillOptions.value.filter(skill => [
+    skill.name,
+    skill.description,
+    skill.category,
+    ...(skill.tool_names || []),
+  ].some(value => String(value || '').toLowerCase().includes(query)))
+})
+
+watch(selectedSkillIds, (ids) => {
+  localStorage.setItem(SKILL_STORAGE_KEY, JSON.stringify(ids))
+}, { deep: true })
+
+async function loadSkills(preferredSkillId = '') {
+  skillsLoading.value = true
+  skillLoadError.value = ''
+  try {
+    const data = await api.get('/chat/skills')
+    skillOptions.value = data.skills || []
+    skillTools.value = data.tools || []
+    maxSelectedSkills.value = data.max_selected || 3
+    const validIds = new Set(skillOptions.value.map(skill => skill.id))
+    selectedSkillIds.value = selectedSkillIds.value
+      .filter(id => validIds.has(id))
+      .slice(0, maxSelectedSkills.value)
+    if (
+      preferredSkillId
+      && validIds.has(preferredSkillId)
+      && !selectedSkillIds.value.includes(preferredSkillId)
+      && selectedSkillIds.value.length < maxSelectedSkills.value
+    ) {
+      selectedSkillIds.value = [...selectedSkillIds.value, preferredSkillId]
+    }
+  } catch (error) {
+    skillOptions.value = []
+    skillTools.value = []
+    selectedSkillIds.value = []
+    skillLoadError.value = error.response?.data?.detail || `Skill 列表加载失败：${error.message}`
+  } finally {
+    skillsLoading.value = false
+  }
+}
+
+function toggleSkillMenu() {
+  modelMenuOpen.value = false
+  skillMenuOpen.value = !skillMenuOpen.value
+}
+
+function toggleSkill(skill) {
+  if (selectedSkillIds.value.includes(skill.id)) {
+    removeSkill(skill.id)
+    return
+  }
+  if (selectedSkillIds.value.length >= maxSelectedSkills.value) return
+  selectedSkillIds.value = [...selectedSkillIds.value, skill.id]
+}
+
+function removeSkill(skillId) {
+  selectedSkillIds.value = selectedSkillIds.value.filter(id => id !== skillId)
+}
+
+function assignSkillForm(skill = null) {
+  Object.assign(customSkillForm, {
+    name: skill?.name || '',
+    description: skill?.description || '',
+    instructions: skill?.instructions || '',
+    tool_names: [...(skill?.tool_names || [])],
+    category: skill?.category || '自定义',
+    icon: skill?.icon || 'sparkles',
+  })
+}
+
+function startNewSkill() {
+  editingSkillId.value = ''
+  skillFormReadOnly.value = false
+  skillConfigError.value = ''
+  assignSkillForm()
+}
+
+function previewBuiltinSkill(skill) {
+  editingSkillId.value = skill.id
+  skillFormReadOnly.value = true
+  skillConfigError.value = ''
+  assignSkillForm(skill)
+}
+
+function editSkill(skill) {
+  editingSkillId.value = skill.id
+  skillFormReadOnly.value = false
+  skillConfigError.value = ''
+  assignSkillForm(skill)
+}
+
+function duplicateBuiltinSkill() {
+  customSkillForm.name = `${customSkillForm.name} 副本`
+  editingSkillId.value = ''
+  skillFormReadOnly.value = false
+  skillConfigError.value = ''
+}
+
+function openSkillConfigModal() {
+  skillMenuOpen.value = false
+  skillConfigModalOpen.value = true
+  const firstCustom = skillOptions.value.find(skill => skill.can_edit)
+  if (firstCustom) editSkill(firstCustom)
+  else startNewSkill()
+}
+
+function closeSkillConfigModal() {
+  if (savingCustomSkill.value) return
+  skillConfigModalOpen.value = false
+  skillConfigError.value = ''
+}
+
+async function saveCustomSkill() {
+  if (savingCustomSkill.value || skillFormReadOnly.value) return
+  savingCustomSkill.value = true
+  skillConfigError.value = ''
+  const payload = {
+    name: customSkillForm.name.trim(),
+    description: customSkillForm.description.trim(),
+    instructions: customSkillForm.instructions.trim(),
+    tool_names: [...customSkillForm.tool_names],
+    category: customSkillForm.category.trim() || '自定义',
+    icon: customSkillForm.icon || 'sparkles',
+  }
+  try {
+    const saved = editingSkillId.value
+      ? await api.put(`/chat/skills/${editingSkillId.value}`, payload)
+      : await api.post('/chat/skills', payload)
+    await loadSkills(saved.id)
+    editSkill(skillOptions.value.find(skill => skill.id === saved.id) || saved)
+  } catch (error) {
+    skillConfigError.value = error.response?.data?.detail || error.message || 'Skill 保存失败'
+  } finally {
+    savingCustomSkill.value = false
+  }
+}
+
+async function deleteCustomSkill(skill) {
+  if (!window.confirm(`确定删除自定义 Skill“${skill.name}”吗？`)) return
+  skillConfigError.value = ''
+  try {
+    await api.delete(`/chat/skills/${skill.id}`)
+    removeSkill(skill.id)
+    await loadSkills()
+    startNewSkill()
+  } catch (error) {
+    skillConfigError.value = error.response?.data?.detail || error.message || 'Skill 删除失败'
+  }
 }
 
 // 状态步骤面板（思考过程时间线）
@@ -498,8 +1004,21 @@ const statusSteps = ref([])
 const taskPanel = ref({
   visible: false,
   run_id: '',
-  tasks: [],      // [{task_id, goal, worker_hint, status: pending|running|done|error, tools: []}]
+  status: 'idle',
+  todosExpanded: true,
+  agentsExpanded: true,
+  tasks: [],
 })
+function emptyTaskPanel() {
+  return {
+    visible: false,
+    run_id: '',
+    status: 'idle',
+    todosExpanded: true,
+    agentsExpanded: true,
+    tasks: [],
+  }
+}
 function findTask(taskId) {
   return taskPanel.value.tasks.find(t => t.task_id === taskId)
 }
@@ -523,6 +1042,7 @@ const STEP_LABELS = {
   decompose_done: '拆解完成',
   dispatch: '派发子任务',
   dispatch_done: '派发完成',
+  task_started: '子任务执行',
   synthesize: '汇总结果',
   synthesize_done: '汇总完成',
   fallback: '回退',
@@ -551,6 +1071,34 @@ const taskProgress = computed(() => {
   const done = tasks.filter(t => t.status === 'done' || t.status === 'error').length
   return { done, total: tasks.length, pct: Math.round(done / tasks.length * 100) }
 })
+const taskPanelObjectCount = computed(() => taskPanel.value.tasks.length * 2)
+const runStateLabel = computed(() => {
+  if (taskPanel.value.status === 'running') return '执行中'
+  if (taskPanel.value.status === 'failed') return '部分任务失败'
+  if (taskPanel.value.status === 'cancelled') return '已取消'
+  return taskPanel.value.tasks.length ? '已完成' : '等待计划'
+})
+
+function frontendTaskStatus(status) {
+  if (status === 'completed' || status === 'done' || status === 'done_with_concerns') return 'done'
+  if (status === 'failed' || status === 'error' || status === 'blocked') return 'error'
+  if (status === 'running') return 'running'
+  return 'pending'
+}
+
+function taskFromRun(task, agentRuns) {
+  const agent = (agentRuns || []).find(item => item.task_id === task.task_id)
+  return {
+    task_id: task.task_id,
+    goal: task.goal,
+    worker_hint: task.worker_hint || agent?.worker_name || '',
+    status: frontendTaskStatus(task.status),
+    tools: [],
+    output: agent?.output_summary || '',
+    error: task.error_summary || agent?.error_summary || '',
+    expanded: false,
+  }
+}
 
 // 流式进行中: 最后一条 assistant 消息是否已开始收到内容
 const lastAssistantHasContent = computed(() => {
@@ -605,8 +1153,9 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   if (newId === oldId) return
   conversationId.value = newId
   messages.value = []
+  input.value = ''
   // 切换会话 → 清空上一会话的任务面板（否则面板残留 pin 在右边）
-  taskPanel.value = { visible: false, run_id: '', tasks: [] }
+  taskPanel.value = emptyTaskPanel()
 
   if (newId) {
     try {
@@ -616,17 +1165,33 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         role: m.role,
         content: m.content,
         sources: m.meta?.sources || [],
-        meta: (m.meta?.intent || m.meta?.model_name || m.meta?.run_id) ? {
+        skills: m.meta?.skills || [],
+        meta: (m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.skills?.length) ? {
           intent: m.meta?.intent || '',
           modelName: m.meta?.model_name || '',
           runId: m.meta?.run_id || '',
+          skillNames: (m.meta?.skills || []).map(skill => skill.name),
         } : null,
         steps: m.meta?.steps || [],
-        stepsExpanded: true,
+        stepsExpanded: false,
         stepsLoading: false,
         time: formatTime(m.created_at),
         ts: m.created_at ? Date.parse(m.created_at) : null,
       }))
+      try {
+        const runData = await api.get(`/chat/conversations/${newId}/runs`)
+        const latestRun = runData.runs?.[0]
+        if (latestRun?.tasks?.length) {
+          taskPanel.value = {
+            visible: false,
+            run_id: latestRun.id,
+            status: latestRun.status,
+            todosExpanded: true,
+            agentsExpanded: true,
+            tasks: latestRun.tasks.map(task => taskFromRun(task, latestRun.agent_runs)),
+          }
+        }
+      } catch { /* 旧会话可能没有 Run，保持无面板 */ }
       scrollBottom()
     } catch { /* 忽略 */ }
   }
@@ -636,12 +1201,19 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
 async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
+  const requestSkills = selectedSkills.value.map(skill => ({ id: skill.id, name: skill.name }))
   input.value = ''
   resetInputHeight()
   sending.value = true
 
   const userTs = Date.now()
-  messages.value.push({ role: 'user', content: text, time: formatTime(new Date(userTs).toISOString()), ts: userTs })
+  messages.value.push({
+    role: 'user',
+    content: text,
+    skills: requestSkills,
+    time: formatTime(new Date(userTs).toISOString()),
+    ts: userTs,
+  })
   // 先插入一条空的 assistant 消息, 流式 delta 逐步填充其 content
   // steps: 本轮思考过程（绑定在这条消息上，不会被下一轮覆盖）
   // 注意: assistant 的时间戳独立取"当前时刻"——不要复用 user 的 ts,
@@ -651,9 +1223,12 @@ async function send() {
     role: 'assistant',
     content: '',
     sources: [],
-    meta: { modelName: selectedModel.value?.name || '' },
+    meta: {
+      modelName: selectedModel.value?.name || '',
+      skillNames: requestSkills.map(skill => skill.name),
+    },
     steps: [],
-    stepsExpanded: true,
+    stepsExpanded: false,
     stepsLoading: true,
     time: formatTime(new Date(asstTs).toISOString()),
     ts: asstTs,
@@ -664,13 +1239,14 @@ async function send() {
   let gotError = ''
   // 重置当前轮次的状态缓冲 + 任务面板
   statusSteps.value = []
-  taskPanel.value = { visible: false, run_id: '', tasks: [] }
+  taskPanel.value = emptyTaskPanel()
 
   try {
     await api.streamChat('/chat/stream', {
       query: text,
       conversation_id: conversationId.value,
       model_id: selectedModelId.value,
+      skill_ids: requestSkills.map(skill => skill.id),
     }, (ev) => {
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
@@ -681,6 +1257,7 @@ async function send() {
             ...(m.meta || {}),
             runId: ev.run_id || m.meta?.runId || '',
             modelName: ev.model_name || m.meta?.modelName || '',
+            skillNames: (ev.skills || requestSkills).map(skill => skill.name),
           },
         }
         taskPanel.value.run_id = ev.run_id || ''
@@ -689,38 +1266,39 @@ async function send() {
         taskPanel.value = {
           visible: true,
           run_id: ev.run_id || taskPanel.value.run_id || '',
+          status: 'running',
+          todosExpanded: true,
+          agentsExpanded: true,
           tasks: (ev.tasks || []).map(t => ({
             task_id: t.task_id,
             goal: t.goal,
             worker_hint: t.worker_hint,
             status: 'pending',
             tools: [],
+            output: '',
+            error: '',
+            expanded: false,
           })),
         }
       } else if (ev.type === 'tool_call') {
-        // 工具调用记录：挂到当前运行中的子任务下
-        const running = taskPanel.value.tasks.find(t => t.status === 'running')
-        if (running) running.tools.push(ev.detail)
+        const task = findTask(ev.task_id)
+        if (task) task.tools.push(ev.detail)
       } else if (ev.type === 'status') {
         // 状态事件：落到当前 assistant 消息的 steps（随消息保留）
         const st = { step: ev.step, detail: ev.detail }
         statusSteps.value.push(st)
         const m = messages.value[msgIndex]
         messages.value[msgIndex] = { ...m, steps: [...(m.steps || []), st] }
-        // 派发开始 → 所有子任务标记运行中
-        if (ev.step === 'dispatch') {
-          taskPanel.value.tasks.forEach(t => { t.status = 'running' })
-        }
+        if (ev.step === 'task_started') setTaskStatus(ev.task_id, 'running')
         scrollBottom()
       } else if (ev.type === 'worker_output') {
-        // 子任务产出：作为中间结果追加到消息内容，边执行边输出
-        const m = messages.value[msgIndex]
-        const header = `\n\n---\n**子任务 ${ev.task_id}（${ev.worker}）产出：**\n\n`
-        m.content += header + ev.content
-        messages.value[msgIndex] = { ...m }
-        // 任务面板：该子任务完成
-        setTaskStatus(ev.task_id, 'done')
-        scrollBottom()
+        // 过程产出只进入右侧工作台，默认折叠，不污染最终回答正文。
+        const task = findTask(ev.task_id)
+        if (task) {
+          task.output = ev.content || ''
+          task.error = ev.status === 'error' ? ev.content : ''
+          task.status = frontendTaskStatus(ev.status)
+        }
       } else if (ev.type === 'delta') {
         // 触发响应式更新: 替换数组元素
         const m = messages.value[msgIndex]
@@ -737,17 +1315,18 @@ async function send() {
             elapsed: ev.elapsed_seconds,
             runId: ev.run_id || m.meta?.runId || '',
             modelName: ev.model_name || m.meta?.modelName || '',
+            skillNames: (ev.skills || requestSkills).map(skill => skill.name),
           },
           // 兜底：流式中断时 status 事件可能不全，用 done 携带的完整 steps 补齐
           steps: (ev.steps && ev.steps.length) ? ev.steps : (m.steps || []),
           stepsLoading: false,
         }
-        // 任务面板：全部子任务标记完成
-        taskPanel.value.tasks.forEach(t => {
-          if (t.status === 'running' || t.status === 'pending') t.status = 'done'
-        })
+        taskPanel.value.status = taskPanel.value.tasks.some(t => t.status === 'error')
+          ? 'failed'
+          : 'completed'
       } else if (ev.type === 'error') {
         gotError = ev.detail || '生成失败'
+        if (taskPanel.value.tasks.length) taskPanel.value.status = 'failed'
       }
     })
 
@@ -779,10 +1358,13 @@ onActivated(() => {
 
 onMounted(() => {
   loadModels()
+  loadSkills()
   document.addEventListener('click', closeModelMenuOnOutsideClick)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', closeModelMenuOnOutsideClick)
+  stopTaskPanelResize()
+  if (copyFeedbackTimer) window.clearTimeout(copyFeedbackTimer)
 })
 </script>

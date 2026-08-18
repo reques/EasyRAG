@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +44,9 @@ async def extract_graph_from_chunks(
     kb_id: uuid.UUID,
     chunks: List[tuple],
     source_name: str,
+    progress_callback: Optional[
+        Callable[[int, int, str], Awaitable[None]]
+    ] = None,
 ) -> Dict[str, int]:
     """对一组 chunk 抽取实体/关系并入库。返回 {"entities": n, "relations": m}。
 
@@ -55,15 +58,29 @@ async def extract_graph_from_chunks(
     total_entities = 0
     total_relations = 0
     sampled = chunks[: cfg.GRAPH_MAX_CHUNKS_PER_FILE]
+    total_sampled = len(sampled)
 
     for i, (text, meta) in enumerate(sampled):
-        if len(text.strip()) < 50:  # 太短的 chunk 没有抽取价值
-            continue
+        if progress_callback:
+            await progress_callback(
+                i,
+                total_sampled,
+                f"正在抽取知识图谱 {i}/{total_sampled}",
+            )
         try:
+            if len(text.strip()) < 50:  # 太短的 chunk 没有抽取价值
+                continue
             raw = await llm.chat_json([{"role": "user", "content": _EXTRACT_PROMPT.format(chunk=text[:2000])}])
         except Exception as exc:
             logger.warning("[graph] extract failed for chunk %d of '%s': %s", i, source_name, exc)
             continue
+        finally:
+            if progress_callback:
+                await progress_callback(
+                    i + 1,
+                    total_sampled,
+                    f"正在抽取知识图谱 {i + 1}/{total_sampled}",
+                )
 
         entities = raw.get("entities") or []
         relations = raw.get("relations") or []

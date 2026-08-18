@@ -242,6 +242,7 @@ class MCPServerHandle:
         try:
             return fut.result(timeout=MCP_CALL_TIMEOUT_S)
         except asyncio.TimeoutError:
+            fut.cancel()
             raise ToolExecutionError(f"MCP tool '{tool_name}' timed out after {MCP_CALL_TIMEOUT_S}s")
         except ToolExecutionError:
             raise
@@ -324,7 +325,7 @@ class MCPManager:
             reg = get_tool_registry()
             for tool_name in handle.registered_tools:
                 try:
-                    reg._tools.pop(tool_name, None)
+                    reg.unregister(tool_name)
                 except Exception:
                     pass
             handle.registered_tools = []

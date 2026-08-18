@@ -77,6 +77,14 @@ class KnowledgeFile(Base):
     # 提取的纯文本内容（预览兜底；MinIO 不可用时直接读此列）
     text_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # 文档解析来源。保留实际生效的解析器信息，方便界面展示与问题追踪。
+    parser_name: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    parser_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    parser_task_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    parser_backend: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    parse_method: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    parser_warnings: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # 索引统计
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -87,6 +95,10 @@ class KnowledgeFile(Base):
     )  # pending / processing / completed / failed
     # 处理进度 0-100（后台索引任务推进时更新，供前端进度条轮询）
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processing_stage: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    progress_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    progress_current: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    progress_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # 失败原因（status=failed 时记录，便于前端展示）
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -153,8 +165,14 @@ class EvaluationRun(Base):
     """检索评估运行（阶段 2D）— 一次命名评估的聚合指标 + 逐条明细。
 
     metrics_json 结构:
-        {"hit_rate": 0.8, "mrr": 0.65, "avg_score": 0.72,
-         "details": [{"query":..., "expected_source":..., "hit_rank":1|None, "top_score":...}]}
+        {"metrics_version": "local-v1", "k": 10,
+         "hit_rate_at_k": 0.8, "mrr_at_k": 0.65,
+         "recall_at_k": 0.8, "precision_at_k": 0.08,
+         "ndcg_at_k": 0.71, "avg_score": 0.72,
+         "details": [{"question":..., "expected_file_id":...,
+                      "expected_chunk_id":..., "reference_answer":...,
+                      "file_hit_rank":1|None, "chunk_hit_rank":1|None,
+                      "top_score":...}]}
     """
 
     __tablename__ = "evaluation_runs"

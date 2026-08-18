@@ -147,11 +147,11 @@ class BaseWorker(ABC):
 
     def _chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """同步 LLM 调用（Worker 内统一走 chat_sync）。"""
-        return self.llm.chat_sync(messages, **kwargs)
+        return self.llm.chat_sync(self._with_skill_prompt(messages), **kwargs)
 
     def _chat_json(self, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
         """同步 JSON 模式 LLM 调用（自动剥 markdown fence）。"""
-        raw = self.llm.chat_sync(messages, **kwargs)
+        raw = self.llm.chat_sync(self._with_skill_prompt(messages), **kwargs)
         # 剥 markdown fence
         text = raw.strip()
         if text.startswith("```"):
@@ -163,3 +163,14 @@ class BaseWorker(ABC):
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
         return json.loads(text)
+
+    @staticmethod
+    def _with_skill_prompt(
+        messages: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        from app.skills.context import get_active_skill_prompt
+
+        skill_prompt = get_active_skill_prompt()
+        if not skill_prompt:
+            return messages
+        return [{"role": "system", "content": skill_prompt}, *messages]
