@@ -64,25 +64,43 @@ class GraphExtractor:
         self,
         chunks: List[tuple],
         progress_callback: Optional[Callable[[int, int, str], Awaitable[None]]] = None,
+        concurrency: int = 4,
     ) -> List[ExtractionResult]:
-        """逐 chunk 抽取，单个失败跳过不中断；返回与输入等长的结果列表。
+        """并发抽取（默认 4 路），单 chunk 失败跳过不中断。
 
+        返回与输入等长的结果列表（``asyncio.gather`` 保持输入顺序）。
         chunks: [(text, meta), ...]
         """
-        results: List[ExtractionResult] = []
+        import asyncio
+
         total = len(chunks)
-        for i, (text, meta) in enumerate(chunks):
-            if progress_callback:
-                await progress_callback(i, total, f"正在抽取知识图谱 {i}/{total}")
+        sem = asyncio.Semaphore(max(1, concurrency))
+        done = 0
+        lock = asyncio.Lock()
+
+        async def _one(i: int, text: str, meta) -> ExtractionResult:
+            nonlocal done
             try:
                 if len((text or "").strip()) < 50:  # 太短没有抽取价值
-                    results.append(ExtractionResult())
-                    continue
-                results.append(await self.extract(text, meta))
+                    return ExtractionResult()
+                return await self.extract(text, meta)
             except Exception as exc:  # 单 chunk 失败不阻塞构建
                 logger.warning("[extractor] chunk %d failed: %s", i, exc)
-                results.append(ExtractionResult())
+                return ExtractionResult()
             finally:
-                if progress_callback:
-                    await progress_callback(i + 1, total, f"正在抽取知识图谱 {i + 1}/{total}")
-        return results
+                async with lock:
+                    done += 1
+                    if progress_callback and (done % 5 == 0 or done == total):
+                        cb = progress_callback(
+                            done, total, f"正在抽取知识图谱 {done}/{total}"
+                        )
+                        if asyncio.iscoroutine(cb):
+                            await cb
+
+        async def _guarded(i: int, text: str, meta) -> ExtractionResult:
+            async with sem:
+                return await _one(i, text, meta)
+
+        return await asyncio.gather(
+            *(_guarded(i, t, m) for i, (t, m) in enumerate(chunks))
+        )

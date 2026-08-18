@@ -128,7 +128,11 @@ async def run_build(run_id: uuid.UUID) -> None:
                         r.processed_chunks = i
                         await s.commit()
 
-        results = await extractor.extract_batch(chunks, progress_callback=report)
+        results = await extractor.extract_batch(
+            chunks,
+            progress_callback=report,
+            concurrency=cfg.GRAPH_EXTRACT_CONCURRENCY,
+        )
 
         # 3) Neo4j 写入（同步 driver → 线程池）
         await asyncio.to_thread(_write_neo4j, str(kb_id), chunks, results)
@@ -222,21 +226,35 @@ def _write_neo4j(
     chunks: Sequence[Tuple[str, Dict[str, str]]],
     results: Sequence[Any],
 ) -> None:
-    """实体/关系幂等写入 Neo4j（带 chunk 引用）。"""
+    """实体/关系幂等写入 Neo4j（批量 UNWIND，带 chunk 引用）。"""
     from backend.storage.neo4j.client import get_neo4j_client
 
     client = get_neo4j_client()
     if not client.available:
         raise RuntimeError("Neo4j 不可达，图谱构建中止（请先 docker compose up -d neo4j）")
     client.init_schema()
+
+    # 去重聚合：实体按 name，关系按 (source, relation, target)，chunk 引用累积
+    entities: Dict[str, Tuple[str, str]] = {}
+    relations: Dict[Tuple[str, str, str], Tuple[str, set]] = {}
     for (text, meta), result in zip(chunks, results):
         cid = meta.get("chunk_id", "")
         for e in result.entities:
-            client.upsert_entity(kb_id, e.name, e.entity_type, e.description)
+            entities.setdefault(e.name, (e.entity_type, e.description))
         for r in result.relations:
-            client.upsert_relation(
-                kb_id, r.source, r.target, r.relation, r.description, cid
-            )
+            key = (r.source, r.relation, r.target)
+            entry = relations.setdefault(key, (r.description, set()))
+            if cid:
+                entry[1].add(cid)
+            # 关系端点也补进实体（防止端点在抽取结果中未作为实体输出而丢关系）
+            entities.setdefault(r.source, ("concept", ""))
+            entities.setdefault(r.target, ("concept", ""))
+
+    client.upsert_entities_batch(kb_id, entities)
+    client.upsert_relations_batch(
+        kb_id,
+        {k: (desc, sorted(ids)) for k, (desc, ids) in relations.items()},
+    )
 
 
 async def _persist_pg(

@@ -154,6 +154,71 @@ class Neo4jClient:
                 max_refs=MAX_CHUNK_REFS_PER_REL,
             )
 
+    # ── 批量写入（构建加速：UNWIND 一次会话写入全部）────────────────────
+
+    def upsert_entities_batch(
+        self,
+        kb_id: str,
+        entities: Dict[str, Tuple[str, str]],
+    ) -> None:
+        """批量 upsert 实体。entities: {name: (entity_type, description)}。"""
+        rows = [
+            {
+                "name": name,
+                "entity_type": (entity_type or "concept")[:64],
+                "description": (description or "")[:1024],
+            }
+            for name, (entity_type, description) in entities.items()
+        ]
+        if not rows:
+            return
+        driver = self._get_driver()
+        with driver.session() as session:
+            session.run(
+                f"UNWIND $rows AS row "
+                f"MERGE (e:{ENTITY_LABEL} {{kb_id: $kb_id, name: row.name}}) "
+                "SET e.entity_type = CASE WHEN row.entity_type <> '' "
+                "THEN row.entity_type ELSE e.entity_type END, "
+                "e.description = CASE WHEN row.description <> '' "
+                "THEN row.description ELSE e.description END",
+                rows=rows, kb_id=kb_id,
+            )
+
+    def upsert_relations_batch(
+        self,
+        kb_id: str,
+        relations: Dict[Tuple[str, str, str], Tuple[str, List[str]]],
+    ) -> None:
+        """批量 upsert 关系（Python 侧已按 (source, relation, target) 聚合）。
+
+        relations: {(source, relation, target): (description, chunk_ids)}。
+        """
+        rows = [
+            {
+                "source": src,
+                "relation": rel[:128],
+                "target": tgt,
+                "description": (desc or "")[:1024],
+                "chunk_ids": [c for c in chunk_ids if c][:MAX_CHUNK_REFS_PER_REL],
+            }
+            for (src, rel, tgt), (desc, chunk_ids) in relations.items()
+        ]
+        if not rows:
+            return
+        driver = self._get_driver()
+        with driver.session() as session:
+            session.run(
+                f"UNWIND $rows AS row "
+                f"MATCH (a:{ENTITY_LABEL} {{kb_id: $kb_id, name: row.source}}) "
+                f"MATCH (b:{ENTITY_LABEL} {{kb_id: $kb_id, name: row.target}}) "
+                f"MERGE (a)-[r:{REL_LABEL} {{kb_id: $kb_id, relation_type: row.relation}}]->(b) "
+                "SET r.description = CASE WHEN row.description <> '' "
+                "THEN row.description ELSE r.description END, "
+                "r.chunk_ids = apoc.coll.toSet("
+                "  apoc.coll.union(coalesce(r.chunk_ids, []), row.chunk_ids))",
+                rows=rows, kb_id=kb_id,
+            )
+
     # ── 查询 ─────────────────────────────────────────────────────────────
 
     def search_entities(self, kb_id: str, query: str, limit: int = 10) -> List[Dict[str, Any]]:

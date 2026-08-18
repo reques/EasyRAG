@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     GRAPH_BUILD_BATCH_SIZE: int = 10       # 构建时 embedding 的批大小
     GRAPH_RRF_K: int = 60                  # RRF 融合常数（reciprocal rank fusion）
     GRAPH_ENTITY_TOP_K: int = 5            # 图谱召回时最多命中的实体/三元组数
+    GRAPH_EXTRACT_CONCURRENCY: int = 4     # 构建时 LLM 抽取并发数（注意 API 限流，过大易 429）
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
     # 阶段 2A: 分块策略
