@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from time import perf_counter
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.logger import get_logger
+from app.rag.parsers import UnsupportedDocumentError, get_parser_router
 from backend.services.knowledge_service import (
     create_knowledge_base,
     add_file_record,
@@ -55,6 +58,56 @@ class FileResponse(BaseModel):
     created_at: str
     progress: int = 0
     error_message: Optional[str] = None
+    parser_name: Optional[str] = None
+    parser_version: Optional[str] = None
+    parser_task_id: Optional[str] = None
+    parser_backend: Optional[str] = None
+    parse_method: Optional[str] = None
+    parser_warnings: Optional[str] = None
+    processing_stage: Optional[str] = None
+    progress_message: Optional[str] = None
+    progress_current: int = 0
+    progress_total: int = 0
+
+
+class RetrievalTestRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=4096)
+    top_k: int = Field(default=5, ge=1, le=100)
+    score_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        query = value.strip()
+        if not query:
+            raise ValueError("query must not be blank")
+        return query
+
+
+class RetrievalHitResponse(BaseModel):
+    rank: int
+    chunk_id: str
+    content: str
+    score: float
+    source: Optional[str] = None
+    file_id: Optional[str] = None
+    chunk_index: Optional[int] = None
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    section_path: Optional[str] = None
+    parser_name: Optional[str] = None
+    retrieval_path: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RetrievalTestResponse(BaseModel):
+    query: str
+    knowledge_base_id: str
+    top_k: int
+    score_threshold: float
+    elapsed_ms: int
+    total: int
+    results: list[RetrievalHitResponse]
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -131,9 +184,113 @@ async def list_files(
                 created_at=f.created_at.isoformat() if f.created_at else "",
                 progress=f.progress,
                 error_message=f.error_message,
+                parser_name=f.parser_name,
+                parser_version=f.parser_version,
+                parser_task_id=f.parser_task_id,
+                parser_backend=f.parser_backend,
+                parse_method=f.parse_method,
+                parser_warnings=f.parser_warnings,
+                processing_stage=f.processing_stage,
+                progress_message=f.progress_message,
+                progress_current=f.progress_current,
+                progress_total=f.progress_total,
             )
             for f in files
         ]
+
+
+@router.post(
+    "/bases/{kb_id}/retrieval/test",
+    response_model=RetrievalTestResponse,
+)
+async def test_retrieval(
+    kb_id: uuid.UUID,
+    req: RetrievalTestRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """在单个已授权知识库内执行一次轻量级向量检索测试。"""
+    async with get_session() as session:
+        kb_repo = KnowledgeBaseRepository(session)
+        kb = await kb_repo.get_by_id(kb_id)
+        if not kb or kb.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+    from app.rag.retriever import get_document_chunk_id, get_retriever
+
+    started_at = perf_counter()
+    try:
+        docs = await asyncio.to_thread(
+            get_retriever().retrieve,
+            req.query,
+            top_k=req.top_k,
+            knowledge_base_ids=[str(kb_id)],
+            # The frontend uses 0 to mean "no filtering". Cosine/IP scores can
+            # be negative, so pass the true lower bound instead of zero.
+            score_threshold=(
+                -1.0 if req.score_threshold == 0 else req.score_threshold
+            ),
+        )
+    except Exception as exc:
+        logger.exception(
+            "[knowledge/retrieval-test] failed for kb=%s: %s", kb_id, exc
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retrieval service unavailable",
+        ) from exc
+
+    results: list[RetrievalHitResponse] = []
+    for doc in docs:
+        metadata = dict(doc.get("metadata") or {})
+        score = float(metadata.pop("score", 0.0))
+        # parent_text may duplicate the complete result content and make the
+        # debugging response unexpectedly large.
+        metadata.pop("parent_text", None)
+        results.append(
+            RetrievalHitResponse(
+                rank=len(results) + 1,
+                chunk_id=get_document_chunk_id(
+                    kb_id,
+                    str(doc.get("content") or ""),
+                    metadata,
+                ),
+                content=str(doc.get("content") or ""),
+                score=score,
+                source=metadata.get("source"),
+                file_id=_optional_string(metadata.get("file_id")),
+                chunk_index=_optional_int(metadata.get("chunk_index")),
+                page_start=_optional_int(metadata.get("page_start")),
+                page_end=_optional_int(metadata.get("page_end")),
+                section_path=_optional_string(metadata.get("section_path")),
+                parser_name=_optional_string(metadata.get("parser_name")),
+                retrieval_path=_optional_string(metadata.get("retrieval_path")),
+                metadata=metadata,
+            )
+        )
+
+    elapsed_ms = max(0, round((perf_counter() - started_at) * 1000))
+    return RetrievalTestResponse(
+        query=req.query,
+        knowledge_base_id=str(kb_id),
+        top_k=req.top_k,
+        score_threshold=req.score_threshold,
+        elapsed_ms=elapsed_ms,
+        total=len(results),
+        results=results,
+    )
+
+
+def _optional_string(value: Any) -> Optional[str]:
+    return None if value is None or value == "" else str(value)
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class UploadResponse(BaseModel):
@@ -157,7 +314,7 @@ class FileContentResponse(BaseModel):
     """二进制文件内容（图片等）直接流式返回，不走 JSON。"""
 
 
-ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+ALLOWED_EXTENSIONS = get_parser_router().supported_extensions
 
 
 # ── 阶段 2C: 图谱查询 ─────────────────────────────────────────────────────────
@@ -224,6 +381,7 @@ async def upload_to_kb(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     strategy: str = Form(default="", description="覆盖分块策略: fixed/recursive/markdown/parent_child"),
+    parser: str = Form(default="auto", description="解析器: auto/mineru/local"),
     current_user: User = Depends(get_current_user),
 ):
     """上传文件到指定知识库：立即登记记录 + 存 MinIO，索引放后台任务。
@@ -240,6 +398,16 @@ async def upload_to_kb(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported file type '{ext}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
         )
+
+    try:
+        selected_parser = get_parser_router().select_parser(
+            file.filename,
+            preferred_parser=parser,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UnsupportedDocumentError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
 
     raw = await file.read()
     if len(raw) == 0:
@@ -259,6 +427,11 @@ async def upload_to_kb(
             file_type=ext.lstrip("."),
             char_count=len(raw),
         )
+        record.parser_name = selected_parser.parser_name
+        if selected_parser.parser_name == "mineru":
+            record.parser_backend = cfg.MINERU_BACKEND
+        record.processing_stage = "queued"
+        record.progress_message = "文件已接收，等待开始处理"
         await session.commit()
         # commit 后立即取出纯值，避免后续异常时访问 expired/回滚 session 上的 ORM 属性
         file_id = record.id
@@ -293,7 +466,14 @@ async def upload_to_kb(
 
     # 后台任务：解析分块 → 向量索引 → 图谱抽取，分阶段更新 progress
     background_tasks.add_task(
-        _run_ingestion, file_id, kb_uuid, raw, filename, strategy or None
+        _run_ingestion,
+        file_id,
+        kb_uuid,
+        raw,
+        filename,
+        strategy or None,
+        file.content_type,
+        parser,
     )
 
     return UploadResponse(
@@ -310,22 +490,62 @@ async def _run_ingestion(
     raw: bytes,
     filename: str,
     strategy: Optional[str],
+    content_type: Optional[str] = None,
+    preferred_parser: str = "auto",
 ) -> None:
     """后台索引任务：每阶段独立 session 提交进度，供前端轮询。"""
     from backend.services.knowledge_service import update_file_progress
 
     try:
-        # 阶段 1: 解析分块 (10%)
+        # 阶段 1: 先记录计划使用的解析器，让前端在耗时解析期间可见。
+        parser_router = get_parser_router()
+        selected_parser = parser_router.select_parser(
+            filename,
+            preferred_parser=preferred_parser,
+        )
         async with get_session() as s:
-            await update_file_progress(s, file_id, 10, status="processing")
+            repo = KnowledgeFileRepository(s)
+            f = await repo.get_by_id(file_id)
+            if f:
+                f.parser_name = selected_parser.parser_name
+                if selected_parser.parser_name == "mineru":
+                    f.parser_backend = cfg.MINERU_BACKEND
+            parser_label = (
+                "MinerU" if selected_parser.parser_name == "mineru" else "本地解析器"
+            )
+            await update_file_progress(
+                s,
+                file_id,
+                10,
+                status="processing",
+                stage="parsing",
+                message=f"{parser_label} 正在解析文档",
+                current=0,
+                total=0,
+            )
+        logger.info(
+            "[ingestion] parser selected: %s -> %s (requested=%s)",
+            filename,
+            selected_parser.parser_name,
+            preferred_parser,
+        )
 
-        from app.rag.chunker import parse_and_chunk
-        chunks = parse_and_chunk(raw=raw, filename=filename, strategy=strategy)
+        from app.rag.chunker import chunk_parsed_document
+
+        parsed_document = await parser_router.parse(
+            raw,
+            filename,
+            content_type=content_type,
+            preferred_parser=preferred_parser,
+        )
+        chunks = chunk_parsed_document(parsed_document, strategy=strategy)
         if not chunks:
             async with get_session() as s:
                 await update_file_progress(
                     s, file_id, 100, status="failed",
                     error_message="文件解析后没有产生文本块",
+                    stage="failed",
+                    message="解析完成，但没有生成可索引的内容",
                 )
             return
 
@@ -334,12 +554,35 @@ async def _run_ingestion(
             repo = KnowledgeFileRepository(s)
             f = await repo.get_by_id(file_id)
             if f:
-                try:
-                    from app.rag.chunker import extract_text as _extract_full
-                    f.text_content = _extract_full(raw, filename)
-                except Exception as exc:
-                    logger.warning("[ingestion] preview text store failed: %s", exc)
-                await update_file_progress(s, file_id, 30)
+                f.text_content = parsed_document.text
+                f.char_count = len(parsed_document.text)
+                provenance = parsed_document.provenance
+                f.parser_name = provenance.parser_name
+                f.parser_version = provenance.parser_version
+                f.parser_task_id = provenance.task_id
+                f.parser_backend = provenance.backend
+                f.parse_method = provenance.parse_method
+                f.parser_warnings = (
+                    "\n".join(parsed_document.warnings)
+                    if parsed_document.warnings
+                    else None
+                )
+                await update_file_progress(
+                    s,
+                    file_id,
+                    30,
+                    stage="chunking",
+                    message=f"解析完成，共生成 {len(chunks)} 个内容块",
+                    current=len(chunks),
+                    total=len(chunks),
+                )
+        logger.info(
+            "[ingestion] parsed: %s with %s %s (task=%s)",
+            filename,
+            parsed_document.provenance.parser_name,
+            parsed_document.provenance.parser_version or "",
+            parsed_document.provenance.task_id or "-",
+        )
 
         # 阶段 3: 向量索引 (30% → 80%，embedding 是最耗时阶段)
         from app.rag.retriever import get_retriever
@@ -347,28 +590,97 @@ async def _run_ingestion(
         metas = [c[1] for c in chunks]
         for m in metas:
             m["knowledge_base_id"] = str(kb_id)
+            m["file_id"] = str(file_id)
 
-        n = get_retriever().add_documents(texts, metas)
-
+        retriever = get_retriever()
+        n = 0
+        processed = 0
+        batch_size = 16
+        total_chunks = len(texts)
         async with get_session() as s:
-            repo = KnowledgeFileRepository(s)
-            f = await repo.get_by_id(file_id)
-            if f:
-                f.chunk_count = n
-            await update_file_progress(s, file_id, 80)
+            await update_file_progress(
+                s,
+                file_id,
+                30,
+                stage="indexing",
+                message=f"正在生成向量并写入索引 0/{total_chunks}",
+                current=0,
+                total=total_chunks,
+            )
+
+        for start in range(0, total_chunks, batch_size):
+            end = min(start + batch_size, total_chunks)
+            added = await asyncio.to_thread(
+                retriever.add_documents,
+                texts[start:end],
+                metas[start:end],
+            )
+            n += added
+            processed = end
+            vector_progress = min(80, 30 + int(50 * processed / total_chunks))
+            async with get_session() as s:
+                repo = KnowledgeFileRepository(s)
+                f = await repo.get_by_id(file_id)
+                if f:
+                    f.chunk_count = n
+                await update_file_progress(
+                    s,
+                    file_id,
+                    vector_progress,
+                    stage="indexing",
+                    message=f"正在生成向量并写入索引 {processed}/{total_chunks}",
+                    current=processed,
+                    total=total_chunks,
+                )
 
         # 阶段 4: 图谱抽取 (80% → 100%，GRAPH_ENABLED 时)
         if cfg.GRAPH_ENABLED:
             try:
                 from backend.services.graph_service import extract_graph_from_chunks
+
+                async def report_graph_progress(
+                    current: int,
+                    total: int,
+                    message: str,
+                ) -> None:
+                    graph_progress = min(
+                        99,
+                        80 + int(19 * current / max(total, 1)),
+                    )
+                    async with get_session() as progress_session:
+                        await update_file_progress(
+                            progress_session,
+                            file_id,
+                            graph_progress,
+                            stage="graph",
+                            message=message,
+                            current=current,
+                            total=total,
+                        )
+
                 async with get_session() as s:
-                    await extract_graph_from_chunks(s, kb_id, chunks, filename)
+                    await extract_graph_from_chunks(
+                        s,
+                        kb_id,
+                        chunks,
+                        filename,
+                        progress_callback=report_graph_progress,
+                    )
                     await s.commit()
             except Exception as exc:
                 logger.warning("[ingestion] graph extraction failed: %s", exc)
 
         async with get_session() as s:
-            await update_file_progress(s, file_id, 100, status="completed")
+            await update_file_progress(
+                s,
+                file_id,
+                100,
+                status="completed",
+                stage="completed",
+                message="文档解析和索引已完成",
+                current=n,
+                total=n,
+            )
         logger.info("[ingestion] completed: %s (%d chunks)", filename, n)
 
     except Exception as exc:
@@ -378,6 +690,8 @@ async def _run_ingestion(
                 await update_file_progress(
                     s, file_id, 100, status="failed",
                     error_message=str(exc)[:500],
+                    stage="failed",
+                    message="处理失败",
                 )
         except Exception:
             logger.exception("[ingestion] failed to persist error status")

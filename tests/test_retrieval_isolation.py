@@ -9,7 +9,12 @@ import pytest
 from app.rag.bm25 import BM25Retriever
 from app.rag.enhanced_retriever import EnhancedRetriever
 from app.rag.graph_cache import GraphCache
-from app.rag.retriever import ChromaRetriever, MemoryRetriever, MilvusRetriever
+from app.rag.retriever import (
+    ChromaRetriever,
+    MemoryRetriever,
+    MilvusRetriever,
+    get_document_chunk_id,
+)
 from app.agents.workers.base import TaskBrief
 from app.agents.workers.rag_worker import RagWorker
 from app.graph import nodes
@@ -22,6 +27,20 @@ KB_B = "22222222-2222-2222-2222-222222222222"
 class FakeEmbedder:
     def embed_query(self, _query):
         return [1.0, 0.0]
+
+
+def test_public_chunk_id_is_stable_and_honours_an_explicit_id():
+    metadata = {"source": "paper.pdf", "chunk_index": 3}
+    first = get_document_chunk_id(KB_A, "content", metadata)
+    second = get_document_chunk_id(KB_A, "content", dict(metadata))
+
+    assert first == second
+    assert len(first) == 64
+    assert get_document_chunk_id(
+        KB_A,
+        "content",
+        {**metadata, "chunk_id": "stored-chunk-id"},
+    ) == "stored-chunk-id"
 
 
 def test_memory_retriever_denies_empty_scope_and_filters_before_top_k():
@@ -38,6 +57,26 @@ def test_memory_retriever_denies_empty_scope_and_filters_before_top_k():
         docs = retriever.retrieve("query", top_k=10, knowledge_base_ids=[KB_A])
 
     assert [doc["content"] for doc in docs] == ["tenant A"]
+
+
+def test_memory_retriever_accepts_a_per_request_score_threshold():
+    retriever = MemoryRetriever()
+    retriever._texts = ["negative but requested for debugging"]
+    retriever._vecs = [[-1.0, 0.0]]
+    retriever._metas = [{"knowledge_base_id": KB_A, "source": "debug.txt"}]
+
+    with patch("app.rag.retriever.get_embedder", return_value=FakeEmbedder()):
+        default_docs = retriever.retrieve("query", knowledge_base_ids=[KB_A])
+        unfiltered_docs = retriever.retrieve(
+            "query",
+            knowledge_base_ids=[KB_A],
+            score_threshold=-1.0,
+        )
+
+    assert default_docs == []
+    assert [doc["content"] for doc in unfiltered_docs] == [
+        "negative but requested for debugging"
+    ]
 
 
 def test_invalid_scope_id_is_rejected_before_query_execution():

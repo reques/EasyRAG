@@ -118,7 +118,7 @@ def split_text(
 ) -> List[str]:
     """Split *text* into overlapping fixed-size chunks (character-level)."""
     size = chunk_size or cfg.CHUNK_SIZE
-    overlap = chunk_overlap or cfg.CHUNK_OVERLAP
+    overlap = cfg.CHUNK_OVERLAP if chunk_overlap is None else chunk_overlap
     if overlap >= size:
         raise ValueError("chunk_overlap must be smaller than chunk_size")
 
@@ -325,3 +325,233 @@ def parse_and_chunk(
         filename, len(full_text), len(result), strategy,
     )
     return result
+
+
+def chunk_parsed_document(
+    document,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+    strategy: str | None = None,
+) -> List[Chunk]:
+    """Chunk a parser-neutral ``ParsedDocument``.
+
+    Structured parser output uses block-aware chunking by default. An explicit
+    legacy strategy still overrides that behavior for compatibility.
+    """
+    from app.rag.parsers.models import ParsedDocument
+
+    if not isinstance(document, ParsedDocument):
+        raise TypeError("chunk_parsed_document expects a ParsedDocument")
+
+    base_meta = _parsed_document_metadata(document)
+    if strategy is None and document.provenance.parser_name != "local":
+        result = _chunk_structured_document(
+            document,
+            chunk_size=chunk_size,
+            base_meta=base_meta,
+        )
+    else:
+        effective_strategy = strategy or cfg.CHUNK_STRATEGY
+        result = _chunk_parsed_text(
+            document.text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            strategy=effective_strategy,
+            base_meta=base_meta,
+        )
+
+    logger.info(
+        "[chunker] parsed '%s' (%s) -> %d chunks",
+        document.source_name,
+        document.provenance.parser_name,
+        len(result),
+    )
+    return result
+
+
+def _parsed_document_metadata(document) -> dict:
+    provenance = document.provenance
+    metadata = {
+        "source": document.source_name,
+        "parser_name": provenance.parser_name,
+    }
+    optional = {
+        "parser_version": provenance.parser_version,
+        "parser_task_id": provenance.task_id,
+        "parser_backend": provenance.backend,
+        "parse_method": provenance.parse_method,
+        "page_count": document.page_count,
+        "source_sha256": document.source_sha256,
+    }
+    metadata.update({key: value for key, value in optional.items() if value is not None})
+    if document.warnings:
+        metadata["parser_warnings"] = " | ".join(document.warnings)
+    return metadata
+
+
+def _chunk_parsed_text(
+    text: str,
+    *,
+    chunk_size: int | None,
+    chunk_overlap: int | None,
+    strategy: str,
+    base_meta: dict,
+) -> List[Chunk]:
+    if strategy == "fixed":
+        texts = split_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        return [
+            (value, {**base_meta, "strategy": strategy, "chunk_index": index})
+            for index, value in enumerate(texts)
+        ]
+    if strategy == "recursive":
+        texts = split_recursive(text, chunk_size=chunk_size)
+        return [
+            (value, {**base_meta, "strategy": strategy, "chunk_index": index})
+            for index, value in enumerate(texts)
+        ]
+    if strategy == "markdown":
+        texts = split_markdown(text, chunk_size=chunk_size)
+        chunks: List[Chunk] = []
+        for index, value in enumerate(texts):
+            section = ""
+            if value.startswith("[") and "]\n" in value:
+                section = value[1:value.index("]\n")]
+            chunks.append(
+                (
+                    value,
+                    {
+                        **base_meta,
+                        "strategy": strategy,
+                        "chunk_index": index,
+                        "section_path": section,
+                    },
+                )
+            )
+        return chunks
+    if strategy == "parent_child":
+        pairs = split_parent_child(text, chunk_size=chunk_size)
+        return [
+            (
+                child,
+                {
+                    **base_meta,
+                    "strategy": strategy,
+                    "chunk_index": index,
+                    "parent_text": parent,
+                },
+            )
+            for index, (child, parent) in enumerate(pairs)
+        ]
+    raise ValueError(f"Unknown chunk strategy '{strategy}'")
+
+
+def _chunk_structured_document(
+    document,
+    *,
+    chunk_size: int | None,
+    base_meta: dict,
+) -> List[Chunk]:
+    from app.rag.parsers.models import ParsedBlockType
+
+    size = chunk_size or cfg.CHUNK_SIZE
+    ignored_types = {
+        ParsedBlockType.HEADER,
+        ParsedBlockType.FOOTER,
+        ParsedBlockType.PAGE_NUMBER,
+    }
+    atomic_types = {
+        ParsedBlockType.TABLE,
+        ParsedBlockType.EQUATION,
+        ParsedBlockType.CODE,
+    }
+    title_type = ParsedBlockType.TITLE
+    chunks: List[Chunk] = []
+    buffer: list[str] = []
+    buffer_pages: set[int] = set()
+    buffer_types: set[str] = set()
+    buffer_section: tuple[str, ...] = ()
+
+    def emit(
+        parts: list[str],
+        pages: set[int],
+        block_types: set[str],
+        section: tuple[str, ...],
+    ) -> None:
+        body = "\n\n".join(part.strip() for part in parts if part.strip()).strip()
+        if not body:
+            return
+        if section:
+            body = f"[{' > '.join(section)}]\n{body}"
+        metadata = {
+            **base_meta,
+            "strategy": "structured",
+            "chunk_index": len(chunks),
+            "section_path": " > ".join(section),
+            "block_types": ",".join(sorted(block_types)),
+        }
+        if pages:
+            metadata["page_start"] = min(pages) + 1
+            metadata["page_end"] = max(pages) + 1
+        chunks.append((body, metadata))
+
+    def flush() -> None:
+        nonlocal buffer, buffer_pages, buffer_types, buffer_section
+        emit(buffer, buffer_pages, buffer_types, buffer_section)
+        buffer = []
+        buffer_pages = set()
+        buffer_types = set()
+        buffer_section = ()
+
+    for block in document.blocks:
+        if block.type in ignored_types:
+            continue
+        if block.type is title_type:
+            if buffer and block.section_path != buffer_section:
+                flush()
+            continue
+
+        content = _structured_block_text(block)
+        if not content.strip():
+            continue
+        section = block.section_path
+        pages = {block.page_index} if block.page_index is not None else set()
+        block_types = {block.type.value}
+
+        if block.type in atomic_types:
+            flush()
+            emit([content], pages, block_types, section)
+            continue
+
+        pieces = split_recursive(content, chunk_size=size)
+        for piece in pieces:
+            candidate_length = len("\n\n".join((*buffer, piece)))
+            if buffer and (section != buffer_section or candidate_length > size):
+                flush()
+            if not buffer:
+                buffer_section = section
+            buffer.append(piece)
+            buffer_pages.update(pages)
+            buffer_types.update(block_types)
+    flush()
+
+    if chunks:
+        return chunks
+    return _chunk_parsed_text(
+        document.text,
+        chunk_size=chunk_size,
+        chunk_overlap=None,
+        strategy="recursive",
+        base_meta=base_meta,
+    )
+
+
+def _structured_block_text(block) -> str:
+    from app.rag.parsers.models import ParsedBlockType
+
+    captions = "\n".join(block.captions)
+    footnotes = "\n".join(block.footnotes)
+    if block.type in {ParsedBlockType.IMAGE, ParsedBlockType.CHART}:
+        return "\n".join(value for value in (captions, block.text, footnotes) if value)
+    if block.type is ParsedBlockType.TABLE:
+        return "\n".join(value for value in (captions, block.text, footnotes) if value)
+    return block.text

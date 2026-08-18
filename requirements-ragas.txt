@@ -1,0 +1,11 @@
+# Install this file into a dedicated evaluation virtual environment.
+# Do not merge it into requirements.txt: Ragas currently requires a newer
+# datasets/LangChain dependency range than EasyRAG's main runtime.
+ragas==0.4.3
+openai>=1.86.0,<3.0.0
+# Ragas 0.4.3 still imports a VertexAI compatibility module removed from
+# langchain-community 0.4.x. Keep the isolated worker on the compatible 0.3 line.
+langchain==0.3.26
+langchain-core==0.3.71
+langchain-community==0.3.27
+langchain-openai==0.3.28

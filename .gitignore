@@ -9,6 +9,7 @@ build/
 # Environment
 .env
 *.env.local
+.venv-ragas/
 
 # OS
 .DS_Store
@@ -34,3 +35,4 @@ frontend/dist/
 # Temp
 *.log
 image.png
+deploy/mineru/test-output/
