@@ -766,11 +766,13 @@
 .kbw-graph-stage g.graph-root text { fill: #fff; }
 .kbw-graph-stage .graph-node-label { fill: #34363a; font-size: 10px; font-weight: 650; }
 .kbw-graph-stage .graph-node-type { fill: #9a9da2; font-size: 8px; font-weight: 700; }
-.kbw-graph-entities { padding: 10px 14px 12px; border-top: 1px solid #eceef0; }
-.kbw-graph-entities-head { margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.kbw-graph-entities-head span { color: #3f4247; font-size: 11px; font-weight: 680; }
-.kbw-graph-entities-head small { color: #92969c; font-size: 9px; }
-.kbw-graph-entities-list { max-height: 150px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 6px; padding: 2px; }
-.kbw-graph-entity-chip { max-width: 100%; padding: 4px 9px; overflow: hidden; border: 1px solid #e0e2e4; border-radius: 999px; background: #f7f8f9; color: #4a4d52; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; transition: border-color .15s ease, background .15s ease, color .15s ease; }
-.kbw-graph-entity-chip:hover { border-color: #0b8fae; background: rgba(11, 143, 174, 0.07); color: #046a82; }
-.kbw-graph-entities-empty { padding: 8px 2px; color: #9a9da2; font-size: 10px; }
+.kbw-graph-entity-modal { width: 440px; max-width: calc(100vw - 32px); }
+.kbw-graph-entity-search { display: flex; align-items: center; gap: 8px; margin: 12px 16px 4px; padding: 8px 12px; border: 1px solid #e0e2e4; border-radius: 8px; color: #92969c; background: #fafbfc; }
+.kbw-graph-entity-search:focus-within { border-color: #0b8fae; box-shadow: 0 0 0 3px rgba(11, 143, 174, 0.12); }
+.kbw-graph-entity-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #34363a; font-size: 13px; }
+.kbw-graph-entity-count { color: #9a9da2; font-size: 10px; font-variant-numeric: tabular-nums; }
+.kbw-graph-entity-list { max-height: 320px; overflow-y: auto; margin: 8px 8px 12px; display: flex; flex-direction: column; gap: 2px; }
+.kbw-graph-entity-list button { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: #34363a; font-size: 13px; text-align: left; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.kbw-graph-entity-list button:hover { background: rgba(11, 143, 174, 0.08); color: #046a82; }
+.kbw-graph-entity-list button small { flex-shrink: 0; color: #9a9da2; font-size: 10px; font-weight: 650; }
+.kbw-graph-entity-empty { padding: 20px 12px; color: #9a9da2; font-size: 12px; text-align: center; }

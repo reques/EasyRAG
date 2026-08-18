@@ -392,6 +392,14 @@
             <button class="kbw-secondary-button" :disabled="graphStatusLoading" @click="loadGraphStatus()">
               <RefreshCw :size="14" :class="{ spin: graphStatusLoading }" /> 刷新状态
             </button>
+            <button
+              class="kbw-secondary-button"
+              :disabled="!graphConfig.neo4j_connected"
+              title="查看本知识库已抽取的实体名称，点击名称检索其子图"
+              @click="openGraphEntities()"
+            >
+              <Database :size="14" /> Neo4j 实体
+            </button>
             <button class="kbw-secondary-button is-danger" @click="resetGraph()">
               <Trash2 :size="14" /> 重置图谱
             </button>
@@ -460,26 +468,6 @@
                   <button class="kbw-primary-button" :disabled="!graphQuery.trim()" @click="searchGraph()">
                     <Search :size="14" /> 搜索
                   </button>
-                </div>
-              </div>
-              <div class="kbw-graph-entities">
-                <div class="kbw-graph-entities-head">
-                  <span>知识库实体</span>
-                  <small>点击名称搜索其子图</small>
-                </div>
-                <div v-if="graphEntities.length" class="kbw-graph-entities-list">
-                  <button
-                    v-for="entity in graphEntities"
-                    :key="entity.name"
-                    class="kbw-graph-entity-chip"
-                    :title="`${entity.entity_type || 'concept'}${entity.description ? '：' + entity.description : ''}`"
-                    @click="searchEntityGraph(entity.name)"
-                  >
-                    {{ entity.name }}
-                  </button>
-                </div>
-                <div v-else class="kbw-graph-entities-empty">
-                  <span>暂无实体 —— 请先点击"开始构建"生成图谱</span>
                 </div>
               </div>
               <div v-if="graphSubgraph.nodes.length" class="kbw-graph-stage">
@@ -672,6 +660,33 @@
 
     <div v-if="moduleNotice" class="kbw-toast" role="status">
       <Info :size="15" /> {{ moduleNotice }}
+    </div>
+
+    <div v-if="graphEntityModal" class="modal-overlay" @click.self="graphEntityModal = false">
+      <div class="modal kbw-modal kbw-graph-entity-modal">
+        <div class="kbw-modal-heading">
+          <div><span><Database :size="18" /></span><div><h3>Neo4j 实体</h3><p>本知识库已抽取的实体名称，点击即可检索其子图</p></div></div>
+          <button @click="graphEntityModal = false"><X :size="17" /></button>
+        </div>
+        <div class="kbw-graph-entity-search">
+          <Search :size="14" />
+          <input v-model="graphEntityFilter" type="text" placeholder="过滤实体名称…" />
+          <span v-if="graphEntityFilter" class="kbw-graph-entity-count">{{ filteredGraphEntities.length }} / {{ graphEntities.length }}</span>
+        </div>
+        <div class="kbw-graph-entity-list">
+          <button
+            v-for="entity in filteredGraphEntities"
+            :key="entity.name"
+            @click="selectGraphEntity(entity.name)"
+          >
+            <span>{{ entity.name }}</span>
+            <small>{{ entity.entity_type || 'concept' }}</small>
+          </button>
+          <div v-if="!filteredGraphEntities.length" class="kbw-graph-entity-empty">
+            {{ graphEntities.length ? '没有匹配的实体' : '暂无实体 —— 请先点击"开始构建"生成图谱' }}
+          </div>
+        </div>
+      </div>
     </div>
 
     <div v-if="showCreate" class="modal-overlay" @click.self="showCreate = false">
@@ -1056,6 +1071,14 @@ function loadGraphPanel() {
 }
 
 const graphEntities = ref([])
+const graphEntityModal = ref(false)
+const graphEntityFilter = ref('')
+
+const filteredGraphEntities = computed(() => {
+  const keyword = graphEntityFilter.value.trim()
+  if (!keyword) return graphEntities.value
+  return graphEntities.value.filter((entity) => entity.name.includes(keyword))
+})
 
 async function loadGraphEntities() {
   if (!activeKb.value) return
@@ -1070,7 +1093,14 @@ async function loadGraphEntities() {
   }
 }
 
-function searchEntityGraph(name) {
+function openGraphEntities() {
+  graphEntityFilter.value = ''
+  graphEntityModal.value = true
+  loadGraphEntities()
+}
+
+function selectGraphEntity(name) {
+  graphEntityModal.value = false
   graphQuery.value = name
   searchGraph()
 }
