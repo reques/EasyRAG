@@ -18,18 +18,38 @@
 
 MinerU API 本身没有业务鉴权，因此不要在未增加网关鉴权的情况下把端口改成公网监听。异步任务状态保存在 MinerU 进程内，服务重启后任务 ID 不再可查询；调用方应持久化自己的入库状态，并在任务完成后及时下载结果。当前 MinerU 结果保留时间为 24 小时。
 
-## 运维命令
+## 启动与运维（推荐方式）
 
-以下命令都在本目录执行：
+以下命令都在本目录（`deploy/mineru`）执行，推荐使用 docker compose 管理，不要手写 `docker run` 复现端口映射、GPU、卷和 healthcheck 等参数。
+
+**首次启动**（构建镜像，构建时从 ModelScope 下载模型并固化进镜像，耗时较长）：
 
 ```powershell
 docker compose -f compose.yml build
 docker compose -f compose.yml up -d
+```
+
+**日常启动**（镜像已构建）：
+
+```powershell
+docker compose -f compose.yml up -d
+```
+
+启动后访问：
+
+- API：`http://127.0.0.1:18000`
+- Swagger 文档：`http://127.0.0.1:18000/docs`
+
+**查看状态 / 日志 / 重启 / 停止**：
+
+```powershell
 docker compose -f compose.yml ps
 docker compose -f compose.yml logs -f --tail 200
 docker compose -f compose.yml restart
 docker compose -f compose.yml down
 ```
+
+compose 已配置 healthcheck（探测 `/health`，30 秒宽限期 + 10 次重试），可用 `docker compose ps` 查看容器健康状态。
 
 `down` 不会删除解析结果卷。只有明确不再需要历史结果时才执行：
 
