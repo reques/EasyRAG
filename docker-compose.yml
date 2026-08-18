@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   # =========================================================================
-  # Milvus 向量数据库（已有）
+  # Milvus 向量数据库
   # =========================================================================
   etcd:
     container_name: milvus-etcd
@@ -63,7 +63,7 @@ services:
       - "minio-s3"
 
   # =========================================================================
-  # 阶段 1 新增：PostgreSQL — 用户/会话/知识库元数据
+  # PostgreSQL — 用户/会话/知识库元数据
   # =========================================================================
   postgres:
     container_name: easyrag-postgres
@@ -84,7 +84,7 @@ services:
       retries: 5
 
   # =========================================================================
-  # 阶段 1 新增：Redis — 缓存 / 会话 / 任务队列
+  # Redis — 缓存 / 会话 / 任务队列
   # =========================================================================
   redis:
     container_name: easyrag-redis
@@ -101,7 +101,7 @@ services:
       retries: 5
 
   # =========================================================================
-  # 阶段 1 新增：MinIO — 文件/文档对象存储
+  # MinIO — 文件/文档对象存储
   # =========================================================================
   minio:
     container_name: easyrag-minio
@@ -121,6 +121,35 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+
+  # =========================================================================
+  # Neo4j — 知识图谱图数据库（GraphRAG：实体/关系 + 子图查询）
+  # =========================================================================
+  neo4j:
+    container_name: easyrag-neo4j
+    image: neo4j:5.26-community
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-easyrag_neo4j_secret}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1g
+      NEO4J_server_memory_pagecache_size: 512m
+      NEO4J_apoc_export_file_enabled: "false"
+      NEO4J_apoc_import_file_enabled: "false"
+    ports:
+      - "7474:7474"    # HTTP Browser
+      - "7687:7687"    # Bolt
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/data:/data
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/logs:/logs
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/plugins:/plugins
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-easyrag_neo4j_secret} 'RETURN 1' > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      start_period: 60s
+      timeout: 10s
+      retries: 5
 
 networks:
   default:
