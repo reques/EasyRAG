@@ -462,6 +462,26 @@
                   </button>
                 </div>
               </div>
+              <div class="kbw-graph-entities">
+                <div class="kbw-graph-entities-head">
+                  <span>知识库实体</span>
+                  <small>点击名称搜索其子图</small>
+                </div>
+                <div v-if="graphEntities.length" class="kbw-graph-entities-list">
+                  <button
+                    v-for="entity in graphEntities"
+                    :key="entity.name"
+                    class="kbw-graph-entity-chip"
+                    :title="`${entity.entity_type || 'concept'}${entity.description ? '：' + entity.description : ''}`"
+                    @click="searchEntityGraph(entity.name)"
+                  >
+                    {{ entity.name }}
+                  </button>
+                </div>
+                <div v-else class="kbw-graph-entities-empty">
+                  <span>暂无实体 —— 请先点击"开始构建"生成图谱</span>
+                </div>
+              </div>
               <div v-if="graphSubgraph.nodes.length" class="kbw-graph-stage">
                 <svg viewBox="0 0 680 400" role="img" aria-label="图谱子图">
                   <line
@@ -1032,6 +1052,27 @@ function loadGraphPanel() {
   if (activeTab.value !== 'graph' || !activeKb.value) return
   loadGraphConfig()
   loadGraphStatus()
+  loadGraphEntities()
+}
+
+const graphEntities = ref([])
+
+async function loadGraphEntities() {
+  if (!activeKb.value) return
+  try {
+    const data = await api.get(`/knowledge/bases/${activeKb.value.id}/graph/entities`, {
+      limit: 100,
+    })
+    graphEntities.value = data.entities || []
+  } catch (error) {
+    // Neo4j 未连接/未构建时保持空列表（面板已有连接状态提示）
+    graphEntities.value = []
+  }
+}
+
+function searchEntityGraph(name) {
+  graphQuery.value = name
+  searchGraph()
 }
 
 async function loadGraphStatus() {

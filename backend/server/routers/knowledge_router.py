@@ -404,6 +404,11 @@ class GraphSearchResponse(BaseModel):
     edges: list[dict]
 
 
+class GraphEntitiesResponse(BaseModel):
+    total: int
+    entities: list[dict]
+
+
 async def _require_owned_kb(kb_id: str, current_user: User):
     """加载并校验知识库归属，返回 KnowledgeBase 或抛 404。"""
     async with get_session() as session:
@@ -528,6 +533,32 @@ async def get_graph_status(
         pg_entities=pg_entities,
         pg_relations=pg_relations,
     )
+
+
+@router.get("/bases/{kb_id}/graph/entities", response_model=GraphEntitiesResponse)
+async def list_kb_graph_entities(
+    kb_id: str,
+    q: str = Query(default="", max_length=100, description="实体名过滤关键词，空则浏览全部"),
+    limit: int = Query(default=100, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
+):
+    """知识库实体列表（浏览/点选子图检索入口）。
+
+    与子图搜索同源（Neo4j）：q 为空时返回前 limit 个实体（CONTAINS ''
+    匹配全部，按名称长度排序）；q 非空时模糊过滤。
+    """
+    kb = await _require_owned_kb(kb_id, current_user)
+    from backend.storage.neo4j.client import Neo4jUnavailableError, get_neo4j_client
+
+    try:
+        client = get_neo4j_client()
+        if not client.available:
+            raise HTTPException(status_code=503, detail="Neo4j 未连接，请先启动 neo4j 服务")
+    except Neo4jUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=f"Neo4j 未连接: {exc}")
+
+    entities = client.search_entities(str(kb.id), q, limit=limit)
+    return GraphEntitiesResponse(total=len(entities), entities=entities)
 
 
 @router.get("/bases/{kb_id}/graph/search", response_model=GraphSearchResponse)
