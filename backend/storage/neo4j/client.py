@@ -221,17 +221,20 @@ class Neo4jClient:
 
     # ── 查询 ─────────────────────────────────────────────────────────────
 
-    def search_entities(self, kb_id: str, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """按名称模糊匹配实体（子图搜索入口）。"""
+    def search_entities(self, kb_id: str, search_term: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """按名称模糊匹配实体（子图搜索入口）。
+
+        注意：参数名避开 ``query``（与 ``session.run`` 的首参撞名会 TypeError）。
+        """
         driver = self._get_driver()
         with driver.session() as session:
             result = session.run(
                 f"MATCH (e:{ENTITY_LABEL}) "
-                "WHERE e.kb_id = $kb_id AND e.name CONTAINS $query "
+                "WHERE e.kb_id = $kb_id AND e.name CONTAINS $search_term "
                 "RETURN e.name AS name, e.entity_type AS entity_type, "
                 "e.description AS description "
                 "ORDER BY size(e.name) LIMIT $limit",
-                kb_id=kb_id, query=query, limit=limit,
+                kb_id=kb_id, search_term=search_term, limit=limit,
             )
             return [dict(rec) for rec in result]
 
