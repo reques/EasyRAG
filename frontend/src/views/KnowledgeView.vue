@@ -1027,6 +1027,13 @@ async function loadGraphConfig() {
   }
 }
 
+// 图谱面板统一加载入口：点击 Tab / 选择知识库 / F5 刷新路由恢复时都调用
+function loadGraphPanel() {
+  if (activeTab.value !== 'graph' || !activeKb.value) return
+  loadGraphConfig()
+  loadGraphStatus()
+}
+
 async function loadGraphStatus() {
   if (!activeKb.value) return
   graphStatusLoading.value = true
@@ -1327,6 +1334,7 @@ async function selectKb(kb, syncRoute = true) {
   }
   if (selectionRevision !== knowledgeSelectionRevision) return
   await loadFiles(kb.id, selectionRevision)
+  loadGraphPanel()
 }
 
 async function leaveKb() {
@@ -1344,8 +1352,7 @@ async function selectTab(tabId) {
   activeTab.value = tabId
   await router.replace({ query: { ...route.query, kb: activeKb.value?.id, tab: tabId, file: undefined } })
   if (tabId === 'graph') {
-    loadGraphConfig()
-    loadGraphStatus()
+    loadGraphPanel()
   }
 }
 
@@ -1679,6 +1686,7 @@ async function applyRouteQuery() {
   if (!kb) return
   activeTab.value = tab
   if (activeKb.value?.id !== kb.id) await selectKb(kb, false)
+  loadGraphPanel()
   if (fileId) {
     const file = fileList.value.find((item) => String(item.id) === fileId)
     if (file) await openPreview(file)
