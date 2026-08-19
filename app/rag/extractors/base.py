@@ -41,16 +41,84 @@ class ExtractionResult:
 
     entities: List[EntityExtraction] = field(default_factory=list)
     relations: List[RelationExtraction] = field(default_factory=list)
+    # 网络失败、JSON 缺项等降级结果不能写入持久缓存，否则会把瞬时故障
+    # 固化成永久空结果。正常的“没有实体/关系”仍然可以缓存。
+    cacheable: bool = True
 
     @property
     def empty(self) -> bool:
         return not self.entities and not self.relations
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换成稳定的 JSON 兼容结构，供持久化缓存使用。"""
+        return {
+            "entities": [
+                {
+                    "name": entity.name,
+                    "type": entity.entity_type,
+                    "description": entity.description,
+                }
+                for entity in self.entities
+            ],
+            "relations": [
+                {
+                    "source": relation.source,
+                    "target": relation.target,
+                    "relation": relation.relation,
+                    "description": relation.description,
+                }
+                for relation in self.relations
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ExtractionResult":
+        """从缓存 JSON 恢复；字段上限与 LLM 抽取器保持一致。"""
+        if not isinstance(data, dict):
+            raise ValueError("extraction cache payload must be an object")
+        result = cls()
+        for item in (data.get("entities") or [])[:20]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            result.entities.append(EntityExtraction(
+                name=name[:256],
+                entity_type=str(item.get("type") or "concept")[:64],
+                description=str(item.get("description") or "")[:1024],
+            ))
+        for item in (data.get("relations") or [])[:20]:
+            if not isinstance(item, dict):
+                continue
+            source = str(item.get("source") or "").strip()
+            target = str(item.get("target") or "").strip()
+            relation = str(item.get("relation") or "").strip()
+            if not (source and target and relation):
+                continue
+            result.relations.append(RelationExtraction(
+                source=source[:256],
+                target=target[:256],
+                relation=relation[:128],
+                description=str(item.get("description") or "")[:1024],
+            ))
+        return result
 
 
 class GraphExtractor:
     """抽取器基类。子类实现 :meth:`extract`。"""
 
     name: str = "base"
+    prompt_version: str = "base-v1"
+    model_name: str = ""
+
+    def cache_input(self, text: str) -> str:
+        """返回真正送入抽取器的文本，用于生成内容缓存键。"""
+        return text or ""
+
+    def cache_fingerprint(self) -> str:
+        """模型或 prompt 改变时必须变化，从而自动失效旧缓存。"""
+        return f"{self.name}:{self.model_name}:{self.prompt_version}"
 
     async def extract(
         self,
@@ -86,7 +154,7 @@ class GraphExtractor:
                 return await self.extract(text, meta)
             except Exception as exc:  # 单 chunk 失败不阻塞构建
                 logger.warning("[extractor] chunk %d failed: %s", i, exc)
-                return ExtractionResult()
+                return ExtractionResult(cacheable=False)
             finally:
                 async with lock:
                     done += 1

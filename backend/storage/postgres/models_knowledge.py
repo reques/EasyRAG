@@ -198,6 +198,34 @@ class GraphBuildRun(Base):
     )
 
 
+class GraphExtractionCache(Base):
+    """逐 chunk 图谱抽取缓存；模型或 prompt 变化会生成新的 cache_key。"""
+
+    __tablename__ = "graph_extraction_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chunk_id: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    extractor: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class EvaluationRun(Base):
     """检索评估运行（阶段 2D）— 一次命名评估的聚合指标 + 逐条明细。
 
