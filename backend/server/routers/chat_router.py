@@ -746,6 +746,7 @@ async def send_message_stream(
         cfg.AGENT_MODE == "auto"
         and AgentService._should_use_multi(req.query, db_history)
     )
+    use_deep = cfg.AGENT_MODE == "deepagents"
     multi_run_id: Optional[uuid.UUID] = None
     if use_multi:
         from backend.services.agent_run_service import create_run
@@ -781,6 +782,128 @@ async def send_message_stream(
             "model_name": selected_model.name,
             "skills": skill_payload,
         })
+
+        if use_deep:
+            # ── DeepAgents 路径：主 Agent + task → SubAgent（同步 + 状态透传）─
+            import queue as _q
+
+            status_queue: "_q.Queue" = _q.Queue()
+            deep_artifacts: list[dict] = []  # 中间产出，供落库/历史回放
+
+            def _deep_status(step: str, detail: str = ""):
+                try:
+                    status_queue.put({"step": step, "detail": detail})
+                except Exception:
+                    pass
+
+            def _deep_artifact(ev):
+                try:
+                    deep_artifacts.append(dict(ev))
+                    status_queue.put({"type": "artifact", **ev})
+                except Exception:
+                    pass
+
+            def _run_deep_in_thread():
+                with use_chat_model(selected_model), use_skill_context(skill_context):
+                    return agent._run_deep(
+                        req.query,
+                        session_id=str(conv_id),
+                        history=db_history,
+                        user_id=current_user.id,
+                        knowledge_base_ids=knowledge_base_ids,
+                        knowledge_catalog=knowledge_catalog,
+                        on_step=_deep_status,
+                        on_artifact=_deep_artifact,
+                    )
+
+            # 注意：此处不能用 `start` 命名 —— _event_gen_inner 内任何赋值都会
+            # 把 start 变成局部变量，遮蔽外层函数的 start（use_multi/单 Agent
+            # 分支的 elapsed 计算依赖它），导致 UnboundLocalError（实测 bug）
+            deep_start = time.perf_counter()
+            deep_future = loop.run_in_executor(None, _run_deep_in_thread)
+            while True:
+                try:
+                    ev = await loop.run_in_executor(
+                        None, status_queue.get, True, 0.1
+                    )
+                except _q.Empty:
+                    if deep_future.done():
+                        break
+                    continue
+                if isinstance(ev, dict) and ev.get("type") == "artifact":
+                    yield _sse(
+                        {"type": "artifact", **{k: v for k, v in ev.items() if k != "type"}}
+                    )
+                else:
+                    yield _sse(
+                        {"type": "status", "step": ev["step"], "detail": ev["detail"]}
+                    )
+            try:
+                deep_result = deep_future.result()
+            except Exception as exc:
+                logger.error("[chat/stream] deepagents error: %s", exc)
+                deep_result = {
+                    "final_answer": f"处理请求时发生错误: {exc}",
+                    "steps": [],
+                    "is_fallback": True,
+                }
+            answer = deep_result.get("final_answer", "") or ""
+            # 状态步骤转 {step, detail} 对象数组（前端 steps 渲染约定）
+            step_objs = []
+            for s in deep_result.get("steps") or []:
+                if ":" in s:
+                    step, _, detail = s.partition(": ")
+                    step_objs.append({"step": step, "detail": detail})
+                else:
+                    step_objs.append({"step": "info", "detail": s})
+            elapsed = round(time.perf_counter() - deep_start, 3)
+
+            # 落库（与单 Agent 分支一致的 metadata 结构）
+            try:
+                async with get_session() as session:
+                    meta = {
+                        "intent": "deepagents",
+                        "steps": step_objs,
+                        "artifacts": deep_artifacts,
+                        "model_id": selected_model.id,
+                        "model_name": selected_model.name,
+                        "skills": skill_payload,
+                    }
+                    await add_message(
+                        session, conv_id, "assistant", answer, metadata_json=meta
+                    )
+                    await session.commit()
+            except Exception as exc:
+                logger.warning("[chat/stream] deepagents persist failed: %s", exc)
+
+            yield _sse({
+                "type": "done",
+                "content": answer,
+                "sources": [],
+                "intent": "deepagents",
+                "steps": step_objs,
+                "artifacts": deep_artifacts,
+                "elapsed_seconds": elapsed,
+                "model_id": selected_model.id,
+                "model_name": selected_model.name,
+                "skills": skill_payload,
+            })
+
+            # 新会话标题后台生成
+            if is_new and answer:
+                async def _gen_title_deep():
+                    try:
+                        title = await generate_conversation_title(req.query, answer)
+                        async with get_session() as session:
+                            c = await get_conversation(session, conv_id)
+                            if c:
+                                c.title = title
+                                await session.commit()
+                    except Exception as exc:
+                        logger.warning("[chat/stream] deep title gen failed: %s", exc)
+
+                asyncio.get_event_loop().create_task(_gen_title_deep())
+            return
 
         if use_multi:
             # ── 多智能体路径：Orchestrator + 状态实时透传 ────────────────────
@@ -826,6 +949,7 @@ async def send_message_stream(
                         "task_id": report.task_id,
                         "worker": report.worker_name,
                         "content": content,
+                        "summary": report.summary or "",
                     })
                     status_queue.put({
                         "type": "worker_output",
@@ -834,6 +958,7 @@ async def send_message_stream(
                         "status": report.status,
                         "error": report.error or "",
                         "content": content,
+                        "summary": report.summary or "",
                     })
 
                 async def _prepare_orchestrator_event(ev: dict) -> dict:
@@ -879,6 +1004,7 @@ async def send_message_stream(
                             "worker": ev["worker"],
                             "status": ev.get("status", ""),
                             "content": ev["content"],
+                            "summary": ev.get("summary", ""),
                         }
                     if ev_type == "sub_tasks":
                         return {
@@ -1018,6 +1144,12 @@ async def send_message_stream(
                         if answer:
                             yield _sse({"type": "delta", "content": answer})
 
+                    # 汇总真正完成后才发收尾状态（orchestrator 内联路径会自己发，
+                    # 流式路径在这里补发，避免"汇总完成"先于汇总内容出现）
+                    _syn_done = {"step": "synthesize_done", "detail": "汇总完成"}
+                    status_list.append(_syn_done)
+                    yield _sse({"type": "status", **_syn_done})
+
                     # 子任务产出作为独立过程数据保存；聊天正文只持久化最终回答。
                     full_answer = answer
 
@@ -1118,11 +1250,17 @@ async def send_message_stream(
         _SENTINEL = object()
         # 收集本轮全部状态步骤，随 meta 落库（历史加载时恢复思考过程）
         collected_steps: list[dict] = []
+        # 收集本轮中间产出（检索片段/工具结果/思维链），随 meta 落库
+        collected_artifacts: list[dict] = []
 
         def _on_step(step: str, detail: str = ""):
             ev = {"step": step, "detail": detail}
             collected_steps.append(ev)
             step_queue.put({"type": "status", **ev})
+
+        def _on_artifact(ev: dict):
+            collected_artifacts.append(dict(ev))
+            step_queue.put({"type": "artifact", **ev})
 
         def _prepare():
             try:
@@ -1134,6 +1272,7 @@ async def send_message_stream(
                         knowledge_base_ids=knowledge_base_ids,
                         knowledge_catalog=knowledge_catalog,
                         on_step=_on_step,
+                        on_artifact=_on_artifact,
                     )
             finally:
                 step_queue.put(_SENTINEL)
@@ -1187,17 +1326,48 @@ async def send_message_stream(
         except Exception as exc:
             logger.warning("[chat/stream] file_id backfill failed: %s", exc)
 
-        # 2. 流式生成（含空响应兜底）
+        # 2. 流式生成（含思维链实时透出 + 空响应兜底）
         answer_parts: list[str] = []
+        _think_buf: list[str] = []        # 思考增量缓冲（合并后落库，避免碎片化）
+        _think_id = f"think-{conv_id}"    # 流式思考的事件 id（前端按 id 追加内容）
         try:
             llm = get_llm_client(profile=selected_model)
-            async for delta in llm.chat_stream(ctx["messages"]):
-                answer_parts.append(delta)
-                yield _sse({"type": "delta", "content": delta})
+            async for ev in llm.chat_stream_events(ctx["messages"]):
+                if ev["type"] == "thought":
+                    # DeepSeek 类模型的 reasoning_content：实时推给前端展示思考过程
+                    _think_buf.append(ev["text"])
+                    yield _sse({
+                        "type": "artifact",
+                        "id": _think_id,
+                        "kind": "thought",
+                        "stage": "generate",
+                        "title": "思考",
+                        "content": ev["text"],
+                        "streaming": True,
+                    })
+                else:
+                    answer_parts.append(ev["text"])
+                    yield _sse({"type": "delta", "content": ev["text"]})
         except Exception as exc:
             logger.error("[chat/stream] generation error: %s", exc)
             yield _sse({"type": "error", "detail": f"生成失败: {exc}"})
             return
+
+        # 思考流结束标记（前端把"思考"卡片标记为完成）
+        if _think_buf:
+            yield _sse({
+                "type": "artifact",
+                "id": _think_id,
+                "kind": "thought",
+                "stage": "generate",
+                "streaming": False,
+            })
+            collected_artifacts.append({
+                "kind": "thought",
+                "stage": "generate",
+                "title": "思考",
+                "content": "".join(_think_buf)[:2000],
+            })
 
         # 兜底：流式返回空时用同步调用重试（API 偶发空响应，尤其法律类内容）
         if not answer_parts:
@@ -1223,6 +1393,11 @@ async def send_message_stream(
         answer = "".join(answer_parts).strip()
         elapsed = round(time.perf_counter() - start, 3)
 
+        # 生成完成 → 收尾状态事件：前端据此把"生成回答"步骤标记为完成
+        _gen_done = {"step": "generate_done", "detail": f"回答生成完成（{len(answer)} 字符）"}
+        collected_steps.append(_gen_done)
+        yield _sse({"type": "status", **_gen_done})
+
         # 3. 落库助手回复(含引用)
         try:
             async with get_session() as session:
@@ -1230,6 +1405,7 @@ async def send_message_stream(
                     "intent": ctx["intent"],
                     "sources": ctx["sources"],
                     "steps": collected_steps,
+                    "artifacts": collected_artifacts,
                     "model_id": selected_model.id,
                     "model_name": selected_model.name,
                     "skills": skill_payload,
@@ -1244,6 +1420,7 @@ async def send_message_stream(
             "sources": ctx["sources"],
             "intent": ctx["intent"],
             "steps": collected_steps,
+            "artifacts": collected_artifacts,
             "elapsed_seconds": elapsed,
             "model_id": selected_model.id,
             "model_name": selected_model.name,

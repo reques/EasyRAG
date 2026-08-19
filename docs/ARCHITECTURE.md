@@ -112,7 +112,7 @@ EasyRAG/
 ├── tests/                        # pytest（检索隔离/进度/解析器/skill 配置/MinerU 客户端…）
 ├── docs/                         # 文档（本架构文档、plans/ 设计稿、specs/ 规格、ragas-evaluator）
 ├── docker-compose.yml            # etcd + milvus + minio-s3 + postgres + redis + minio 编排
-├── requirements.txt / requirements-stage1.txt / requirements-ragas.txt
+├── requirements.txt / requirements-ragas.txt
 ├── .env.template                 # 完整配置模板
 └── PROGRESS.md                   # 逐次迭代的演进记录
 ```
