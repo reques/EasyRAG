@@ -807,7 +807,10 @@ async def send_message_stream(
                         on_step=_deep_status,
                     )
 
-            start = time.perf_counter()
+            # 注意：此处不能用 `start` 命名 —— _event_gen_inner 内任何赋值都会
+            # 把 start 变成局部变量，遮蔽外层函数的 start（use_multi/单 Agent
+            # 分支的 elapsed 计算依赖它），导致 UnboundLocalError（实测 bug）
+            deep_start = time.perf_counter()
             deep_future = loop.run_in_executor(None, _run_deep_in_thread)
             while True:
                 try:
@@ -839,7 +842,7 @@ async def send_message_stream(
                     step_objs.append({"step": step, "detail": detail})
                 else:
                     step_objs.append({"step": "info", "detail": s})
-            elapsed = round(time.perf_counter() - start, 3)
+            elapsed = round(time.perf_counter() - deep_start, 3)
 
             # 落库（与单 Agent 分支一致的 metadata 结构）
             try:
