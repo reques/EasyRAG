@@ -53,7 +53,6 @@ cp .env.template .env       # 按需修改 LLM / embedding / 各服务连接
 
 ```bash
 pip install -r requirements.txt
-pip install -r requirements-stage1.txt
 python -c "import asyncio; from backend.storage.postgres.manager import init_db; asyncio.run(init_db())"
 ```
 

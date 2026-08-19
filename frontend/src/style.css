@@ -932,7 +932,7 @@ body.task-panel-resizing {
 }
 .chat-empty p { font-size: 14px; color: var(--gray-600); }
 
-/* ── 消息: 模块化气泡 — 用户右侧青底 / AI 左侧浅灰卡片 ─────────────── */
+/* ── 消息: 用户右侧气泡 / AI 无框流式排版（ChatGPT 风格）──────────── */
 .message { display: flex; flex-direction: column; margin: 14px 0; }
 .message.user { align-items: flex-end; }
 .message.assistant { align-items: flex-start; }
@@ -943,7 +943,7 @@ body.task-panel-resizing {
   min-width: 0;
   word-break: break-word;
 }
-/* 用户消息: 右侧胶囊气泡, 主色浅青底 */
+/* 用户消息: 右侧胶囊气泡, 保留边框包裹 */
 .message.user .message-body {
   max-width: 80%;
   background: var(--main-50);
@@ -952,13 +952,15 @@ body.task-panel-resizing {
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
   padding: 10px 16px;
 }
-/* AI 回复: 左侧浅灰卡片, 与用户气泡形成模块化区分 */
+/* AI 回复: 无框流式排版 — 内容不被卡片约束, 更通透美观 */
 .message.assistant .message-body {
   width: 100%;
-  background: var(--gray-25);
-  border: 1px solid var(--gray-100);
-  border-radius: var(--radius-sm) var(--radius-lg) var(--radius-lg) var(--radius-lg);
-  padding: 14px 18px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 2px 0 0;
+  font-size: 15.5px;
+  line-height: 1.75;
 }
 .message-actions {
   display: flex;
@@ -1012,67 +1014,78 @@ body.task-panel-resizing {
 .message-text { word-break: break-word; }
 .message-text > :first-child { margin-top: 0; }
 .message-text > :last-child { margin-bottom: 0; }
-.message-text p { margin: 0 0 10px; }
+.message-text p { margin: 0 0 12px; }
 .message-text a {
   color: var(--main-color);
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
   word-break: break-all;
+  transition: color .15s ease;
 }
-.message-text ol, .message-text ul { padding-left: 22px; margin: 8px 0 10px; }
+.message-text a:hover { color: var(--gray-700); }
+.message-text ol, .message-text ul { padding-left: 22px; margin: 8px 0 12px; }
 .message-text ol ol, .message-text ol ul,
 .message-text ul ol, .message-text ul ul { margin: 4px 0; }
-.message-text li { margin: 5px 0; line-height: 1.65; }
+.message-text li { margin: 5px 0; line-height: 1.7; }
 .message-text li > p { margin: 0 0 4px; }
 .message-text h1, .message-text h2, .message-text h3, .message-text h4 {
-  margin: 14px 0 8px;
+  margin: 22px 0 10px;
   font-weight: 600;
   color: var(--gray-1000);
   line-height: 1.4;
+  letter-spacing: -0.01em;
 }
-.message-text h1 { font-size: 17px; }
-.message-text h2 { font-size: 16px; }
-.message-text h3, .message-text h4 { font-size: 15px; }
-.message-text hr { border: none; border-top: 1px solid var(--gray-150); margin: 14px 0; }
+.message-text h1 { font-size: 19px; }
+.message-text h2 { font-size: 17px; }
+.message-text h3 { font-size: 16px; }
+.message-text h4 { font-size: 15px; }
+.message-text hr { border: none; border-top: 1px solid var(--gray-150); margin: 18px 0; }
 .message-text strong { font-weight: 600; color: var(--gray-1000); }
 .message-text code {
   background: var(--gray-100);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--gray-150);
+  border-radius: 5px;
   padding: 1px 5px;
   font-size: 13px;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 .message-text pre {
-  background: var(--gray-100);
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
+  background: var(--gray-25);
+  border: 1px solid var(--gray-150);
+  border-radius: 10px;
+  padding: 14px 16px;
   overflow-x: auto;
-  margin: 10px 0;
+  margin: 12px 0;
+  line-height: 1.6;
 }
-.message-text pre code { background: transparent; padding: 0; }
+.message-text pre code { background: transparent; border: none; padding: 0; }
 .message-text blockquote {
-  border-left: 3px solid var(--main-200);
-  padding-left: 12px;
-  margin: 10px 0;
-  color: var(--gray-700);
+  border-left: 3px solid var(--gray-200);
+  padding: 2px 0 2px 14px;
+  margin: 12px 0;
+  color: var(--gray-600);
+  background: transparent;
 }
+.message-text blockquote p { margin-bottom: 8px; }
 .message-text table {
   border-collapse: collapse;
-  margin: 10px 0;
+  margin: 12px 0;
   font-size: 14px;
+  width: 100%;
 }
 .message-text th, .message-text td {
   border: 1px solid var(--gray-150);
-  padding: 6px 12px;
+  padding: 7px 12px;
   text-align: left;
 }
 .message-text th { background: var(--gray-50); font-weight: 600; }
 
-/* ── 引用块: AI 卡片内的来源列表 ───────────────────────────────────── */
+/* ── 引用块: 无框输出下的脚注式来源列表 ───────────────────────────── */
 .message-sources {
-  margin-top: 12px;
+  margin-top: 14px;
   padding-top: 10px;
-  border-top: 1px dashed var(--gray-150);
+  border-top: 1px solid var(--gray-100);
 }
 .sources-title {
   display: flex;
@@ -1133,74 +1146,370 @@ body.task-panel-resizing {
   margin: 0 0 6px;
 }
 
-/* typing animation */
-.typing span { animation: blink 1.4s infinite both; }
-.typing span:nth-child(2) { animation-delay: .2s; }
-.typing span:nth-child(3) { animation-delay: .4s; }
+/* typing animation：思考中气泡三点弹跳（无框流式排版下的柔和等待态） */
+.typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  color: var(--gray-500);
+  font-size: 14px;
+  padding: 6px 0;
+}
+.typing span {
+  display: inline-block;
+  animation: typing-dot 1.3s ease-in-out infinite both;
+}
+.typing span:nth-child(2) { animation-delay: .18s; }
+.typing span:nth-child(3) { animation-delay: .36s; }
+@keyframes typing-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: .35; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
 @keyframes blink { 0%, 80%, 100% { opacity: 0; } 40% { opacity: 1; } }
 
-/* ── 状态步骤面板（多智能体/工具调用过程）────────────────────────────── */
-.status-panel {
-  margin-bottom: 10px;
+/* ── 思考过程活动时间线（Codex 风格 AgentActivity）──────────────────── */
+.activity-panel {
+  margin-bottom: 12px;
   border: 1px solid var(--gray-150);
   border-radius: var(--radius-md);
-  background: var(--gray-25);
+  background: var(--gray-0);
   overflow: hidden;
+  animation: activity-panel-in .32s cubic-bezier(.22, .8, .24, 1) both;
 }
-.status-header {
+@keyframes activity-panel-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.activity-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: var(--gray-25);
+  font-size: 13px;
+  color: var(--gray-700);
   cursor: pointer;
   user-select: none;
-  font-size: 13px;
+  transition: background .18s ease;
+}
+.activity-header:hover { background: var(--gray-50); }
+.activity-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.activity-headline {
+  font-weight: 600;
+  color: var(--gray-800);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 运行中脉冲点：Codex 式呼吸指示 */
+.activity-live-dot {
+  position: relative;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--main-500);
+  animation: live-dot-pulse 1.2s ease-out infinite;
+}
+.activity-live-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--main-400);
+  animation: live-dot-ring 1.2s ease-out infinite;
+}
+@keyframes live-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+@keyframes live-dot-ring {
+  0% { transform: scale(.6); opacity: .9; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+.activity-done-icon { color: var(--gray-500); flex-shrink: 0; }
+.activity-error-icon { color: var(--color-error-500, #c0392b); flex-shrink: 0; }
+.activity-now-badge {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--main-100);
+  color: var(--main-700);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.activity-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.activity-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--gray-500);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.activity-chevron { color: var(--gray-400); flex-shrink: 0; }
+/* 运行中的细进度线（indeterminate shimmer） */
+.activity-progress {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--main-400), transparent);
+  background-size: 200% 100%;
+  animation: activity-shimmer 1.4s linear infinite;
+}
+@keyframes activity-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.activity-error-line {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--color-error-700, #b3362b);
+  background: var(--color-error-50, #fdf3f2);
+  border-top: 1px solid var(--gray-100);
+}
+/* 折叠动画：grid-template-rows 过渡（不支持时直接展开） */
+.activity-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .3s cubic-bezier(.22, .8, .24, 1);
+}
+.activity-collapse.open { grid-template-rows: 1fr; }
+.activity-collapse > .activity-steps { min-height: 0; }
+.activity-steps {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.activity-list { padding: 4px 8px 8px; }
+/* 行：图标徽章 + 名称/详情 + 状态/耗时 */
+.activity-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.45;
+  transition: background .18s ease;
+}
+.activity-row.is-active {
+  background: var(--main-30);
+  box-shadow: inset 2px 0 0 var(--main-400);
+}
+.activity-row.is-done { color: var(--gray-600); }
+.activity-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: var(--gray-100);
+  color: var(--gray-500);
+  transition: background .2s ease, color .2s ease, transform .2s ease;
+}
+.activity-row.is-active .activity-badge {
+  background: var(--main-100);
+  color: var(--main-700);
+  transform: scale(1.05);
+}
+.activity-row.is-fallback .activity-badge { color: var(--color-error-500, #c0392b); }
+.activity-copy { min-width: 0; flex: 1; display: flex; }
+.activity-row-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
   font-weight: 500;
   color: var(--gray-700);
-  background: var(--gray-50);
 }
-.status-header:hover { background: var(--gray-100); }
-.status-title {
+.activity-row.is-done .activity-row-name { font-weight: 400; }
+.activity-row.is-active .activity-row-name { color: var(--gray-900); font-weight: 600; }
+.activity-row-detail {
+  min-width: 0;
+  color: var(--gray-400);
+  font-weight: 400;
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-row.is-active .activity-row-detail { color: var(--gray-500); }
+.activity-row-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.activity-row-spinner { display: inline-flex; color: var(--main-500); }
+.activity-check { color: var(--gray-400); }
+.activity-warn { color: var(--color-error-500, #c0392b); }
+.activity-duration {
+  min-width: 34px;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--gray-400);
+  font-variant-numeric: tabular-nums;
+}
+.activity-row.is-active .activity-duration { color: var(--gray-500); }
+.activity-empty {
+  padding: 10px 8px 12px;
+  font-size: 12px;
+  color: var(--gray-500);
+  animation: blink 1.4s infinite both;
+}
+/* 列表插入/移除/移动动画 */
+.activity-list-enter-active,
+.activity-list-leave-active { transition: all .28s cubic-bezier(.22, .8, .24, 1); }
+.activity-list-enter-from { opacity: 0; transform: translateY(-6px); }
+.activity-list-leave-to { opacity: 0; transform: translateY(-4px); }
+.activity-list-move { transition: transform .28s cubic-bezier(.22, .8, .24, 1); }
+
+/* ── 过程产出流（思维链/检索片段/工具结果/子任务产出）────────────────── */
+.activity-feed {
+  margin: 2px 8px 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--gray-150);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.artifact-card {
+  border: 1px solid var(--gray-150);
+  border-radius: var(--radius-sm);
+  background: var(--gray-25);
+  padding: 6px 9px;
+  font-size: 12px;
+  line-height: 1.55;
+  transition: border-color .2s ease, background .2s ease;
+}
+.artifact-card.is-streaming {
+  border-color: var(--main-200);
+  background: var(--gray-10);
+}
+.artifact-head {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  color: var(--gray-600);
 }
-.status-steps {
-  padding: 8px 12px;
-  border-top: 1px solid var(--gray-150);
-  max-height: 200px;
+.artifact-head svg { flex-shrink: 0; }
+.artifact-title {
+  font-weight: 600;
+  color: var(--gray-700);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.artifact-stage {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--gray-100);
+  color: var(--gray-500);
+  font-size: 10px;
+  font-weight: 500;
+}
+.artifact-content {
+  margin-top: 4px;
+  color: var(--gray-600);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 84px;
   overflow-y: auto;
-}
-.status-step {
-  display: flex;
-  gap: 8px;
-  padding: 4px 0;
   font-size: 12px;
   line-height: 1.5;
 }
-.step-name {
-  flex-shrink: 0;
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  background: var(--main-50);
-  color: var(--main-400);
-  font-weight: 500;
+/* 思维链（思考中）内容给更多空间，滚动查看 */
+.artifact-thought .artifact-content {
+  max-height: 150px;
+  font-size: 11.5px;
 }
-.step-detail { color: var(--gray-600); }
+.artifact-content.is-code {
+  font-family: ui-monospace, 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 11px;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-100);
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: var(--gray-700);
+}
+/* 思维链（思考中）专属样式 */
+.artifact-thought .artifact-title { color: var(--main-700); }
+.artifact-thought .artifact-content {
+  color: var(--gray-500);
+  font-style: italic;
+}
+/* 流式光标：思考中闪烁竖条 */
+.artifact-caret {
+  flex-shrink: 0;
+  width: 2px;
+  height: 11px;
+  border-radius: 1px;
+  background: var(--main-400);
+  animation: caret-blink 0.9s steps(1) infinite;
+}
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+/* 产出卡片插入动画 */
+.artifact-list-enter-active,
+.artifact-list-leave-active { transition: all .26s cubic-bezier(.22, .8, .24, 1); }
+.artifact-list-enter-from { opacity: 0; transform: translateY(6px); }
+.artifact-list-leave-to { opacity: 0; transform: scale(.98); }
+.artifact-list-move { transition: transform .26s cubic-bezier(.22, .8, .24, 1); }
 
-/* 思考过程时间线增强 */
-.thinking-panel-msg .message-body { background: transparent; border: none; box-shadow: none; padding: 0; }
-.status-step { align-items: flex-start; }
-.step-dot {
-  flex-shrink: 0;
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--gray-300);
-  margin-top: 6px;
+/* 消息进入 + 引用块淡入动画 */
+.msg-enter { animation: msg-in .34s cubic-bezier(.22, .8, .24, 1) both; }
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
-.status-step.active .step-dot { background: var(--main-500); box-shadow: 0 0 0 3px var(--main-100); }
-.status-step.active .step-name { background: var(--main-100); color: var(--main-400); }
-.status-step.active .step-detail { color: var(--gray-800); font-weight: 500; }
+.message-sources { animation: sources-in .3s ease both; }
+@keyframes sources-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-panel,
+  .activity-live-dot,
+  .activity-live-dot::after,
+  .activity-progress,
+  .activity-collapse,
+  .activity-list-enter-active,
+  .activity-list-leave-active,
+  .activity-list-move,
+  .artifact-card,
+  .artifact-caret,
+  .artifact-list-enter-active,
+  .artifact-list-leave-active,
+  .artifact-list-move,
+  .msg-enter,
+  .message-sources {
+    animation-duration: .01ms;
+    animation-iteration-count: 1;
+    transition-duration: .01ms;
+  }
+}
 
 /* spin animation for loader */
 .spin { animation: spin 1s linear infinite; }

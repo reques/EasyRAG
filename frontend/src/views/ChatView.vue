@@ -33,32 +33,23 @@
                避免空灰条 + 思考中两个框同时出现 -->
           <div
             v-if="!(sending && msg.role === 'assistant' && !msg.content && !msg.steps?.length && i === messages.length - 1)"
-            :class="['message', msg.role]"
+            :class="['message', msg.role, { 'msg-enter': msg.enter }]"
           >
           <!-- 用户消息时间: 显示在气泡外上方, 左对齐时间标签, 不放进气泡里 -->
           <div v-if="msg.role === 'user' && msg.time && shouldShowTimeSeparator(i)" class="message-time-separator">{{ msg.time }}</div>
           <div class="message-body">
             <!-- AI 消息时间分隔条: 首条消息 / 距上一条超过 10 分钟时, 居中显示在消息上方 -->
             <div v-if="msg.role === 'assistant' && msg.time && shouldShowTimeSeparator(i)" class="message-time-separator">{{ msg.time }}</div>
-            <!-- 思考过程：绑定在该条消息上，渲染在答案上方，不被下一轮覆盖 -->
-            <div v-if="msg.steps && msg.steps.length" class="status-panel">
-              <div class="status-header" @click="msg.stepsExpanded = !msg.stepsExpanded">
-                <span class="status-title">
-                  <Loader2 v-if="msg.stepsLoading" :size="14" class="spin" />
-                  <CheckCircle2 v-else :size="14" />
-                  思考过程
-                </span>
-                <ChevronDown v-if="msg.stepsExpanded" :size="14" />
-                <ChevronRight v-else :size="14" />
-              </div>
-              <div v-show="msg.stepsExpanded" class="status-steps">
-                <div v-for="(stRaw, si) in msg.steps" :key="si" class="status-step" :class="{ active: si === msg.steps.length - 1 && msg.stepsLoading }">
-                  <span class="step-dot"></span>
-                  <span class="step-name">{{ stepLabel(normalizeStep(stRaw).step) }}</span>
-                  <span class="step-detail">{{ normalizeStep(stRaw).detail }}</span>
-                </div>
-              </div>
-            </div>
+            <!-- 思考过程：Codex 风格活动时间线，绑定在该条消息上，渲染在答案上方，
+                 按实际走的节点（意图/检索/工具/推理/生成）实时流转，不被下一轮覆盖 -->
+            <AgentActivity
+              v-if="msg.steps && msg.steps.length"
+              :steps="msg.steps"
+              :artifacts="msg.artifacts"
+              :running="msg.stepsLoading"
+              :error="msg.error || ''"
+              v-model:expanded="msg.stepsExpanded"
+            />
             <div v-if="msg.role === 'user' && msg.skills?.length" class="message-skill-strip">
               <span v-for="skill in msg.skills" :key="skill.id" class="message-skill-chip">
                 <WandSparkles :size="11" /> {{ skill.name }}
@@ -554,6 +545,7 @@ import {
   X,
 } from 'lucide-vue-next'
 import api from '../api'
+import AgentActivity from '../components/AgentActivity.vue'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
 // and rel=noopener so external sources open safely in a new tab.
@@ -1027,37 +1019,6 @@ function setTaskStatus(taskId, status) {
   if (t) t.status = status
 }
 
-// 把后端步骤 key 映射为友好的阶段名
-const STEP_LABELS = {
-  understand: '理解问题',
-  understand_done: '问题理解',
-  intent: '识别意图',
-  intent_done: '意图',
-  tool: '调用工具',
-  tool_done: '工具结果',
-  retrieve: '检索知识库',
-  retrieve_done: '检索完成',
-  generate: '生成回答',
-  decompose: '拆解任务',
-  decompose_done: '拆解完成',
-  dispatch: '派发子任务',
-  dispatch_done: '派发完成',
-  task_started: '子任务执行',
-  synthesize: '汇总结果',
-  synthesize_done: '汇总完成',
-  fallback: '回退',
-}
-function stepLabel(key) {
-  return STEP_LABELS[key] || key
-}
-
-// 兼容旧数据：早期版本 meta.steps 存的是 orchestrator 内部字符串日志
-// （如 "orchestrator 接收查询: ..."），直接渲染成步骤名
-function normalizeStep(st) {
-  if (typeof st === 'string') return { step: '', detail: st }
-  return st
-}
-
 // worker 名 → 友好标签
 const WORKER_LABELS = { rag: '知识库', legal: '法律', code: '代码' }
 function workerLabel(hint) {
@@ -1084,6 +1045,13 @@ function frontendTaskStatus(status) {
   if (status === 'failed' || status === 'error' || status === 'blocked') return 'error'
   if (status === 'running') return 'running'
   return 'pending'
+}
+
+// 子任务产出 → 主对话框只展示总结性一句话（全文在右侧任务面板）
+function summarizeWorkerOutput(text) {
+  const flat = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!flat) return ''
+  return flat.length > 120 ? `${flat.slice(0, 120)}…` : flat
 }
 
 function taskFromRun(task, agentRuns) {
@@ -1175,6 +1143,17 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         steps: m.meta?.steps || [],
         stepsExpanded: false,
         stepsLoading: false,
+        // 中间产出（检索片段/工具结果/思维链）+ 多智能体子任务产出总结，历史回放
+        artifacts: (m.meta?.artifacts || []).concat(
+          (m.meta?.worker_outputs || []).map((wo, wi) => ({
+            id: `worker-${wo.task_id || wi}`,
+            kind: 'worker',
+            stage: 'synthesize',
+            title: `子任务 ${wo.task_id || wi}（${wo.worker || 'worker'}）完成`,
+            content: wo.summary || summarizeWorkerOutput(wo.content),
+            streaming: false,
+          }))
+        ),
         time: formatTime(m.created_at),
         ts: m.created_at ? Date.parse(m.created_at) : null,
       }))
@@ -1213,6 +1192,7 @@ async function send() {
     skills: requestSkills,
     time: formatTime(new Date(userTs).toISOString()),
     ts: userTs,
+    enter: true, // 新消息进入动画（历史加载不带动画）
   })
   // 先插入一条空的 assistant 消息, 流式 delta 逐步填充其 content
   // steps: 本轮思考过程（绑定在这条消息上，不会被下一轮覆盖）
@@ -1230,8 +1210,11 @@ async function send() {
     steps: [],
     stepsExpanded: false,
     stepsLoading: true,
+    error: '',
+    artifacts: [],
     time: formatTime(new Date(asstTs).toISOString()),
     ts: asstTs,
+    enter: true,
   })
   const msgIndex = messages.value.length - 1
   scrollBottom()
@@ -1285,20 +1268,60 @@ async function send() {
         if (task) task.tools.push(ev.detail)
       } else if (ev.type === 'status') {
         // 状态事件：落到当前 assistant 消息的 steps（随消息保留）
-        const st = { step: ev.step, detail: ev.detail }
+        // _ts 记录到达时刻，AgentActivity 用它计算每步耗时与总耗时
+        const st = { step: ev.step, detail: ev.detail, _ts: Date.now() }
         statusSteps.value.push(st)
         const m = messages.value[msgIndex]
         messages.value[msgIndex] = { ...m, steps: [...(m.steps || []), st] }
         if (ev.step === 'task_started') setTaskStatus(ev.task_id, 'running')
         scrollBottom()
       } else if (ev.type === 'worker_output') {
-        // 过程产出只进入右侧工作台，默认折叠，不污染最终回答正文。
+        // 过程产出全文进入右侧工作台；主对话框只放一行总结性描述
         const task = findTask(ev.task_id)
         if (task) {
           task.output = ev.content || ''
           task.error = ev.status === 'error' ? ev.content : ''
           task.status = frontendTaskStatus(ev.status)
         }
+        const wm = messages.value[msgIndex]
+        const workerId = `worker-${ev.task_id}`
+        if (wm && !(wm.artifacts || []).some(a => a.id === workerId)) {
+          messages.value[msgIndex] = {
+            ...wm,
+            artifacts: [...(wm.artifacts || []), {
+              id: workerId,
+              kind: 'worker',
+              stage: 'synthesize',
+              title: `子任务 ${ev.task_id}（${ev.worker || 'worker'}）完成`,
+              content: ev.summary || summarizeWorkerOutput(ev.content),
+              streaming: false,
+            }],
+          }
+          scrollBottom()
+        }
+      } else if (ev.type === 'artifact') {
+        // 中间产出实时流：检索片段/工具结果/思维链（thinking 增量按 id 追加）
+        const am = messages.value[msgIndex]
+        const list = [...(am.artifacts || [])]
+        const last = list[list.length - 1]
+        if (ev.streaming && last && ev.id && last.id === ev.id) {
+          last.content += ev.content || ''
+          messages.value[msgIndex] = { ...am, artifacts: list }
+        } else if (ev.streaming === false && last && ev.id && last.id === ev.id) {
+          last.streaming = false
+          messages.value[msgIndex] = { ...am, artifacts: list }
+        } else {
+          list.push({
+            id: ev.id || `art-${Date.now()}-${list.length}`,
+            kind: ev.kind || 'info',
+            stage: ev.stage || '',
+            title: ev.title || '',
+            content: ev.content || '',
+            streaming: !!ev.streaming,
+          })
+          messages.value[msgIndex] = { ...am, artifacts: list }
+        }
+        scrollBottom()
       } else if (ev.type === 'delta') {
         // 触发响应式更新: 替换数组元素
         const m = messages.value[msgIndex]
@@ -1317,8 +1340,10 @@ async function send() {
             modelName: ev.model_name || m.meta?.modelName || '',
             skillNames: (ev.skills || requestSkills).map(skill => skill.name),
           },
-          // 兜底：流式中断时 status 事件可能不全，用 done 携带的完整 steps 补齐
-          steps: (ev.steps && ev.steps.length) ? ev.steps : (m.steps || []),
+          // 优先保留客户端实时收到的 steps（带 _ts 可算耗时）；
+          // done 携带的完整 steps 仅在流式中断时兜底补齐
+          steps: (m.steps && m.steps.length) ? m.steps : (ev.steps || []),
+          artifacts: (m.artifacts && m.artifacts.length) ? m.artifacts : (ev.artifacts || []),
           stepsLoading: false,
         }
         taskPanel.value.status = taskPanel.value.tasks.some(t => t.status === 'error')
@@ -1326,13 +1351,15 @@ async function send() {
           : 'completed'
       } else if (ev.type === 'error') {
         gotError = ev.detail || '生成失败'
+        const em = messages.value[msgIndex]
+        messages.value[msgIndex] = { ...em, error: gotError, stepsLoading: false }
         if (taskPanel.value.tasks.length) taskPanel.value.status = 'failed'
       }
     })
 
     if (gotError) {
       const m = messages.value[msgIndex]
-      messages.value[msgIndex] = { ...m, content: m.content || `❌ ${gotError}`, stepsLoading: false }
+      messages.value[msgIndex] = { ...m, content: m.content || `❌ ${gotError}`, stepsLoading: false, error: gotError }
     }
     // 刷新侧边栏列表
     await chatStore.refreshAfterSend(conversationId.value)
@@ -1342,6 +1369,7 @@ async function send() {
       ...m,
       content: m.content || `❌ 请求失败: ${e.message}`,
       stepsLoading: false,
+      error: e.message,
     }
   } finally {
     sending.value = false

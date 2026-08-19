@@ -255,6 +255,45 @@ class LLMClient:
         except (RateLimitError, APIConnectionError) as exc:
             raise LLMClientError(f"LLM API error: {exc}") from exc
 
+    async def chat_stream_events(
+        self,
+        messages: List[Dict[str, str]],
+        **extra,
+    ):
+        """流式事件生成器 — yield ``{"type": "content"|"thought", "text": ...}``。
+
+        - ``content``: 正式回答的增量文本（与 ``chat_stream`` 一致）。
+        - ``thought``: 模型的思考 token 增量（DeepSeek 类推理模型的
+          ``reasoning_content``）。其他模型/网关不支持时安全降级——
+          只产生 content 事件，不影响既有调用方。
+
+        用于 SSE 端点把"生成阶段"的思维链也实时推给前端，让用户看到
+        模型在最终回答前思考了什么。
+        """
+        try:
+            logger.debug("LLM stream events | model=%s | msgs=%d", self.model, len(messages))
+            stream = await self._async_client.chat.completions.create(
+                messages=messages, stream=True, **self._call_kwargs(**extra)
+            )
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                # DeepSeek 推理模型：思考 token 在 delta.reasoning_content；
+                # openai SDK 可能把它放进 model_extra，双保险取值。
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning is None:
+                    reasoning = (getattr(delta, "model_extra", None) or {}).get("reasoning_content")
+                if reasoning:
+                    yield {"type": "thought", "text": reasoning}
+                content = getattr(delta, "content", None)
+                if content:
+                    yield {"type": "content", "text": content}
+        except APITimeoutError as exc:
+            raise LLMTimeoutError("LLM request timed out") from exc
+        except (RateLimitError, APIConnectionError) as exc:
+            raise LLMClientError(f"LLM API error: {exc}") from exc
+
 
 # Request-local model selection. Sync work dispatched to a thread must enter
 # ``use_chat_model`` again because contextvars are not copied to executor

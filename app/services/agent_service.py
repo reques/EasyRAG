@@ -1,5 +1,6 @@
 """Agent service layer - wraps the LangGraph workflow."""
 from __future__ import annotations
+import json
 import time
 from typing import Any, Dict, List, Optional, Sequence
 from app.core.config import get_settings
@@ -188,11 +189,14 @@ class AgentService:
         knowledge_base_ids: Optional[Sequence[str]] = None,
         knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
         on_step=None,
+        on_artifact=None,
     ) -> Dict[str, Any]:
         """DeepAgents 风格：主 Agent（create_react_agent + task 工具）→ SubAgent。
 
         同步执行（子 Agent 内联在 task 工具中，无异步任务系统）。
         on_step: 可选回调 fn(step, detail)，供 SSE 流式端点实时透传阶段状态。
+        on_artifact: 可选回调 fn(dict)，推送 ReAct 每轮推理思考 / 工具输入输出
+          等中间产出（{kind, stage, title, content}），实时透传给前端。
         返回与单 Agent 兼容的响应结构。
         """
         from app.agents.deep.agent import get_main_agent
@@ -201,12 +205,24 @@ class AgentService:
 
         start = time.perf_counter()
         steps: List[str] = []
+        artifacts: List[Dict[str, Any]] = []
 
         def _step(step: str, detail: str = ""):
             steps.append(f"{step}: {detail}")
             if on_step:
                 try:
                     on_step(step, detail)
+                except Exception:
+                    pass
+
+        def _artifact(kind: str, stage: str, title: str, content: str):
+            if not content:
+                return
+            ev = {"kind": kind, "stage": stage, "title": title[:80], "content": content}
+            artifacts.append(ev)
+            if on_artifact:
+                try:
+                    on_artifact(dict(ev))
                 except Exception:
                     pass
 
@@ -258,14 +274,43 @@ class AgentService:
                 if not msgs:
                     continue
                 last = msgs[-1]
+                mtype = getattr(last, "type", "")
                 tc = getattr(last, "tool_calls", None)
                 if tc:
+                    # ReAct 一步：AI 消息正文 = 这一步的推理思考，tool_calls = 动作
                     tool_called = tc[0].get("name", "")
+                    _ai_thought = str(getattr(last, "content", "") or "").strip()
+                    if _ai_thought:
+                        _step("agent_reasoning", "推理思考...")
+                        # 思考过长时截断，避免刷屏（主对话框只展示思考要点）
+                        _thought_snippet = " ".join(_ai_thought.split())[:400]
+                        if len(_ai_thought) > 400:
+                            _thought_snippet += "…"
+                        _artifact("thought", "reason", "推理", _thought_snippet)
+                    _args = tc[0].get("args") or {}
+                    try:
+                        _args_text = json.dumps(_args, ensure_ascii=False)[:800]
+                    except Exception:
+                        _args_text = str(_args)[:800]
                     _step("tool", f"调用 {tool_called}(...)")
-                elif getattr(last, "type", "") == "tool":
-                    content = str(getattr(last, "content", ""))[:120]
-                    _step("tool_done", f"工具返回: {content}")
-                elif getattr(last, "type", "") == "ai" and getattr(last, "content", ""):
+                    _artifact(
+                        "delegate" if tool_called == "task" else "tool",
+                        "tool",
+                        f"调用 {tool_called}",
+                        _args_text,
+                    )
+                elif mtype == "tool":
+                    _t_content = str(getattr(last, "content", "") or "")
+                    _step("tool_done", f"工具返回: {_t_content[:120]}")
+                    # 工具返回 → 总结性截断（全文只在需要时可用，不进入主对话框）
+                    _tool_flat = " ".join(_t_content.split())
+                    _artifact(
+                        "tool_result", "tool", "工具返回",
+                        _tool_flat[:300] + ("…" if len(_tool_flat) > 300 else ""),
+                    )
+                    _step("agent_reasoning_done", "推理完成")
+                elif mtype == "ai" and getattr(last, "content", ""):
+                    # 无 tool_calls 的 AI 消息 = 最终回答（循环末尾），不是中间思考
                     _step("generate", "主 Agent 生成回答中...")
         except Exception as exc:
             logger.error("[run_deep] deep agent error: %s", exc)
@@ -284,6 +329,7 @@ class AgentService:
                 "tool_error": str(exc),
                 "sub_tasks": [],
                 "steps": steps,
+                "artifacts": artifacts,
                 "sources": [],
                 "is_fallback": True,
                 "error_message": str(exc),
@@ -315,6 +361,7 @@ class AgentService:
             "tool_error": None,
             "sub_tasks": [],
             "steps": steps,
+            "artifacts": artifacts,
             "sources": [],
             "is_fallback": False,
             "elapsed_seconds": round(time.perf_counter() - start, 3),
@@ -329,6 +376,7 @@ class AgentService:
         knowledge_base_ids: Optional[Sequence[str]] = None,
         knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
         on_step=None,
+        on_artifact=None,
     ) -> Dict[str, Any]:
         """同步检索 + 构建生成消息, 为流式生成准备上下文。
 
@@ -342,6 +390,8 @@ class AgentService:
              complex_task  — 工具 + 检索组合
         返回 dict 含: messages / sources / intent / tool_result / resolved_query。
         on_step: 可选回调 fn(step, detail)，在关键步骤调用。
+        on_artifact: 可选回调 fn(dict)，推送检索片段/工具结果等中间产出
+          （{kind, stage, title, content}），供 SSE 实时透传给前端。
         """
         from app.graph.nodes import (
             intent_recognition, knowledge_retrieval, tool_selection, tool_execution,
@@ -358,6 +408,37 @@ class AgentService:
                     on_step(step, detail)
                 except Exception:
                     pass
+
+        def _artifact(kind: str, stage: str, title: str, content: str):
+            if not on_artifact or not content:
+                return
+            try:
+                on_artifact({
+                    "kind": kind, "stage": stage,
+                    "title": title[:80], "content": content,
+                })
+            except Exception:
+                pass
+
+        def _summarize_tool_result(tool: str, text: str) -> str:
+            """工具返回 → 总结性描述（不贴全文，主对话框只展示要点）。"""
+            # web_search 返回 JSON：提取结果条数与标题做总结
+            if tool == "web_search":
+                try:
+                    data = json.loads(text)
+                    results = data.get("results") or []
+                    if isinstance(results, list) and results:
+                        titles = [
+                            str(r.get("title") or r.get("url") or "")
+                            for r in results if isinstance(r, dict)
+                        ]
+                        titles = [t for t in titles if t][:3]
+                        tail = "…" if len(results) > 3 else ""
+                        return f"搜索到 {len(results)} 条结果：" + "、".join(titles) + tail
+                except Exception:
+                    pass
+            flat = " ".join(text.split())
+            return flat[:200] + ("…" if len(flat) > 200 else "")
 
         history = history or []
 
@@ -399,18 +480,61 @@ class AgentService:
             state.update(tool_execution(state))
             if state.get("tool_triggered") and state.get("tool_result") is not None:
                 tool_result_text = str(state["tool_result"])
-                _step("tool_done", f"{tool_name} 返回结果")
+                # 结果摘要进 detail，前端可直接展示工具返回了什么
+                _tool_summary = tool_result_text.strip().replace("\n", " ")
+                if len(_tool_summary) > 60:
+                    _tool_summary = _tool_summary[:60] + "…"
+                _step("tool_done", f"{tool_name} 返回：{_tool_summary}" if _tool_summary else f"{tool_name} 返回结果")
+                # 工具返回 → 总结性要点（主对话框不贴全文）
+                _artifact("tool_result", "tool", f"{tool_name} 返回", _summarize_tool_result(tool_name, tool_result_text))
             elif state.get("tool_error"):
                 _step("tool_done", f"{tool_name} 失败：{state['tool_error'][:50]}")
+                _artifact("tool_result", "tool", f"{tool_name} 失败", " ".join(str(state["tool_error"]).split())[:200])
             sources.extend(state.get("sources") or [])  # web_search 的引用
 
         # 3. 检索路径: 需要检索时做向量检索(chitchat 通常 requires_retrieval=False)
         docs = []
         if state.get("requires_retrieval", True) or intent in ("knowledge_qa", "complex_task"):
-            _step("retrieve", "检索知识库...")
+            _kb_count = len(list(knowledge_base_ids or []))
+            _step(
+                "retrieve",
+                f"在 {_kb_count} 个知识库中检索..." if _kb_count else "检索知识库...",
+            )
             state.update(knowledge_retrieval(state))
             docs = state.get("retrieved_docs") or []
-            _step("retrieve_done", f"命中 {len(docs)} 条知识" if docs else "知识库无相关内容")
+            if docs:
+                # 来源文件名摘要（最多 3 个），让"命中 N 条"落到具体文件上
+                _src_titles: List[str] = []
+                for _s in (state.get("kb_sources") or []):
+                    _t = _s.get("title") or ""
+                    if _t and _t not in _src_titles:
+                        _src_titles.append(_t)
+                    if len(_src_titles) >= 3:
+                        break
+                _retrieve_detail = f"命中 {len(docs)} 条知识"
+                if _src_titles:
+                    _retrieve_detail += "，来源：" + "、".join(_src_titles)
+                _step("retrieve_done", _retrieve_detail)
+                # 检索命中 → 推送总结性摘要（来源名 + 首句），不贴全文
+                for _doc in docs[:4]:
+                    _doc_meta = _doc.get("metadata") or {}
+                    _doc_title = (
+                        _doc.get("source")
+                        or _doc.get("title")
+                        or _doc.get("filename")
+                        or _doc_meta.get("source")
+                        or _doc_meta.get("title")
+                        or _doc_meta.get("filename")
+                        or "知识片段"
+                    )
+                    _doc_content = str(_doc.get("content") or "").strip()
+                    # 取首句（前 90 字）作为一句话摘要
+                    _doc_snippet = " ".join(_doc_content.split())[:90]
+                    if _doc_snippet:
+                        _tail = "…" if len(_doc_content) > 90 else ""
+                        _artifact("retrieve", "retrieve", f"{_doc_title}", _doc_snippet + _tail)
+            else:
+                _step("retrieve_done", "知识库无相关内容")
             sources.extend(state.get("kb_sources") or [])
             # knowledge_retrieval 内 web fallback 的 sources 也合并
             for s in (state.get("sources") or []):
@@ -418,7 +542,14 @@ class AgentService:
                     sources.append(s)
 
         # 4. 拼装生成消息（语义记忆: 注入用户 facts 到 system prompt）
-        _step("generate", "生成回答中...")
+        #    生成步骤 detail 带上当前模型名，前端"生成回答"节点更具体
+        try:
+            from app.llm.client import get_active_chat_model_profile
+            _active_profile = get_active_chat_model_profile()
+            _gen_model = _active_profile.name if _active_profile else ""
+        except Exception:
+            _gen_model = ""
+        _step("generate", f"生成回答中..." + (f"（{_gen_model}）" if _gen_model else ""))
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
 
         from app.services.knowledge_catalog import format_knowledge_catalog
