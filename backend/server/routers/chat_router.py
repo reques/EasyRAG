@@ -746,6 +746,7 @@ async def send_message_stream(
         cfg.AGENT_MODE == "auto"
         and AgentService._should_use_multi(req.query, db_history)
     )
+    use_deep = cfg.AGENT_MODE == "deepagents"
     multi_run_id: Optional[uuid.UUID] = None
     if use_multi:
         from backend.services.agent_run_service import create_run
@@ -781,6 +782,109 @@ async def send_message_stream(
             "model_name": selected_model.name,
             "skills": skill_payload,
         })
+
+        if use_deep:
+            # ── DeepAgents 路径：主 Agent + task → SubAgent（同步 + 状态透传）─
+            import queue as _q
+
+            status_queue: "_q.Queue" = _q.Queue()
+
+            def _deep_status(step: str, detail: str = ""):
+                try:
+                    status_queue.put({"step": step, "detail": detail})
+                except Exception:
+                    pass
+
+            def _run_deep_in_thread():
+                with use_chat_model(selected_model), use_skill_context(skill_context):
+                    return agent._run_deep(
+                        req.query,
+                        session_id=str(conv_id),
+                        history=db_history,
+                        user_id=current_user.id,
+                        knowledge_base_ids=knowledge_base_ids,
+                        knowledge_catalog=knowledge_catalog,
+                        on_step=_deep_status,
+                    )
+
+            start = time.perf_counter()
+            deep_future = loop.run_in_executor(None, _run_deep_in_thread)
+            while True:
+                try:
+                    ev = await loop.run_in_executor(
+                        None, status_queue.get, True, 0.1
+                    )
+                except _q.Empty:
+                    if deep_future.done():
+                        break
+                    continue
+                yield _sse(
+                    {"type": "status", "step": ev["step"], "detail": ev["detail"]}
+                )
+            try:
+                deep_result = deep_future.result()
+            except Exception as exc:
+                logger.error("[chat/stream] deepagents error: %s", exc)
+                deep_result = {
+                    "final_answer": f"处理请求时发生错误: {exc}",
+                    "steps": [],
+                    "is_fallback": True,
+                }
+            answer = deep_result.get("final_answer", "") or ""
+            # 状态步骤转 {step, detail} 对象数组（前端 steps 渲染约定）
+            step_objs = []
+            for s in deep_result.get("steps") or []:
+                if ":" in s:
+                    step, _, detail = s.partition(": ")
+                    step_objs.append({"step": step, "detail": detail})
+                else:
+                    step_objs.append({"step": "info", "detail": s})
+            elapsed = round(time.perf_counter() - start, 3)
+
+            # 落库（与单 Agent 分支一致的 metadata 结构）
+            try:
+                async with get_session() as session:
+                    meta = {
+                        "intent": "deepagents",
+                        "steps": step_objs,
+                        "model_id": selected_model.id,
+                        "model_name": selected_model.name,
+                        "skills": skill_payload,
+                    }
+                    await add_message(
+                        session, conv_id, "assistant", answer, metadata_json=meta
+                    )
+                    await session.commit()
+            except Exception as exc:
+                logger.warning("[chat/stream] deepagents persist failed: %s", exc)
+
+            yield _sse({
+                "type": "done",
+                "content": answer,
+                "sources": [],
+                "intent": "deepagents",
+                "steps": step_objs,
+                "elapsed_seconds": elapsed,
+                "model_id": selected_model.id,
+                "model_name": selected_model.name,
+                "skills": skill_payload,
+            })
+
+            # 新会话标题后台生成
+            if is_new and answer:
+                async def _gen_title_deep():
+                    try:
+                        title = await generate_conversation_title(req.query, answer)
+                        async with get_session() as session:
+                            c = await get_conversation(session, conv_id)
+                            if c:
+                                c.title = title
+                                await session.commit()
+                    except Exception as exc:
+                        logger.warning("[chat/stream] deep title gen failed: %s", exc)
+
+                asyncio.get_event_loop().create_task(_gen_title_deep())
+            return
 
         if use_multi:
             # ── 多智能体路径：Orchestrator + 状态实时透传 ────────────────────

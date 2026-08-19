@@ -106,7 +106,18 @@ class AgentService:
         logger.info("[agent_service] session=%s query=%r", session_id, query[:80])
         start = time.perf_counter()
 
-    # ── 多智能体分支（AGENT_MODE=multi 或 auto 智能判断）────────────────────
+        # ── DeepAgents 模式（AGENT_MODE=deepagents）：主 Agent + SubAgent ──
+        if cfg.AGENT_MODE == "deepagents":
+            return self._run_deep(
+                query,
+                session_id=session_id,
+                history=history,
+                user_id=user_id,
+                knowledge_base_ids=knowledge_base_ids,
+                knowledge_catalog=knowledge_catalog,
+            )
+
+        # ── 多智能体分支（AGENT_MODE=multi 或 auto 智能判断）────────────────
         if cfg.AGENT_MODE == "multi" or (
             cfg.AGENT_MODE == "auto" and self._should_use_multi(query, history)
         ):
@@ -166,6 +177,148 @@ class AgentService:
         elapsed = time.perf_counter() - start
         logger.info("[agent_service] done in %.2fs", elapsed)
         return self._build_response(final, elapsed)
+
+    # ── DeepAgents 模式（AGENT_MODE=deepagents）──────────────────────────
+    def _run_deep(
+        self,
+        query: str,
+        session_id: str = "default",
+        history: Optional[List[Dict[str, str]]] = None,
+        user_id=None,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
+        on_step=None,
+    ) -> Dict[str, Any]:
+        """DeepAgents 风格：主 Agent（create_react_agent + task 工具）→ SubAgent。
+
+        同步执行（子 Agent 内联在 task 工具中，无异步任务系统）。
+        on_step: 可选回调 fn(step, detail)，供 SSE 流式端点实时透传阶段状态。
+        返回与单 Agent 兼容的响应结构。
+        """
+        from app.agents.deep.agent import get_main_agent
+        from app.services.knowledge_catalog import format_knowledge_catalog
+        from app.skills.context import get_active_skill_prompt
+
+        start = time.perf_counter()
+        steps: List[str] = []
+
+        def _step(step: str, detail: str = ""):
+            steps.append(f"{step}: {detail}")
+            if on_step:
+                try:
+                    on_step(step, detail)
+                except Exception:
+                    pass
+
+        if history is None:
+            history = self._sessions.get_history(session_id)
+
+        # ── 组装消息（复用 prepare_context 的注入链，保证行为一致）──────
+        messages: List[Dict[str, str]] = []
+        skill_prompt = get_active_skill_prompt()
+        if skill_prompt:
+            messages.append({"role": "system", "content": skill_prompt})
+        if knowledge_catalog:
+            messages.append({
+                "role": "system",
+                "content": format_knowledge_catalog(list(knowledge_catalog)),
+            })
+        if user_id:
+            try:
+                from app.graph.nodes import _run_in_thread_isolated
+
+                async def _fetch_facts(s):
+                    from app.memory.manager import get_user_facts
+                    return await get_user_facts(s, user_id)
+
+                facts = _run_in_thread_isolated(_fetch_facts)
+                if facts:
+                    messages.append({
+                        "role": "system",
+                        "content": "关于这位用户的已知信息：\n" + "\n".join(f"- {f}" for f in facts),
+                    })
+            except Exception as exc:
+                logger.warning("[run_deep] user facts inject failed: %s", exc)
+        messages.extend(history)
+        messages.append({"role": "user", "content": query})
+
+        _step("understand", "DeepAgents 主 Agent 开始处理...")
+        agent = get_main_agent()
+        tool_called: Optional[str] = None
+        final_state: Optional[Dict[str, Any]] = None
+        try:
+            # stream_mode="values"：每个 chunk 是全量 state，最后一个即最终状态
+            for chunk in agent.stream(
+                {"messages": messages},
+                config={"recursion_limit": cfg.AGENT_MAX_ITERATIONS},
+                stream_mode="values",
+            ):
+                final_state = chunk
+                msgs = chunk.get("messages") or []
+                if not msgs:
+                    continue
+                last = msgs[-1]
+                tc = getattr(last, "tool_calls", None)
+                if tc:
+                    tool_called = tc[0].get("name", "")
+                    _step("tool", f"调用 {tool_called}(...)")
+                elif getattr(last, "type", "") == "tool":
+                    content = str(getattr(last, "content", ""))[:120]
+                    _step("tool_done", f"工具返回: {content}")
+                elif getattr(last, "type", "") == "ai" and getattr(last, "content", ""):
+                    _step("generate", "主 Agent 生成回答中...")
+        except Exception as exc:
+            logger.error("[run_deep] deep agent error: %s", exc)
+            steps.append(f"deep agent error: {exc}")
+            return {
+                "query": query,
+                "session_id": session_id,
+                "final_answer": f"处理请求时发生错误: {exc}",
+                "intent": "deepagents",
+                "intent_confidence": 0.0,
+                "retrieval_triggered": False,
+                "retrieved_docs_count": 0,
+                "tool_triggered": False,
+                "tool_name": None,
+                "tool_result": None,
+                "tool_error": str(exc),
+                "sub_tasks": [],
+                "steps": steps,
+                "sources": [],
+                "is_fallback": True,
+                "error_message": str(exc),
+                "elapsed_seconds": round(time.perf_counter() - start, 3),
+            }
+
+        msgs = (final_state or {}).get("messages") or []
+        answer = ""
+        for m in reversed(msgs):
+            content = getattr(m, "content", "") or ""
+            if getattr(m, "type", "") == "ai" and content:
+                answer = content if isinstance(content, str) else str(content)
+                break
+        if not answer and msgs:
+            answer = str(getattr(msgs[-1], "content", "") or "")
+
+        _step("generate_done", f"回答完成（{len(answer)} 字符）")
+        return {
+            "query": query,
+            "session_id": session_id,
+            "final_answer": answer,
+            "intent": "deepagents",
+            "intent_confidence": 0.0,
+            "retrieval_triggered": False,
+            "retrieved_docs_count": 0,
+            "tool_triggered": bool(tool_called),
+            "tool_name": tool_called,
+            "tool_result": None,
+            "tool_error": None,
+            "sub_tasks": [],
+            "steps": steps,
+            "sources": [],
+            "is_fallback": False,
+            "elapsed_seconds": round(time.perf_counter() - start, 3),
+        }
 
     # ── 流式路径 (SSE) ────────────────────────────────────────────────────
     def prepare_context(
