@@ -8,6 +8,7 @@ Supports backends controlled by ``Settings.EMBEDDING_TYPE``:
 """
 from __future__ import annotations
 
+import threading
 from typing import List, Optional
 
 from app.core.config import get_settings
@@ -39,11 +40,15 @@ class LocalEmbedder(BaseEmbedder):
             self._model = SentenceTransformer(path)
         except Exception as exc:
             raise EmbeddingError(f"Failed to load local embedding model: {exc}") from exc
+        # SentenceTransformer 实例非线程安全：并发 reindex/ingestion 时多线程
+        # 同时 encode 会竞争，用锁串行化（CPU 推理串行反而更高效、更稳）。
+        self._lock = threading.Lock()
         logger.info("[LocalEmbedder] model loaded, dim=%d", cfg.EMBEDDING_DIMENSION)
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
         try:
-            vecs = self._model.encode(texts, show_progress_bar=False, convert_to_numpy=True)
+            with self._lock:
+                vecs = self._model.encode(texts, show_progress_bar=False, convert_to_numpy=True)
             return [v.tolist() for v in vecs]
         except Exception as exc:
             raise EmbeddingError(f"Local embedding failed: {exc}") from exc

@@ -74,6 +74,7 @@ class RetrievalTestRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096)
     top_k: int = Field(default=5, ge=1, le=100)
     score_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    mode: str = Field(default="basic", pattern="^(basic|enhanced)$")
 
     @field_validator("query")
     @classmethod
@@ -107,7 +108,13 @@ class RetrievalTestResponse(BaseModel):
     score_threshold: float
     elapsed_ms: int
     total: int
-    results: list[RetrievalHitResponse]
+    mode: str = "basic"
+    results: list[RetrievalHitResponse] = Field(default_factory=list)
+    # enhanced 模式附加字段
+    query_decomposition: Optional[dict] = None
+    knowledge_blocks: Optional[list[dict]] = None
+    gap_rounds: Optional[int] = None
+    retrieval_summary: Optional[str] = None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -218,6 +225,10 @@ async def test_retrieval(
     from app.rag.retriever import get_document_chunk_id, get_retriever
 
     started_at = perf_counter()
+
+    if req.mode == "enhanced":
+        return await _test_retrieval_enhanced(req, kb_id, started_at)
+
     try:
         docs = await asyncio.to_thread(
             get_retriever().retrieve,
@@ -278,6 +289,93 @@ async def test_retrieval(
         total=len(results),
         results=results,
     )
+
+
+async def _test_retrieval_enhanced(
+    req: RetrievalTestRequest,
+    kb_id: uuid.UUID,
+    started_at: float,
+) -> RetrievalTestResponse:
+    """增强检索模式：走 EnhancedRetriever 五步流水线，返回查询分解 + 知识块。"""
+    from app.rag.enhanced_retriever import get_enhanced_retriever
+
+    try:
+        result = await asyncio.to_thread(
+            get_enhanced_retriever().retrieve,
+            req.query,
+            None,  # history
+            [str(kb_id)],
+        )
+    except Exception as exc:
+        logger.exception(
+            "[knowledge/retrieval-test:enhanced] failed for kb=%s: %s", kb_id, exc
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Enhanced retrieval service unavailable",
+        ) from exc
+
+    decomposition = (
+        result.query_decomposition.to_dict()
+        if result.query_decomposition is not None
+        else {}
+    )
+
+    blocks: list[dict] = []
+    # 增强检索模式下同样尊重相似度阈值：过滤 block_score 低于阈值的知识块
+    threshold = req.score_threshold if req.score_threshold > 0 else 0.0
+    for block in result.knowledge_blocks:
+        if threshold > 0 and (block.block_score or 0.0) < threshold:
+            continue
+        block_docs: list[dict] = []
+        for doc in block.docs:
+            meta = doc.metadata or {}
+            distance = doc.graph_distance
+            block_docs.append({
+                "content": doc.content,
+                "score": _round_score(doc.score),
+                "retrieval_path": doc.retrieval_path,
+                "graph_entities": doc.graph_entities,
+                "graph_distance": None if distance == float("inf") else distance,
+                "cross_path_hits": doc.cross_path_hits,
+                "source": meta.get("source"),
+                "chunk_index": meta.get("chunk_index"),
+            })
+        blocks.append({
+            "block_id": block.block_id,
+            "entities": block.entities,
+            "relations": block.relations,
+            "summary": block.summary,
+            "block_score": _round_score(block.block_score),
+            "sub_questions": block.sub_questions,
+            "docs": block_docs,
+        })
+
+    return RetrievalTestResponse(
+        query=req.query,
+        knowledge_base_id=str(kb_id),
+        top_k=req.top_k,
+        score_threshold=req.score_threshold,
+        elapsed_ms=max(0, round(result.elapsed_ms)),
+        total=len(result.raw_docs),
+        mode="enhanced",
+        query_decomposition=decomposition,
+        knowledge_blocks=blocks,
+        gap_rounds=result.gap_rounds,
+        retrieval_summary=result.retrieval_summary,
+    )
+
+
+def _round_score(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v or v in (float("inf"), float("-inf")):  # NaN / inf
+        return None
+    return round(v, 4)
 
 
 def _optional_string(value: Any) -> Optional[str]:
@@ -341,12 +439,27 @@ class GraphResponse(BaseModel):
     relations: list[RelationResponse]
 
 
+# 文档结构编号类实体类型（条目/章节编号，非概念实体）。图谱可视化默认过滤它们，
+# 只展示语义实体（concept/person/organization/...）与语义关系。
+_STRUCTURAL_ENTITY_TYPES = {"article", "chapter"}
+
+
 @router.get("/bases/{kb_id}/graph", response_model=GraphResponse)
 async def get_kb_graph(
     kb_id: str,
+    limit: int = Query(default=300, ge=10, le=2000),
+    semantic_only: bool = Query(default=True),
     current_user: User = Depends(get_current_user),
 ):
-    """返回知识库的完整图谱（实体 + 关系），供前端可视化。"""
+    """返回知识库的图谱（实体 + 关系），供前端可视化。
+
+    limit 控制返回的实体数量：按连接度（degree）取最重要的节点，避免全量
+    加载数百上千个节点拖垮前端。
+
+    semantic_only=True（默认）时过滤文档结构编号类实体（如条目/章节编号），
+    只返回语义实体（concept/person/organization/...）与它们之间的关系；
+    同时过滤零连接（孤立）节点。只返回选中节点之间的边。
+    """
     from sqlalchemy import select
     from backend.storage.postgres.models_knowledge import KnowledgeEntity, KnowledgeRelation
 
@@ -363,15 +476,50 @@ async def get_kb_graph(
             select(KnowledgeRelation).where(KnowledgeRelation.knowledge_base_id == kb.id)
         )).scalars().all()
 
+        # 过滤结构编号类实体（默认只展示语义实体）
+        if semantic_only:
+            entities = [e for e in entities if e.entity_type not in _STRUCTURAL_ENTITY_TYPES]
+
+        # 按 name 去重（同名实体合并为一个节点，避免前端图 name 冲突）
+        seen_names: set = set()
+        deduped = []
+        for e in entities:
+            if e.name in seen_names:
+                continue
+            seen_names.add(e.name)
+            deduped.append(e)
+        entities = deduped
+
+        # 计算每个实体的连接度
+        from collections import Counter
+        degree: Counter = Counter()
+        for r in relations:
+            degree[r.source_entity] += 1
+            degree[r.target_entity] += 1
+
+        # 过滤孤立节点（零连接），按连接度取重要节点
+        connected = [e for e in entities if degree.get(e.name, 0) > 0]
+        entities_sorted = sorted(
+            connected,
+            key=lambda e: (-degree.get(e.name, 0), e.entity_type, e.name),
+        )
+        selected = entities_sorted[:limit]
+        selected_names = {e.name for e in selected}
+
+        filtered_relations = [
+            r for r in relations
+            if r.source_entity in selected_names and r.target_entity in selected_names
+        ]
+
         return GraphResponse(
             entities=[EntityResponse(
                 id=str(e.id), name=e.name, entity_type=e.entity_type,
                 description=e.description, source_chunks=e.source_chunks,
-            ) for e in entities],
+            ) for e in selected],
             relations=[RelationResponse(
                 id=str(r.id), source_entity=r.source_entity, target_entity=r.target_entity,
                 relation_type=r.relation_type, description=r.description, weight=r.weight,
-            ) for r in relations],
+            ) for r in filtered_relations],
         )
 
 
@@ -822,7 +970,7 @@ async def _run_ingestion(
         retriever = get_retriever()
         n = 0
         processed = 0
-        batch_size = 16
+        batch_size = 64
         total_chunks = len(texts)
         async with get_session() as s:
             await update_file_progress(
@@ -1108,3 +1256,247 @@ async def delete_file(
 
         logger.info("[knowledge/delete] file '%s' deleted from kb '%s'", filename, kb.name)
         return None
+
+
+@router.post("/bases/{kb_id}/files/{file_id}/reindex", status_code=status.HTTP_202_ACCEPTED)
+async def reindex_file(
+    kb_id: str,
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    strategy: str = "",
+    current_user: User = Depends(get_current_user),
+):
+    """重新索引文件：清理旧向量/图谱，用当前分块策略重新分块 + 向量化 + 图谱抽取。
+
+    主要用于分块策略变更后（如法律条文按条切分）让存量文件生效，无需删除重传。
+    """
+    async with get_session() as session:
+        kb_repo = KnowledgeBaseRepository(session)
+        kb = await kb_repo.get_by_id(uuid.UUID(kb_id))
+        if not kb or kb.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+        file_repo = KnowledgeFileRepository(session)
+        f = await file_repo.get_by_id(uuid.UUID(file_id))
+        if not f or f.knowledge_base_id != kb.id:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        if not f.text_content or not f.text_content.strip():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="文件内容缺失（解析阶段未产出文本），请删除后重新上传。",
+            )
+
+        text_content = f.text_content
+        filename = f.filename
+        file_uuid = f.id
+        kb_uuid = kb.id
+
+        # 清理旧索引（向量 + 图谱），重置进度为 queued
+        await _clear_file_index(session, kb_uuid, file_uuid, filename)
+        f.processing_stage = "queued"
+        f.progress_message = "重新索引已排队"
+        f.status = "processing"
+        await session.commit()
+
+    background_tasks.add_task(
+        _run_reindex, file_uuid, kb_uuid, text_content, filename, strategy or None,
+    )
+
+    return UploadResponse(
+        file_id=str(file_uuid),
+        indexed=0,
+        message=f"File '{filename}' re-indexing in background.",
+        status="processing",
+    )
+
+
+async def _clear_file_index(
+    session: AsyncSession,
+    kb_id: uuid.UUID,
+    file_id: uuid.UUID,
+    filename: str,
+) -> None:
+    """清理文件的向量索引与图谱实体/关系（重新索引前调用）。"""
+    # 1. 向量索引（按 source 文件名匹配）
+    try:
+        from app.rag.retriever import get_retriever
+        n = get_retriever().delete_documents_by_source(filename)
+        logger.info("[knowledge/reindex] removed %d vector chunks for '%s'", n, filename)
+    except NotImplementedError:
+        logger.warning("[knowledge/reindex] vector backend does not support per-file delete")
+    except Exception as exc:
+        logger.error("[knowledge/reindex] vector delete failed: %s", exc)
+
+    # 2. 图谱实体/关系（实体按 source_chunks 前缀匹配，关系按实体名清理）
+    try:
+        from sqlalchemy import delete as sa_delete, or_, select
+        from backend.storage.postgres.models_knowledge import (
+            KnowledgeEntity,
+            KnowledgeRelation,
+        )
+
+        entity_names = (
+            await session.execute(
+                select(KnowledgeEntity.name).where(
+                    KnowledgeEntity.knowledge_base_id == kb_id,
+                    KnowledgeEntity.source_chunks.like(f"{filename}#%"),
+                )
+            )
+        ).scalars().all()
+
+        if entity_names:
+            await session.execute(
+                sa_delete(KnowledgeRelation).where(
+                    KnowledgeRelation.knowledge_base_id == kb_id,
+                    or_(
+                        KnowledgeRelation.source_entity.in_(entity_names),
+                        KnowledgeRelation.target_entity.in_(entity_names),
+                    ),
+                )
+            )
+        await session.execute(
+            sa_delete(KnowledgeEntity).where(
+                KnowledgeEntity.knowledge_base_id == kb_id,
+                KnowledgeEntity.source_chunks.like(f"{filename}#%"),
+            )
+        )
+        logger.info(
+            "[knowledge/reindex] cleared graph for '%s' (%d entities)", filename, len(entity_names)
+        )
+    except Exception as exc:
+        logger.warning("[knowledge/reindex] graph cleanup failed: %s", exc)
+
+
+async def _run_reindex(
+    file_id: uuid.UUID,
+    kb_id: uuid.UUID,
+    text_content: str,
+    filename: str,
+    strategy: Optional[str],
+) -> None:
+    """后台重新索引任务：重新分块 → 向量化 → 图谱抽取。"""
+    from backend.services.knowledge_service import update_file_progress
+
+    try:
+        # 阶段 1: 重新分块（法律文本自动按条切分）
+        from app.rag.chunker import _chunk_parsed_text, _looks_like_legal
+
+        effective_strategy = strategy or cfg.CHUNK_STRATEGY
+        use_legal = effective_strategy == "legal" or (
+            not strategy and _looks_like_legal(text_content)
+        )
+        chunk_strategy = "legal" if use_legal else effective_strategy
+
+        chunks = _chunk_parsed_text(
+            text_content,
+            chunk_size=None,
+            chunk_overlap=None,
+            strategy=chunk_strategy,
+            base_meta={"source": filename},
+        )
+        if not chunks:
+            async with get_session() as s:
+                await update_file_progress(
+                    s, file_id, 100, status="failed",
+                    error_message="重新分块后没有产生文本块",
+                    stage="failed",
+                    message="重新分块失败",
+                )
+            return
+
+        async with get_session() as s:
+            repo = KnowledgeFileRepository(s)
+            f = await repo.get_by_id(file_id)
+            if f:
+                f.char_count = len(text_content)
+            await update_file_progress(
+                s, file_id, 30, stage="chunking",
+                message=f"重新分块完成，共生成 {len(chunks)} 个内容块",
+                current=len(chunks), total=len(chunks),
+            )
+
+        # 阶段 2: 向量索引（embedding 最耗时）
+        from app.rag.retriever import get_retriever
+        texts = [c[0] for c in chunks]
+        metas = [c[1] for c in chunks]
+        for m in metas:
+            m["knowledge_base_id"] = str(kb_id)
+            m["file_id"] = str(file_id)
+
+        retriever = get_retriever()
+        n = 0
+        batch_size = 64
+        total_chunks = len(texts)
+        for start in range(0, total_chunks, batch_size):
+            end = min(start + batch_size, total_chunks)
+            added = await asyncio.to_thread(
+                retriever.add_documents, texts[start:end], metas[start:end]
+            )
+            n += added
+            processed = end
+            vector_progress = min(80, 30 + int(50 * processed / total_chunks))
+            async with get_session() as s:
+                repo = KnowledgeFileRepository(s)
+                f = await repo.get_by_id(file_id)
+                if f:
+                    f.chunk_count = n
+                await update_file_progress(
+                    s, file_id, vector_progress, stage="indexing",
+                    message=f"正在重新索引 {processed}/{total_chunks}",
+                    current=processed, total=total_chunks,
+                )
+
+        # 阶段 3: 图谱抽取
+        if cfg.GRAPH_ENABLED:
+            try:
+                from backend.services.graph_service import extract_graph_from_chunks
+
+                async def report_graph_progress(
+                    current: int,
+                    total: int,
+                    message: str,
+                ) -> None:
+                    graph_progress = min(
+                        99,
+                        80 + int(19 * current / max(total, 1)),
+                    )
+                    async with get_session() as progress_session:
+                        await update_file_progress(
+                            progress_session,
+                            file_id,
+                            graph_progress,
+                            stage="graph",
+                            message=message,
+                            current=current,
+                            total=total,
+                        )
+
+                async with get_session() as s:
+                    await extract_graph_from_chunks(
+                        s, kb_id, chunks, filename,
+                        progress_callback=report_graph_progress,
+                    )
+                    await s.commit()
+            except Exception as exc:
+                logger.warning("[reindex] graph extraction failed: %s", exc)
+
+        async with get_session() as s:
+            await update_file_progress(
+                s, file_id, 100, status="completed", stage="completed",
+                message="重新索引完成",
+                current=n, total=n,
+            )
+        logger.info("[reindex] completed: %s (%d chunks)", filename, n)
+
+    except Exception as exc:
+        logger.error("[reindex] failed: %s — %s", filename, exc)
+        try:
+            async with get_session() as s:
+                await update_file_progress(
+                    s, file_id, 100, status="failed",
+                    error_message=str(exc)[:500], stage="failed",
+                    message="重新索引失败",
+                )
+        except Exception:
+            logger.exception("[reindex] failed to persist error status")

@@ -123,28 +123,6 @@ services:
       retries: 3
 
   # =========================================================================
-  # Neo4j — 图谱存储（GraphRAG 实体/关系）
-  # =========================================================================
-  neo4j:
-    container_name: easyrag-neo4j
-    image: neo4j:5.26-community
-    restart: unless-stopped
-    environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-easyrag_neo4j_secret}
-      NEO4J_PLUGINS: '["apoc"]'        # 子图查询的 apoc.coll.* 依赖 APOC
-    ports:
-      - "7474:7474"    # HTTP Browser
-      - "7687:7687"    # Bolt
-    volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j:/data
-    healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-easyrag_neo4j_secret} 'RETURN 1' > /dev/null 2>&1 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      start_period: 45s
-      retries: 10
-
-  # =========================================================================
   # MinerU — 独立文档解析服务 (GPU)
   # 原 deploy/mineru/compose.yml 已合并到此文件
   # =========================================================================

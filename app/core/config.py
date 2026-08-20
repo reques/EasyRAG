@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "deepseek-v4-flash"
     LLM_TEMPERATURE: float = 0.0
     LLM_MAX_TOKENS: int = 8192
-    LLM_TIMEOUT: int = 60          # seconds
+    LLM_TIMEOUT: int = 30          # seconds（检索路径串行多次调用，短超时避免累加超前端 120s）
     LLM_MAX_RETRIES: int = 2
 
     # ── Chat model catalog ──────────────────────────────────────────────────
@@ -113,20 +113,8 @@ class Settings(BaseSettings):
     # 阶段 2C: 知识图谱
     GRAPH_ENABLED: bool = False            # 上传时是否抽取实体/关系（慢，需 LLM 调用）
     GRAPH_MAX_CHUNKS_PER_FILE: int = 30    # 单文件最多送入抽取的 chunk 数（成本控制）
+    GRAPH_LLM_CONCURRENCY: int = 6          # 图谱抽取并发调用 LLM 的并发数（串行 30 次太慢，并发提速）
     GRAPH_QUERY_TOP_ENTITIES: int = 3      # 检索增强时最多展开的实体数
-    # 阶段 5: Neo4j GraphRAG 图谱
-    NEO4J_URI: str = "bolt://localhost:7687"
-    NEO4J_USER: str = "neo4j"
-    NEO4J_PASSWORD: str = "easyrag_neo4j_secret"
-    GRAPH_ENTITY_COLLECTION: str = "graph_entity_index"   # Milvus 中唯一实体/三元组的语义索引 collection
-    GRAPH_BUILD_BATCH_SIZE: int = 32       # 构建时 embedding 的批大小（与 Ollama 安全批次一致）
-    GRAPH_RRF_K: int = 60                  # RRF 融合常数（reciprocal rank fusion）
-    GRAPH_ENTITY_TOP_K: int = 5            # 图谱召回时最多命中的实体/三元组数
-    GRAPH_EXTRACT_CONCURRENCY: int = 8     # 构建时打包 LLM 请求并发数（遇到 429 时调低）
-    GRAPH_EXTRACT_PACK_MAX_CHARS: int = 1800   # 单次请求最多聚合的原始文本字符数
-    GRAPH_EXTRACT_PACK_MAX_CHUNKS: int = 4     # 单次请求最多聚合的原始 chunk 数
-    GRAPH_EXTRACT_MAX_TOKENS: int = 1024       # 图谱 JSON 的专用输出上限，不影响聊天
-    GRAPH_EXTRACT_CACHE_ENABLED: bool = True   # 按内容/模型/prompt 复用逐 chunk 抽取结果
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
     # 阶段 2A: 分块策略
@@ -134,7 +122,7 @@ class Settings(BaseSettings):
     #   recursive    递归分隔符切分（段落→句子→词，尽量在语义边界断开）
     #   markdown     Markdown 结构感知（按标题层级聚合，代码块不拆）
     #   parent_child 父子分块（小块索引用于检索，返回所属大块作为上下文）
-    CHUNK_STRATEGY: Literal["fixed", "recursive", "markdown", "parent_child"] = "recursive"
+    CHUNK_STRATEGY: Literal["fixed", "recursive", "markdown", "parent_child", "legal"] = "recursive"
     PARENT_CHUNK_SIZE: int = 1500   # parent_child 策略下父块（上下文块）大小
 
     # Document parsing / MinerU
@@ -178,7 +166,7 @@ class Settings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 20   # LangGraph recursion_limit
     MAX_PLAN_STEPS: int = 5          # max sub-tasks per plan
     SESSION_TTL: int = 3600          # seconds to keep session state
-    AGENT_MODE: Literal["auto", "single", "multi", "deepagents"] = "auto"  # 多智能体开关: auto=智能路由; deepagents=DeepAgents 风格主Agent+SubAgent
+    AGENT_MODE: Literal["auto", "single", "multi"] = "auto"  # 多智能体开关: auto=智能路由
 
     # ── Answer quality ───────────────────────────────────────────────────
     ANSWER_VALIDATION_ENABLED: bool = True

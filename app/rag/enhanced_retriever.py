@@ -110,6 +110,10 @@ class QueryDecomposition:
     sub_questions: List[str] = field(default_factory=list)
     # ["电动汽车推广如何直接减少尾气排放？", ...]
 
+    sub_question_keywords: List[List[str]] = field(default_factory=list)
+    # 每个子问题对应的检索关键词（规范表述/同义替换），帮助从口语映射到规范，如
+    # [["尾气排放", "空气污染", "减排"], ...]
+
     query_type: str = "factual"  # factual | causal | comparative | summary | multi_hop
     complexity: str = "medium"   # low | medium | high
 
@@ -122,6 +126,7 @@ class QueryDecomposition:
             "themes": self.themes,
             "relation_patterns": self.relation_patterns,
             "sub_questions": self.sub_questions,
+            "sub_question_keywords": self.sub_question_keywords,
             "query_type": self.query_type,
             "complexity": self.complexity,
         }
@@ -138,6 +143,7 @@ class CandidateDoc:
     graph_entities: List[str] = field(default_factory=list)  # 关联的图谱实体名
     graph_distance: float = float("inf")  # 到查询实体的图谱距离
     cross_path_hits: int = 0             # 被几条路径命中
+    sub_questions: List[str] = field(default_factory=list)  # 命中的来源子问题（空=原始 query）
 
     def __hash__(self):
         return hash(self.content[:200])
@@ -153,6 +159,7 @@ class KnowledgeBlock:
     docs: List[CandidateDoc] = field(default_factory=list)
     summary: str = ""
     block_score: float = 0.0
+    sub_questions: List[str] = field(default_factory=list)  # 该知识块覆盖的子问题
 
 
 @dataclass
@@ -181,7 +188,7 @@ _QUERY_DECOMPOSITION_PROMPT = """你是一个查询分析专家。将用户查�
 返回严格 JSON（不要其他内容）：
 {{
   "explicit_entities": [
-    {{"name": "实体名（原文表述）", "type": "technology/person/organization/concept/location/event/product", "constraints": "限定条件，如'中国市场的'"}}
+    {{"name": "检索概念（规范化表述，非口语原文）", "type": "person/organization/concept/location/event/product/other", "constraints": "限定条件"}}
   ],
   "themes": [
     {{"theme": "主题描述（一句话）", "scope": "broad或specific"}}
@@ -190,19 +197,25 @@ _QUERY_DECOMPOSITION_PROMPT = """你是一个查询分析专家。将用户查�
     {{"subject": "主体", "predicate": "谓语（如:导致/减少/推动/依赖/替代/属于/影响/使用/对比）", "object": "客体"}}
   ],
   "sub_questions": ["将复杂查询拆解为2-4个原子子问题，每个只问一件事"],
+  "sub_question_keywords": [["子问题1的检索关键词", "同义/规范表述"], ["子问题2的检索关键词", "..."]],
   "query_type": "factual/causal/comparative/summary/multi_hop",
   "complexity": "low/medium/high"
 }}
 
 规则：
-- explicit_entities: 提取查询中明确提到的实体，type从7类中选
+- explicit_entities: 提取用于检索的核心概念（规范化表述），type从上述类中选
 - themes: 1-3个主题，每个一句话，标记scope
 - relation_patterns: 如果查询含因果/影响/对比关系，提取为(subject, predicate, object)三元组
-- sub_questions: 复杂查询拆成原子问题；简单查询可只含原问题
+- sub_questions: 复杂查询拆成原子问题，每个只问一个独立争议点/事实；查询中并列提出的多个独立问题或事实（用问号、分号、换行等分隔）必须逐一拆成独立子问题，不得合并成一个；简单查询可只含原问题
+- sub_question_keywords: 为每个子问题生成2-3个检索关键词，覆盖口语词的同义/近义/规范表述（近义词、不同用词习惯都要覆盖，如「检查/检验/检测」这类近义词），帮助检索器跨越用词差异；与sub_questions一一对应，每个子问题一个关键词列表
 - query_type: factual=事实类, causal=因果类, comparative=对比类, summary=总结类, multi_hop=多跳推理
 - complexity: low=简单事实查询, medium=需要综合多条信息, high=多跳推理/跨文档分析
 
-不要遗漏查询中的任何重要信息。实体名用查询中的原文表述。"""
+不要遗漏查询中的任何重要信息。实体名用「规范化概念」表述，遵循：
+- 口语/俚语归一化为规范概念：俗称、指代、简称替换为领域内的规范全称
+- 金额、数量、时间等量化词通常不作为实体，除非它们是问题的核心限定
+- 用领域规范术语表达核心概念，而非查询的字面词；概念要具体到可检索粒度（含关键限定词），而非笼统的上位词
+- 只抽取核心争议焦点与关键条件（2-4 个），不要派生/扩展概念；简单事实查询（complexity=low）实体越少越聚焦越好。"""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 缺口检测 Prompt
@@ -233,7 +246,43 @@ _GAP_DETECTION_PROMPT = """你是一个检索质量评估专家。检查当前�
   "gap_explanation": "如果overall_sufficient为false，一句话说明缺什么"
 }}
 
+gap_queries 必须逐一对应 status=insufficient/missing 的子问题：用该子问题的核心概念构造精准检索查询（而非重复原始查询），每个未覆盖子问题至少对应一个 gap_query。
+
 如果所有子问题都充分覆盖，overall_sufficient=true，gap_queries为空数组。"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Answerability 评估 Prompt（判断候选能否「直接回答」，而非「主题相关」）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 结构性低信息量节点类型：只用于图遍历导航，不作检索证据（避免「第六章」这类
+# 低信息量节点跨文档污染最终结果）
+_STRUCTURAL_NODE_TYPES = {"chapter", "book", "part", "law", "section"}
+
+_ANSWERABILITY_PROMPT = """你是一个检索证据验证器。给定用户查询拆解出的子问题，判断每个候选片段能否「直接回答」子问题，且其「适用前提」是否被查询事实满足。
+
+判定标准（缺一不可，任一不满足 answerability 即为 0）：
+1. 适用前提匹配：候选片段的适用主体、对象、条件、类型必须与子问题的事实一致。仅关键词重叠而适用前提不匹配（主体不同、对象不同、类型不同、前提条件未满足）的候选，视为不适用。
+2. 排除性条件：若候选文本含「除…外」「不适用于」「不包含」「除外」等排除表述，且子问题的事实恰好落在被排除的范围内，则直接判定为不适用。
+3. 直接回答：候选片段必须能直接回答子问题，而非仅主题相关。
+
+否定信号（出现任一即判 0，即使关键词高度重叠）：
+- 候选回答的是与子问题无关的另一件事（如子问题问「责任/处罚」，候选答「奖励/权限/程序性事项」）
+- 候选的适用主体或对象与子问题的主体或对象明显不同（主体是 A，候选却针对 B）
+- 候选适用的范畴与子问题事实的范畴不匹配（同一术语在不同范畴下含义不同，如「损失」在「人身」与「财产」两个范畴下是不同的规则）
+
+子问题（编号从 1 开始）：
+{sub_questions}
+
+候选片段：
+{candidates}
+
+对每个候选，输出：
+- "answerability"：0-1 分数，综合「适用前提匹配 × 直接回答程度」。适用前提不匹配则为 0（即使关键词高度重叠）；完全匹配且直接回答则为 1.0
+- "sub_questions"：该候选能直接回答的子问题编号列表（无法回答任何子问题则为空数组）
+
+严格输出 JSON（不要其他内容，scores 必须覆盖所有候选编号）：
+{{"scores": {{"1": {{"answerability": 0.9, "sub_questions": [1, 3]}}, "2": {{"answerability": 0.0, "sub_questions": []}}}}}}"""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 主类
@@ -289,8 +338,8 @@ class EnhancedRetriever:
         self,
         fusion_weights: Tuple[float, float, float, float] = (0.35, 0.25, 0.25, 0.15),
         max_gap_rounds: int = 2,
-        top_k_per_path: int = 6,
-        final_top_k: int = 8,
+        top_k_per_path: int = 8,
+        final_top_k: int = 12,
     ):
         self.fusion_alpha, self.fusion_beta, self.fusion_gamma, self.fusion_delta = fusion_weights
         self.max_gap_rounds = max_gap_rounds
@@ -386,30 +435,25 @@ class EnhancedRetriever:
             query, decomposition, allowed_ids
         )
 
-        # ── 第 2.5 步：图谱召回（GraphRAG 阶段 5）+ RRF 融合 ────────────
-        graph_docs = self._graph_recall(query, allowed_ids)
-        if graph_docs:
-            from app.rag.rrf import rrf_fuse, rrf_normalize
-
-            graph_ranked = [self._dedup_key(d) for d in graph_docs]
-            vector_ranked = [self._dedup_key(d) for d in all_candidates]
-            fused = rrf_fuse([graph_ranked, vector_ranked], k=cfg.GRAPH_RRF_K)
-            rrf_scores = rrf_normalize(fused)
-            for d in graph_docs:
-                d.metadata["rrf_graph"] = rrf_scores.get(
-                    self._dedup_key(d), 0.0
-                )
-            seen: Set[str] = set()
-            self._merge_path_docs(all_candidates, seen, "graph", graph_docs)
-
         # ── 第 3 步：图谱感知融合重排序 ─────────────────────────────────────
         ranked = self._fusion_rerank(all_candidates, decomposition)
 
         # ── 第 3.5 步：交叉编码器精排（可选，RERANKER_TYPE != disabled）────
         ranked = self._apply_reranker(query, ranked)
 
+        # ── 第 3.6 步：answerability 评估（「能回答」压过「主题像」）────
+        # 覆盖 final_top_k 个候选，确保所有进入最终 Top-K 的候选都经过验证，
+        # 避免第 top_k+1 起的伪相关（未被验证）保留原高分
+        ranked = self._apply_answerability(query, decomposition, ranked, top_k=self.final_top_k)
+
+        # ── 第 3.65 步：每子问题保底（每个子问题至少 top-3 进最终 Top-K）────
+        ranked = self._ensure_per_sub_question_minimum(ranked, decomposition, min_per_sub=3)
+
+        # ── 第 3.7 步：逐子问题覆盖检查（缺口子问题针对性补充）────
+        ranked, covered_all = self._coverage_gate(query, decomposition, ranked, allowed_ids)
+
         # ── 第 4 步：知识块聚类 ────────────────────────────────────────────
-        blocks = self._cluster_into_blocks(ranked[: self.final_top_k], decomposition)
+        blocks = self._cluster_into_blocks(ranked[: self.final_top_k], decomposition, allowed_ids)
 
         # ── 第 5 步：迭代缺口检测与补充 ────────────────────────────────────
         result = RetrievalResult(
@@ -419,7 +463,8 @@ class EnhancedRetriever:
             sources=self._extract_sources(ranked[: self.final_top_k]),
         )
 
-        if decomposition.is_complex():
+        # 覆盖门已确定所有子问题有 answerable 证据时，跳过 LLM 缺口补充（省 1-2 次 LLM 调用）
+        if decomposition.is_complex() and not covered_all:
             result = self._iterative_gap_fill(
                 query, result, decomposition, allowed_ids
             )
@@ -497,11 +542,21 @@ class EnhancedRetriever:
             }])
             logger.info("[enhanced] query decomposition: type=%s complexity=%s",
                         data.get("query_type"), data.get("complexity"))
+            sub_questions = data.get("sub_questions") or [query]
+            raw_keywords = data.get("sub_question_keywords") or []
+            # 归一化：确保关键词列表与子问题一一对应，每个子问题最多 4 个关键词
+            normalized_kw: List[List[str]] = []
+            for i in range(len(sub_questions)):
+                if i < len(raw_keywords) and isinstance(raw_keywords[i], list):
+                    normalized_kw.append([str(k) for k in raw_keywords[i] if str(k).strip()][:3])
+                else:
+                    normalized_kw.append([])
             return QueryDecomposition(
                 explicit_entities=data.get("explicit_entities") or [],
                 themes=data.get("themes") or [],
                 relation_patterns=data.get("relation_patterns") or [],
-                sub_questions=data.get("sub_questions") or [query],
+                sub_questions=sub_questions,
+                sub_question_keywords=normalized_kw,
                 query_type=data.get("query_type", "factual"),
                 complexity=data.get("complexity", "medium"),
             )
@@ -571,74 +626,79 @@ class EnhancedRetriever:
         decomposition: QueryDecomposition,
         knowledge_base_ids: Sequence[str],
     ) -> List[CandidateDoc]:
-        """四路真正的并行检索，合并去重。
+        """逐子问题独立检索 + 来源标注，合并去重。
 
-        使用 ThreadPoolExecutor 并发执行四路径，每路独立。
-        对于 I/O 密集型操作（向量检索、图谱查询、BM25），线程并发能显著降低总延迟。
+        每个子问题独立做语义 + BM25 检索（标注来源子问题），而非把所有子问题
+        混在一个结果集里——避免某个子问题的证据被其他子问题淹没，且让每个
+        候选/知识块能回溯到它回答的是哪个子问题。
         """
         all_docs: List[CandidateDoc] = []
         seen_content: Set[str] = set()
         allowed_ids = set(knowledge_base_ids)
+        sub_questions = decomposition.sub_questions or []
 
-        # 四路并发
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            future_entity = executor.submit(
+        # 构建检索任务：(来源子问题, 路径名, future)；空子问题 = 原始 query 级
+        tasks: List[Tuple[str, str, "concurrent.futures.Future"]] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            tasks.append(("", "entity", executor.submit(
                 self._retrieve_entity_path, decomposition, knowledge_base_ids
-            )
-            future_semantic = executor.submit(
-                self._retrieve_semantic_path, query, decomposition, knowledge_base_ids
-            )
-            future_relation = executor.submit(
+            )))
+            tasks.append(("", "relation", executor.submit(
                 self._retrieve_relation_path, decomposition, knowledge_base_ids
-            )
-            future_bm25 = executor.submit(
+            )))
+            # 原始 query 的语义 + BM25（兜底，覆盖未拆分子问题的情况）
+            tasks.append(("", "semantic", executor.submit(
+                self._retrieve_semantic_path, query, decomposition, knowledge_base_ids
+            )))
+            tasks.append(("", "bm25", executor.submit(
                 self._retrieve_bm25_path, query, knowledge_base_ids
-            )
+            )))
+            # 每个子问题独立检索（用检索关键词扩展，帮助口语表述映射到规范表述）
+            keywords = decomposition.sub_question_keywords or []
+            for i, sq in enumerate(sub_questions):
+                kw = keywords[i] if i < len(keywords) else []
+                expanded = (sq + " " + " ".join(kw)).strip() if kw else sq
+                tasks.append((sq, f"semantic_sub{i}", executor.submit(
+                    self._retrieve_semantic_path, expanded, decomposition, knowledge_base_ids
+                )))
+                tasks.append((sq, f"bm25_sub{i}", executor.submit(
+                    self._retrieve_bm25_path, expanded, knowledge_base_ids
+                )))
 
-            # 按完成顺序处理（谁先回来谁先处理，减少等待）
-            path_results = [
-                ("entity", future_entity),
-                ("semantic", future_semantic),
-                ("relation", future_relation),
-                ("bm25", future_bm25),
-            ]
-
-        for path_name, future in path_results:
+        # with 块退出后所有任务已完成，统一收集结果
+        resolved: List[Tuple[str, str, List[CandidateDoc]]] = []
+        for sub_q, path_name, future in tasks:
             try:
-                docs = future.result(timeout=30)
+                resolved.append((sub_q, path_name, future.result(timeout=30)))
             except Exception as exc:
                 logger.warning("[enhanced] Path %s failed: %s", path_name, exc)
-                docs = []
+                resolved.append((sub_q, path_name, []))
 
+        for sub_q, path_name, docs in resolved:
             for d in docs:
                 if d.metadata.get("knowledge_base_id") not in allowed_ids:
-                    logger.warning(
-                        "[enhanced] discarded out-of-scope candidate from path %s",
-                        path_name,
-                    )
                     continue
                 key = self._dedup_key(d)
                 if key in seen_content:
-                    # 多路命中：增加已有文档的 cross_path_hits
+                    # 多路 / 多子问题命中：追加来源
                     for existing in all_docs:
                         if self._dedup_key(existing) == key:
                             existing.cross_path_hits += 1
                             existing.retrieval_path += "+" + path_name
+                            if sub_q and sub_q not in existing.sub_questions:
+                                existing.sub_questions.append(sub_q)
                             break
                 else:
                     seen_content.add(key)
                     if d.cross_path_hits == 0:
                         d.cross_path_hits = 1
+                    if sub_q:
+                        d.sub_questions.append(sub_q)
                     all_docs.append(d)
 
-        entity_count = sum(1 for d in all_docs if "entity" in d.retrieval_path)
-        semantic_count = sum(1 for d in all_docs if "semantic" in d.retrieval_path)
-        relation_count = sum(1 for d in all_docs if "relation" in d.retrieval_path)
-        bm25_count = sum(1 for d in all_docs if "bm25" in d.retrieval_path)
-
         logger.info(
-            "[enhanced] 4-path parallel retrieval: entity=%d semantic=%d relation=%d bm25=%d → merged=%d",
-            entity_count, semantic_count, relation_count, bm25_count, len(all_docs),
+            "[enhanced] per-sub-question retrieval: %d sub-questions + query → merged=%d docs",
+            len(sub_questions), len(all_docs),
         )
         return all_docs
 
@@ -735,39 +795,35 @@ class EnhancedRetriever:
         retriever = get_retriever()
         docs: List[CandidateDoc] = []
 
-        # 构建查询向量：原始查询 + 主题描述拼接
-        theme_texts = [t["theme"] for t in decomposition.themes] if decomposition.themes else []
-        queries_to_search = [query] + theme_texts[:2]  # 最多3个向量查询
+        # 单查询语义检索（由 _parallel_retrieve 对每个子问题独立调用，实现逐子问题检索）
+        try:
+            raw_docs = retriever.retrieve(
+                query,
+                top_k=self.top_k_per_path,
+                knowledge_base_ids=knowledge_base_ids,
+            )
+        except Exception:
+            return []
 
         seen_keys = set()
-        for q in queries_to_search:
-            try:
-                raw_docs = retriever.retrieve(
-                    q,
-                    top_k=self.top_k_per_path,
-                    knowledge_base_ids=knowledge_base_ids,
-                )
-            except Exception:
+        for rd in raw_docs:
+            meta = rd.get("metadata", {})
+            content = rd.get("content", "")
+            score = float(meta.get("score", 0.0))
+
+            doc = CandidateDoc(
+                content=content,
+                metadata=meta,
+                score=score,
+                retrieval_path="semantic",
+            )
+
+            # 仅保留未重复的
+            key = self._dedup_key(doc)
+            if key in seen_keys:
                 continue
-
-            for rd in raw_docs:
-                meta = rd.get("metadata", {})
-                content = rd.get("content", "")
-                score = float(meta.get("score", 0.0))
-
-                doc = CandidateDoc(
-                    content=content,
-                    metadata=meta,
-                    score=score,
-                    retrieval_path="semantic",
-                )
-
-                # 仅保留未重复的
-                key = self._dedup_key(doc)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                docs.append(doc)
+            seen_keys.add(key)
+            docs.append(doc)
 
         # 反向追溯：从命中的 chunk 溯源图谱实体（内存缓存，无 PG 调用）
         if docs and cfg.GRAPH_ENABLED:
@@ -785,6 +841,10 @@ class EnhancedRetriever:
                         knowledge_base_ids=knowledge_base_ids,
                     )
                     for ent in matched:
+                        # 跳过结构性低信息量节点（chapter/book/part/law）：只用于图遍历导航，不作检索证据，
+                        # 避免「第六章」这类低信息量节点跨文档污染最终结果
+                        if ent.get("type") in _STRUCTURAL_NODE_TYPES:
+                            continue
                         graph_extensions.append({
                             "entity": ent["name"],
                             "content": f"[实体] {ent['name']} ({ent['type']}): {ent.get('description','')}",
@@ -891,84 +951,25 @@ class EnhancedRetriever:
             for r in results
         ]
 
-    # ── Path E: 图谱召回 (GraphRAG 阶段 5) ─────────────────────────────────
-
-    def _graph_recall(
+    def _retrieve_bm25_multi_path(
         self,
-        query: str,
+        queries: Sequence[str],
         knowledge_base_ids: Sequence[str],
     ) -> List[CandidateDoc]:
-        """Path E: Milvus 图谱语义索引召回 + Neo4j 展开 → chunk 候选。
+        """BM25 对多个查询（原始 query + 子问题）独立检索并合并去重。
 
-        仅当 GRAPH_ENABLED 且图谱索引/Neo4j 可用时返回非空；任何异常
-        降级为空（不阻塞主链路）。
+        子问题独立检索能确保每个子问题的关键词证据（如「逾期」）都被召回，
+        而不是只搜原始 query 导致某些子问题的证据被淹没。
         """
-        if not cfg.GRAPH_ENABLED:
-            return []
-        try:
-            from app.rag.graph_retriever import get_graph_retriever
-
-            recall = get_graph_retriever().retrieve(
-                query, knowledge_base_ids, top_k=self.top_k_per_path
-            )
-        except Exception as exc:
-            logger.debug("[enhanced] Path E graph recall failed: %s", exc)
-            return []
-        if not recall["chunk_ids"]:
-            return []
-
-        fetched = self._fetch_chunks_by_ids(recall["chunk_ids"])
         docs: List[CandidateDoc] = []
-        for item in fetched:
-            docs.append(CandidateDoc(
-                content=item["content"],
-                metadata={
-                    "source": item.get("source", ""),
-                    "knowledge_base_id": item.get("knowledge_base_id", ""),
-                    "chunk_id": item["chunk_id"],
-                    "graph_path": "neo4j",
-                },
-                score=1.0,  # 图谱候选分数由 RRF 融合决定
-                retrieval_path="graph",
-                graph_entities=[e["name"] for e in recall["entities"]],
-            ))
-        logger.info("[enhanced] Path E graph recall: %d chunk candidates", len(docs))
+        seen: Set[str] = set()
+        for q in queries:
+            for d in self._retrieve_bm25_path(q, knowledge_base_ids):
+                key = self._dedup_key(d)
+                if key not in seen:
+                    seen.add(key)
+                    docs.append(d)
         return docs
-
-    def _fetch_chunks_by_ids(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
-        """按 id 从 Milvus chunk collection 回查内容（保持传入顺序）。"""
-        if not chunk_ids:
-            return []
-        try:
-            from pymilvus import Collection, connections, utility
-
-            connections.connect(host=cfg.MILVUS_HOST, port=cfg.MILVUS_PORT)
-            if not utility.has_collection(cfg.MILVUS_COLLECTION):
-                return []
-            col = Collection(cfg.MILVUS_COLLECTION)
-            try:
-                col.load()
-            except Exception:
-                pass
-            by_id: Dict[str, Dict[str, Any]] = {}
-            for start in range(0, len(chunk_ids), 64):
-                batch = chunk_ids[start:start + 64]
-                expr = "id in [" + ", ".join(f'"{i}"' for i in batch) + "]"
-                res = col.query(
-                    expr=expr,
-                    output_fields=["id", "content", "source", "knowledge_base_id"],
-                )
-                for r in res:
-                    by_id[r["id"]] = {
-                        "chunk_id": r["id"],
-                        "content": r.get("content", ""),
-                        "source": r.get("source", ""),
-                        "knowledge_base_id": r.get("knowledge_base_id", ""),
-                    }
-            return [by_id[cid] for cid in chunk_ids if cid in by_id]
-        except Exception as exc:
-            logger.warning("[enhanced] fetch chunks by id failed: %s", exc)
-            return []
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ③ 图谱感知融合重排序
@@ -997,9 +998,6 @@ class EnhancedRetriever:
 
             # ② 图谱接近度：文档关联实体到查询实体的距离
             graph_dist = self._compute_graph_proximity(doc, query_entities)
-            # GraphRAG 阶段 5：图谱召回候选注入 RRF 融合分（归一化 [0,1]）
-            if doc.metadata.get("rrf_graph") is not None:
-                graph_dist = max(graph_dist, float(doc.metadata["rrf_graph"]))
 
             # ③ 跨路共识：多路命中加成
             cross_consensus = self._compute_cross_consensus(doc)
@@ -1035,20 +1033,26 @@ class EnhancedRetriever:
     ) -> float:
         """计算文档关联实体到查询实体的图谱接近度。
 
-        返回值 [0, 1]：1.0 表示直接命中查询实体，0.0 表示无关。
+        返回值 [0, 1]：1.0 = 精确命中；子串命中按重叠度降权；无命中 = 0.5（中性）。
+        区分精确/子串命中：宽泛概念命中具体实体不应拿满分，否则图结构会放大
+        「主题相关但答非所问」的候选。
         """
         if not query_entities or not doc.graph_entities:
-            # 无图谱信息 → 中性分数
             return 0.5
 
-        # 直接命中：文档关联的实体就是查询实体
+        best = 0.5
         for qe in query_entities:
             for ge in doc.graph_entities:
+                if not qe or not ge:
+                    continue
+                if qe == ge:
+                    return 1.0  # 精确命中
                 if qe in ge or ge in qe:
-                    return 1.0
+                    # 子串命中：按重叠度降权（宽泛词命中长实体名，不给满分）
+                    overlap = min(len(qe), len(ge)) / max(len(qe), len(ge))
+                    best = max(best, 0.6 + 0.3 * overlap)
 
-        # 间接关联：有图谱实体但未直接命中 → 中等分数
-        return 0.6
+        return best
 
     @staticmethod
     def _compute_cross_consensus(doc: CandidateDoc) -> float:
@@ -1109,6 +1113,189 @@ class EnhancedRetriever:
             logger.warning("[enhanced] reranker failed: %s, keeping fusion order", exc)
             return docs
 
+    def _apply_answerability(
+        self,
+        query: str,
+        decomposition: QueryDecomposition,
+        docs: List[CandidateDoc],
+        top_k: int = 10,
+    ) -> List[CandidateDoc]:
+        """LLM 判断候选能否「直接回答」查询（answerability），融合到排序分数。
+
+        answerability 与语义相似度各占一半权重：「能回答」应压过「主题像」，
+        避免主题相关但答非所问的候选排前面。LLM 失败时返回原排序（不阻塞）。
+        """
+        if not docs:
+            return docs
+
+        n = min(len(docs), top_k)
+        candidates = docs[:n]
+        cand_text = "\n".join(
+            f"[{i + 1}] {d.content[:120]}" for i, d in enumerate(candidates)
+        )
+        sub_questions_str = "\n".join(
+            f"  {i + 1}. {sq}" for i, sq in enumerate(decomposition.sub_questions)
+        ) or "  （无）"
+
+        try:
+            data = self.llm.chat_json_sync([{
+                "role": "user",
+                "content": _ANSWERABILITY_PROMPT.format(
+                    query=query,
+                    sub_questions=sub_questions_str,
+                    candidates=cand_text,
+                ),
+            }], max_tokens=1500)
+            scores = data.get("scores", {}) if isinstance(data, dict) else {}
+        except Exception as exc:
+            logger.warning(
+                "[enhanced] answerability LLM failed: %s, keeping fusion order", exc
+            )
+            return docs
+
+        # 融合：answerability 0.5 + fusion 0.5；并用 answerability 的子问题标注替换检索命中标注
+        sub_questions_list = decomposition.sub_questions or []
+        for i, d in enumerate(candidates):
+            entry = scores.get(str(i + 1), 0.5)
+            if isinstance(entry, dict):
+                ans = entry.get("answerability", 0.5)
+                ans_subs = entry.get("sub_questions", [])
+            else:
+                # 兼容旧格式 {"1": 0.9}
+                ans = entry
+                ans_subs = []
+            try:
+                ans = float(ans)
+            except (TypeError, ValueError):
+                ans = 0.5
+            ans = max(0.1, min(1.0, ans))  # 下限 0.1：避免 LLM 随机误判把正确候选完全清零
+            d.metadata["answerability"] = round(ans, 4)
+            # 乘法否决：answerability 低分候选被压到接近 0（「多次错误 ≠ 更正确」，
+            # 一个维度为 0 则整体归零），而非加法加成放大错误命中
+            d.score = d.score * ans
+            # answerability 的子问题标注（能回答哪些子问题，而非被哪些子问题检索命中）
+            mapped: List[str] = []
+            for idx in ans_subs:
+                try:
+                    si = int(idx) - 1
+                    if 0 <= si < len(sub_questions_list):
+                        mapped.append(sub_questions_list[si])
+                except (TypeError, ValueError):
+                    continue
+            # answerability 明确返回了子问题标注字段时，无论是否为空都替换（清空假阳性标注）
+            if isinstance(entry, dict) and "sub_questions" in entry:
+                d.sub_questions = mapped
+
+        ranked_head = sorted(candidates, key=lambda d: d.score, reverse=True)
+        logger.info(
+            "[enhanced] answerability: %d candidates scored, top=%.4f",
+            n, ranked_head[0].score if ranked_head else 0,
+        )
+        return ranked_head + docs[n:]
+
+    def _coverage_gate(
+        self,
+        query: str,
+        decomposition: QueryDecomposition,
+        ranked: List[CandidateDoc],
+        knowledge_base_ids: Sequence[str],
+    ) -> Tuple[List[CandidateDoc], bool]:
+        """逐子问题覆盖检查（基于 answerability 的子问题标注）。
+
+        某个子问题在 top-K 候选里没有「能回答」它的证据时，用该子问题文本做
+        针对性语义 + BM25 补充检索，确保每个子问题至少有一个 answerable 证据。
+        返回 (排序后的候选, 是否所有子问题均已覆盖)，供上层决定是否还需 LLM 缺口补充。
+        """
+        sub_questions = decomposition.sub_questions or []
+        if not sub_questions:
+            return ranked, True
+
+        covered = {sq for d in ranked for sq in d.sub_questions}
+        uncovered = [sq for sq in sub_questions if sq not in covered]
+        if not uncovered:
+            return ranked, True
+
+        logger.info(
+            "[enhanced] coverage gate: %d/%d sub-questions uncovered → supplement",
+            len(uncovered), len(sub_questions),
+        )
+
+        seen = {self._dedup_key(d) for d in ranked}
+        extra: List[CandidateDoc] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = []
+            for sq in uncovered[:3]:
+                futures.append((sq, executor.submit(
+                    self._retrieve_semantic_path, sq, decomposition, knowledge_base_ids
+                )))
+                futures.append((sq, executor.submit(
+                    self._retrieve_bm25_path, sq, knowledge_base_ids
+                )))
+            for sq, f in futures:
+                try:
+                    docs = f.result(timeout=15)
+                except Exception:
+                    docs = []
+                # 每个路径只保留 top-3，避免候选爆炸拖慢 answerability LLM 打分
+                for d in docs[:3]:
+                    key = self._dedup_key(d)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if sq not in d.sub_questions:
+                        d.sub_questions.append(sq)
+                    d.retrieval_path += "+coverage"
+                    extra.append(d)
+
+        if extra:
+            extra = self._fusion_rerank(extra, decomposition)
+            # 补充候选同样经过 answerability 乘法否决，拒绝补进来的伪相关
+            # （限 top-6 打分，控制 LLM prompt 长度与耗时）
+            extra = self._apply_answerability(query, decomposition, extra, top_k=6)
+            ranked = ranked + extra
+
+        # 补充后重新检查覆盖：所有子问题都有 answerable 证据则无需再 LLM 缺口补充
+        covered_after = {sq for d in ranked for sq in d.sub_questions}
+        still_uncovered = [sq for sq in sub_questions if sq not in covered_after]
+        return ranked, not still_uncovered
+
+    @staticmethod
+    def _ensure_per_sub_question_minimum(
+        docs: List[CandidateDoc],
+        decomposition: QueryDecomposition,
+        min_per_sub: int = 3,
+    ) -> List[CandidateDoc]:
+        """每个子问题至少保留 top-min_per_sub 候选，避免被其他子问题挤掉。
+
+        复杂查询拆成多个子问题后，若所有子问题共享同一候选池竞争 final_top_k，
+        弱子问题的证据会被强子问题淹没。这里把每个子问题的 top-min_per_sub
+        候选提升到前面，保证每个子问题都有证据进入最终 Top-K。
+        """
+        sub_questions = decomposition.sub_questions or []
+        if not sub_questions or not docs:
+            return docs
+
+        by_sub: Dict[str, List[CandidateDoc]] = {sq: [] for sq in sub_questions}
+        for d in docs:
+            for sq in d.sub_questions:
+                if sq in by_sub:
+                    by_sub[sq].append(d)
+
+        guaranteed: List[CandidateDoc] = []
+        seen: Set[int] = set()
+        for sq in sub_questions:
+            top = sorted(by_sub[sq], key=lambda d: d.score, reverse=True)[:min_per_sub]
+            for d in top:
+                if id(d) not in seen:
+                    seen.add(id(d))
+                    guaranteed.append(d)
+
+        if not guaranteed:
+            return docs
+
+        rest = [d for d in docs if id(d) not in seen]
+        return guaranteed + rest
+
     @staticmethod
     def _compute_freshness(doc: CandidateDoc) -> float:
         """从 metadata 推断来源时效性。
@@ -1138,6 +1325,7 @@ class EnhancedRetriever:
         self,
         docs: List[CandidateDoc],
         decomposition: QueryDecomposition,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
     ) -> List[KnowledgeBlock]:
         """按图谱连通性将文档聚类为知识块。
 
@@ -1186,11 +1374,22 @@ class EnhancedRetriever:
             ))
             avg_score = sum(d.score for d in block_docs) / len(block_docs)
 
+            block_relations = self._collect_block_relations(
+                block_entities[:10], knowledge_base_ids
+            )
+            # 聚合该知识块覆盖的子问题（去重保序）
+            block_sub_questions: List[str] = []
+            for d in block_docs:
+                for sq in d.sub_questions:
+                    if sq not in block_sub_questions:
+                        block_sub_questions.append(sq)
             block = KnowledgeBlock(
                 block_id=f"block_{root}",
                 entities=block_entities[:10],
+                relations=block_relations,
                 docs=block_docs,
                 block_score=round(avg_score, 4),
+                sub_questions=block_sub_questions,
             )
             # 生成摘要
             block.summary = self._summarize_block(block)
@@ -1212,10 +1411,59 @@ class EnhancedRetriever:
                     docs=[docs[i]],
                     block_score=docs[i].score,
                     summary=f"[独立片段] {docs[i].content[:100]}...",
+                    sub_questions=docs[i].sub_questions,
                 ))
 
         logger.info("[enhanced] clustered %d docs → %d blocks", len(docs), len(blocks))
         return blocks
+
+    def _collect_block_relations(
+        self,
+        entities: List[str],
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+    ) -> List[Dict[str, str]]:
+        """从图谱缓存收集块内实体之间的关系（两端都在块内实体集合内）。
+
+        KnowledgeBlock.relations 此前恒为空——聚类时丢失了图谱关系信息，
+        导致前端「关系」展示与 format_blocks_for_prompt 的关系注入都失效。
+        """
+        if not entities or not knowledge_base_ids:
+            return []
+        from app.rag.graph_cache import graph_cache
+
+        entity_set = set(entities)
+        relations: List[Dict[str, str]] = []
+        seen: set = set()
+
+        for ent in entities:
+            try:
+                neighbors = graph_cache.get_neighbor_relations(
+                    ent, max_relations=20, knowledge_base_ids=knowledge_base_ids
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[enhanced] collect relations for %r failed: %s", ent, exc
+                )
+                continue
+            for rel in neighbors:
+                src = rel.get("source", "")
+                tgt = rel.get("target", "")
+                # 只保留两端都在块内实体的关系（块内边）
+                if not src or not tgt or src not in entity_set or tgt not in entity_set:
+                    continue
+                key = (src, rel.get("relation", ""), tgt)
+                if key in seen:
+                    continue
+                seen.add(key)
+                relations.append({
+                    "source": src,
+                    "relation": rel.get("relation", ""),
+                    "target": tgt,
+                    "description": rel.get("description", ""),
+                })
+                if len(relations) >= 12:
+                    return relations
+        return relations
 
     @staticmethod
     def _summarize_block(block: KnowledgeBlock) -> str:
@@ -1294,10 +1542,14 @@ class EnhancedRetriever:
         decomposition: QueryDecomposition,
     ) -> Dict[str, Any]:
         """用 LLM 评估检索结果是否充分覆盖所有子问题。"""
-        # 构建已检索内容的摘要
+        # 构建已检索内容的摘要（带子问题来源标注，便于 LLM 精确判断哪个子问题未覆盖）
         summary_parts = []
         for i, block in enumerate(result.knowledge_blocks[:5]):
-            summary_parts.append(f"[知识块{i+1}] {block.summary}")
+            sq_tag = (
+                f"（回答子问题: {'；'.join(block.sub_questions)}）"
+                if block.sub_questions else "（原始查询）"
+            )
+            summary_parts.append(f"[知识块{i+1}]{sq_tag} {block.summary}")
         for i, doc in enumerate(result.raw_docs[:5]):
             if doc.content not in "".join(summary_parts):
                 summary_parts.append(f"[片段{i+1}] {doc.content[:150]}")
@@ -1520,6 +1772,10 @@ def format_blocks_for_prompt(blocks: List[KnowledgeBlock]) -> str:
     for i, block in enumerate(blocks):
         block_header = f"## 知识块 {i + 1}: {block.summary}"
         lines = [block_header]
+
+        # 覆盖的子问题（来源标注：该知识块检索自哪个子问题）
+        if block.sub_questions:
+            lines.append(f"### 回答的子问题: {'；'.join(block.sub_questions)}")
 
         # 核心实体
         if block.entities:

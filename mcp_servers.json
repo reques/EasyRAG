@@ -11,7 +11,7 @@
       "name": "filesystem",
       "transport": "stdio",
       "enabled": true,
-      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "E:\\Learn_Agent\\develop\\EasyRAG\\volumes"],
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "E:\\github\\EasyRAG\\volumes"],
       "allowed_tools": [
         "read_file",
         "read_directory",

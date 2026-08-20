@@ -59,7 +59,7 @@ python -c "import asyncio; from backend.storage.postgres.manager import init_db;
 ### 4. 启动后端
 
 ```bash
-uvicorn backend.server.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn backend.server.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
 ### 5. 启动前端

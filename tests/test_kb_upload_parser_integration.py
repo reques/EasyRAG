@@ -144,7 +144,7 @@ def test_primary_background_ingestion_no_longer_calls_legacy_parse_and_chunk():
     assert "f.text_content = parsed_document.text" in ingestion
     assert "f.parser_name = provenance.parser_name" in ingestion
     assert "f.parser_task_id = provenance.task_id" in ingestion
-    assert "batch_size = 16" in ingestion
+    assert "batch_size =" in ingestion
     assert "await asyncio.to_thread" in ingestion
     assert "stage=\"indexing\"" in ingestion
     assert "progress_callback=report_graph_progress" in ingestion

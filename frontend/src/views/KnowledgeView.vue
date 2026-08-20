@@ -242,6 +242,15 @@
                     </td>
                     <td>{{ formatDate(file.created_at) }}</td>
                     <td>
+                      <button
+                        class="kbw-icon-button"
+                        :class="{ 'is-busy': reindexingIds.includes(file.id) }"
+                        :title="reindexingIds.includes(file.id) ? '重新索引中' : '重新索引'"
+                        :disabled="reindexingIds.includes(file.id)"
+                        @click="reindexFile(file)"
+                      >
+                        <RefreshCw :size="15" :class="{ spin: reindexingIds.includes(file.id) }" />
+                      </button>
                       <button class="kbw-icon-danger" title="删除文件" @click="confirmDelete(file)">
                         <Trash2 :size="15" />
                       </button>
@@ -273,6 +282,24 @@
                 <span>问题</span>
                 <textarea v-model="retrievalQuery" rows="6" placeholder="输入一个真实问题，例如：这份文档的核心结论是什么？"></textarea>
               </label>
+              <div class="kbw-field">
+                <span>检索模式</span>
+                <div class="kbw-mode-switch">
+                  <button
+                    type="button"
+                    class="kbw-mode-btn"
+                    :class="{ 'is-active': retrievalMode === 'basic' }"
+                    @click="retrievalMode = 'basic'"
+                  >基础向量检索</button>
+                  <button
+                    type="button"
+                    class="kbw-mode-btn"
+                    :class="{ 'is-active': retrievalMode === 'enhanced' }"
+                    @click="retrievalMode = 'enhanced'"
+                  >增强检索（图谱+融合）</button>
+                </div>
+                <small v-if="retrievalMode === 'enhanced'">走查询分解 + 四路并行检索 + 图谱融合重排，相似度阈值对融合后的知识块评分生效。</small>
+              </div>
               <div class="kbw-field-grid">
                 <label class="kbw-field">
                   <span>Top K</span>
@@ -314,14 +341,14 @@
 
           <article class="kbw-panel-card kbw-result-panel">
             <div class="kbw-panel-title">
-              <div><ListFilter :size="17" /><strong>召回结果</strong></div>
+              <div><ListFilter :size="17" /><strong>{{ retrievalRun?.mode === 'enhanced' ? '增强检索结果' : '召回结果' }}</strong></div>
               <span v-if="retrievalRun">{{ retrievalRun.total }} 条 · {{ retrievalRun.elapsed_ms }} ms</span>
               <span v-else>0 条</span>
             </div>
             <div v-if="retrievalLoading" class="kbw-result-empty">
               <LoaderCircle :size="28" class="spin" />
               <strong>正在执行检索</strong>
-              <span>正在生成查询向量并从当前知识库召回内容。</span>
+              <span>{{ retrievalMode === 'enhanced' ? '正在查询分解、四路并行检索并融合重排。' : '正在生成查询向量并从当前知识库召回内容。' }}</span>
             </div>
             <div v-else-if="retrievalError" class="kbw-result-empty">
               <CircleAlert :size="28" />
@@ -329,10 +356,92 @@
               <span>{{ retrievalError }}</span>
               <button class="kbw-secondary-button" @click="runRetrievalPreview">重新测试</button>
             </div>
-            <div v-else-if="!retrievalRun?.results?.length" class="kbw-result-empty">
+            <div v-else-if="!hasRetrievalResult" class="kbw-result-empty">
               <Waypoints :size="28" />
               <strong>{{ retrievalAttempted ? '没有符合条件的召回结果' : '等待一次测试查询' }}</strong>
               <span>{{ retrievalAttempted ? '可以降低最低相似度或换一个更贴近文档内容的问题。' : '结果区将展示命中文件、分块正文、相似度、排名和耗时。' }}</span>
+            </div>
+            <div v-else-if="retrievalRun?.mode === 'enhanced'" class="kbw-enhanced-results">
+              <div v-if="retrievalRun.query_decomposition" class="kbw-decomp-card">
+                <div class="kbw-decomp-head">
+                  <strong>查询分解</strong>
+                  <span class="kbw-decomp-tags">
+                    <em>{{ retrievalRun.query_decomposition.query_type || 'unknown' }}</em>
+                    <em>{{ retrievalRun.query_decomposition.complexity || 'unknown' }}</em>
+                    <em v-if="retrievalRun.gap_rounds">缺口补充 {{ retrievalRun.gap_rounds }} 轮</em>
+                  </span>
+                </div>
+                <div v-if="retrievalRun.query_decomposition.sub_questions?.length" class="kbw-decomp-row">
+                  <span class="kbw-decomp-label">子问题</span>
+                  <ul><li v-for="(sq, si) in retrievalRun.query_decomposition.sub_questions" :key="si">{{ sq }}</li></ul>
+                </div>
+                <div v-if="retrievalRun.query_decomposition.explicit_entities?.length" class="kbw-decomp-row">
+                  <span class="kbw-decomp-label">实体</span>
+                  <span>{{ retrievalRun.query_decomposition.explicit_entities.map(e => e.name).join('、') }}</span>
+                </div>
+                <div v-if="retrievalRun.query_decomposition.relation_patterns?.length" class="kbw-decomp-row">
+                  <span class="kbw-decomp-label">关系模式</span>
+                  <span>{{ retrievalRun.query_decomposition.relation_patterns.map(r => `${r.subject} → ${r.predicate} → ${r.object}`).join('；') }}</span>
+                </div>
+              </div>
+
+              <div class="kbw-subq-tabs">
+                <button
+                  type="button"
+                  class="kbw-subq-tab"
+                  :class="{ 'is-active': selectedSubQuestion < 0 }"
+                  @click="selectedSubQuestion = -1"
+                >全部</button>
+                <button
+                  v-for="(sq, si) in (retrievalRun.query_decomposition?.sub_questions || [])"
+                  :key="si"
+                  type="button"
+                  class="kbw-subq-tab"
+                  :class="{ 'is-active': selectedSubQuestion === si }"
+                  :title="sq"
+                  @click="selectedSubQuestion = si"
+                >子问题 {{ si + 1 }}</button>
+              </div>
+
+              <div v-if="!filteredBlocks.length" class="kbw-result-empty">
+                <Waypoints :size="24" />
+                <span>该子问题下没有可展示的知识块。</span>
+              </div>
+
+              <div v-for="(block, bi) in filteredBlocks" :key="block.block_id || bi" class="kbw-block-card">
+                <header class="kbw-block-head">
+                  <strong>知识块 #{{ bi + 1 }}</strong>
+                  <span v-if="block.block_score != null">评分 {{ block.block_score }}</span>
+                </header>
+                <p v-if="block.summary" class="kbw-block-summary">{{ block.summary }}</p>
+                <div v-if="block.sub_questions?.length" class="kbw-block-relations">
+                  <span class="kbw-decomp-label">回答子问题</span>
+                  <ul>
+                    <li v-for="(sq, si) in block.sub_questions" :key="si">{{ sq }}</li>
+                  </ul>
+                </div>
+                <div v-if="block.entities?.length" class="kbw-block-entities">
+                  <span class="kbw-decomp-label">实体</span>
+                  <span>{{ block.entities.join('、') }}</span>
+                </div>
+                <div v-if="block.relations?.length" class="kbw-block-relations">
+                  <span class="kbw-decomp-label">关系</span>
+                  <ul>
+                    <li v-for="(r, ri) in block.relations" :key="ri">
+                      {{ r.source || r.subject }} --{{ r.relation || r.predicate }}--> {{ r.target || r.object }}
+                    </li>
+                  </ul>
+                </div>
+                <div v-for="(doc, di) in block.docs" :key="di" class="kbw-block-doc">
+                  <div class="kbw-block-doc-meta">
+                    <span v-if="doc.retrieval_path" class="kbw-path-tag">{{ doc.retrieval_path }}</span>
+                    <span v-if="doc.cross_path_hits > 1" class="kbw-path-tag">多路命中 ×{{ doc.cross_path_hits }}</span>
+                    <span v-if="doc.graph_entities?.length" class="kbw-path-tag">图谱实体：{{ doc.graph_entities.join('、') }}</span>
+                    <span v-if="doc.score != null" class="kbw-path-tag">相似度 {{ formatSimilarity(doc.score) }}</span>
+                  </div>
+                  <p>{{ doc.content }}</p>
+                </div>
+              </div>
             </div>
             <div v-else class="kbw-retrieval-results">
               <article v-for="hit in retrievalRun.results" :key="`${hit.rank}-${hit.file_id || hit.source || 'hit'}`" class="kbw-retrieval-hit">
@@ -368,167 +477,57 @@
             <div>
               <span class="kbw-eyebrow">KNOWLEDGE GRAPH</span>
               <h2>知识图谱</h2>
-              <p>从已入库 chunks 抽取实体与关系写入 Neo4j，建立 Milvus 语义索引，检索时与向量结果 RRF 融合。</p>
+              <p>实体与关系网络：颜色区分实体类型，节点大小代表连接度，点击节点查看详情。</p>
             </div>
-            <span class="kbw-module-status" :class="{ 'is-online': graphConfig.neo4j_connected }">
-              <CircleDashed :size="14" />
-              Neo4j {{ graphConfig.neo4j_connected ? '已连接' : '未连接' }}
-            </span>
-          </div>
-
-          <div class="kbw-table-toolbar kbw-graph-toolbar">
-            <label class="kbw-graph-tool-label">抽取器
-              <select v-model="graphExtractor" class="kbw-select">
-                <option value="llm">LLM 抽取器</option>
-              </select>
-            </label>
-            <button
-              class="kbw-primary-button"
-              :disabled="graphBuilding || !graphConfig.neo4j_connected"
-              @click="startGraphBuild()"
-            >
-              <Play :size="14" /> {{ graphBuilding ? '构建中…' : '开始构建' }}
-            </button>
-            <button class="kbw-secondary-button" :disabled="graphStatusLoading" @click="loadGraphStatus()">
-              <RefreshCw :size="14" :class="{ spin: graphStatusLoading }" /> 刷新状态
-            </button>
-            <button
-              class="kbw-secondary-button"
-              :disabled="!graphConfig.neo4j_connected"
-              title="查看本知识库已抽取的实体名称，点击名称检索其子图"
-              @click="openGraphEntities()"
-            >
-              <Database :size="14" /> Neo4j 实体
-            </button>
-            <button class="kbw-secondary-button is-danger" @click="resetGraph()">
-              <Trash2 :size="14" /> 重置图谱
-            </button>
-          </div>
-
-          <div v-if="graphStatus.run && graphStatus.run.status === 'running'" class="kbw-inline-notice">
-            <LoaderCircle :size="14" class="spin" />
-            正在构建：已处理 {{ graphStatus.run.processed_chunks }}/{{ graphStatus.run.total_chunks }} 个 chunks（抽取器：{{ graphStatus.run.extractor }}）
-          </div>
-          <div v-else-if="graphStatus.run && graphStatus.run.status === 'failed'" class="kbw-inline-notice is-error">
-            <CircleAlert :size="14" />
-            构建失败：{{ graphStatus.run.error_message || '未知错误' }}
-          </div>
-          <div v-else-if="graphStatus.run && graphStatus.run.status === 'completed'" class="kbw-inline-notice is-ok">
-            <CheckCircle2 :size="14" />
-            最近构建完成：{{ graphStatus.run.entities_found }} 实体 / {{ graphStatus.run.relations_found }} 关系，
-            索引 {{ graphStatus.run.entities_indexed }} 实体 + {{ graphStatus.run.relations_indexed }} 三元组
-          </div>
-
-          <div class="kbw-metric-grid">
-            <article>
-              <span class="kbw-metric-icon"><Network :size="17" /></span>
-              <div><strong>{{ graphStatus.neo4j.entities ?? '—' }}</strong><span>Neo4j 实体</span></div>
-            </article>
-            <article>
-              <span class="kbw-metric-icon"><Waypoints :size="17" /></span>
-              <div><strong>{{ graphStatus.neo4j.relations ?? '—' }}</strong><span>Neo4j 关系</span></div>
-            </article>
-            <article>
-              <span class="kbw-metric-icon"><Database :size="17" /></span>
-              <div><strong>{{ graphStatus.pg_entities }}</strong><span>PostgreSQL 实体</span></div>
-            </article>
-            <article>
-              <span class="kbw-metric-icon"><Layers3 :size="17" /></span>
-              <div><strong>{{ graphStatus.pg_relations }}</strong><span>PostgreSQL 关系</span></div>
-            </article>
-            <article>
-              <span class="kbw-metric-icon"><Braces :size="17" /></span>
-              <div><strong>{{ graphStatus.indexed }}</strong><span>Milvus 语义索引</span></div>
-            </article>
-            <article>
-              <span class="kbw-metric-icon"><History :size="17" /></span>
-              <div>
-                <strong>{{ graphStatus.run ? runStatusLabel(graphStatus.run.status) : '未构建' }}</strong>
-                <span>最近构建</span>
-              </div>
-            </article>
+            <div class="kbw-heading-actions">
+              <span v-if="graphData" class="kbw-module-status"><CheckCircle2 :size="14" /> {{ graphData.entities.length }} 实体 · {{ graphData.relations.length }} 关系</span>
+              <button type="button" class="kbw-secondary-button" @click="loadGraph"><RefreshCw :size="14" /> 刷新</button>
+            </div>
           </div>
 
           <div class="kbw-graph-layout">
             <article class="kbw-panel-card kbw-graph-canvas">
               <div class="kbw-panel-title">
-                <div><ScanSearch :size="17" /><strong>子图搜索</strong></div>
-                <div class="kbw-graph-search">
-                  <input
-                    v-model="graphQuery"
-                    class="kbw-search-input"
-                    placeholder="输入实体名关键词，回车搜索"
-                    @keyup.enter="searchGraph()"
-                  />
-                  <select v-model="graphDepth" class="kbw-select" title="子图扩展深度">
-                    <option :value="1">1 跳</option>
-                    <option :value="2">2 跳</option>
-                    <option :value="3">3 跳</option>
-                  </select>
-                  <button class="kbw-primary-button" :disabled="!graphQuery.trim()" @click="searchGraph()">
-                    <Search :size="14" /> 搜索
-                  </button>
-                </div>
+                <div><Network :size="17" /><strong>实体关系图</strong></div>
               </div>
-              <div v-if="graphSubgraph.nodes.length" class="kbw-graph-stage">
-                <svg viewBox="0 0 680 400" role="img" aria-label="图谱子图">
-                  <line
-                    v-for="(edge, i) in graphSubgraph.edges"
-                    :key="`edge-${i}`"
-                    :x1="graphNodePositions[edge.source]?.x ?? 340"
-                    :y1="graphNodePositions[edge.source]?.y ?? 200"
-                    :x2="graphNodePositions[edge.target]?.x ?? 340"
-                    :y2="graphNodePositions[edge.target]?.y ?? 200"
-                    class="graph-edge"
-                  />
-                  <g v-for="node in graphSubgraph.nodes" :key="node.id" :class="{ 'graph-root': node.id === graphCenter }">
-                    <circle
-                      :cx="graphNodePositions[node.id]?.x ?? 340"
-                      :cy="graphNodePositions[node.id]?.y ?? 200"
-                      r="30"
-                    />
-                    <text
-                      :x="graphNodePositions[node.id]?.x ?? 340"
-                      :y="(graphNodePositions[node.id]?.y ?? 200) - 36"
-                      class="graph-node-label"
-                    >{{ truncate(node.name, 12) }}</text>
-                    <text
-                      :x="graphNodePositions[node.id]?.x ?? 340"
-                      :y="(graphNodePositions[node.id]?.y ?? 200) + 8"
-                      class="graph-node-type"
-                    >{{ node.entity_type || 'concept' }}</text>
-                  </g>
-                </svg>
+              <div v-if="graphLoading" class="kbw-result-empty">
+                <LoaderCircle :size="28" class="kbw-spin" />
+                <span>正在加载图谱…</span>
               </div>
-              <div v-else class="kbw-result-empty">
+              <div v-else-if="graphError" class="kbw-result-empty">
+                <CircleAlert :size="28" />
+                <strong>加载失败</strong>
+                <span>{{ graphError }}</span>
+              </div>
+              <div v-else-if="!graphData || !graphData.entities?.length" class="kbw-result-empty">
                 <Network :size="28" />
-                <strong>{{ graphSubgraph.entities.length ? '未找到关联子图' : '搜索知识图谱子图' }}</strong>
-                <span>输入实体名关键词，展示以命中实体为中心的 1-3 跳邻居。</span>
+                <strong>尚未抽取实体</strong>
+                <span>上传并处理文件后，系统会自动抽取实体与关系。点击右上角「刷新」重新加载。</span>
               </div>
+              <div
+                ref="graphContainer"
+                v-show="graphData && graphData.entities?.length && !graphLoading && !graphError"
+                class="kbw-graph-stage"
+              ></div>
             </article>
             <aside class="kbw-panel-card kbw-graph-sidebar">
               <div class="kbw-panel-title">
-                <div><ListFilter :size="17" /><strong>命中实体</strong></div>
+                <div><PanelRight :size="17" /><strong>图例与详情</strong></div>
               </div>
-              <ul v-if="graphSubgraph.entities.length" class="kbw-graph-entity-list">
-                <li v-for="entity in graphSubgraph.entities" :key="entity.name">
-                  <strong>{{ entity.name }}</strong>
-                  <span>{{ entity.entity_type || 'concept' }}</span>
-                </li>
-              </ul>
-              <p v-else class="kbw-sidebar-note">暂无命中实体。</p>
-              <div class="kbw-panel-title" style="margin-top: 14px;">
-                <div><Waypoints :size="17" /><strong>子图关系</strong></div>
+              <div class="kbw-graph-legend">
+                <span v-for="(color, type) in graphTypeColors" :key="type" class="kbw-legend-item">
+                  <i :style="{ background: color }"></i>{{ type }}
+                </span>
               </div>
-              <ul v-if="graphSubgraph.edges.length" class="kbw-graph-entity-list">
-                <li v-for="(edge, i) in graphSubgraph.edges" :key="i">
-                  <span class="kbw-graph-rel">
-                    {{ edge.relation_type }}
-                    <em>{{ graphSubgraph.edges.length > 8 ? '' : edge.source.split(':').pop() + ' → ' + edge.target.split(':').pop() }}</em>
-                  </span>
-                </li>
-              </ul>
-              <p v-else class="kbw-sidebar-note">暂无子图关系。</p>
+              <div v-if="graphNodeDetail" class="kbw-node-detail">
+                <strong>{{ graphNodeDetail.label }}</strong>
+                <span class="kbw-node-type" :style="{ color: entityColor(graphNodeDetail.type) }">{{ graphNodeDetail.type }}</span>
+                <p v-if="graphNodeDetail.description">{{ graphNodeDetail.description }}</p>
+              </div>
+              <div v-else class="kbw-sidebar-note">
+                <Info :size="15" />
+                <p><strong>提示</strong><span>点击实体聚焦并高亮其关联关系；拖拽旋转视角，滚轮缩放，右键平移。点击空白处复位。</span></p>
+              </div>
             </aside>
           </div>
         </section>
@@ -660,33 +659,6 @@
 
     <div v-if="moduleNotice" class="kbw-toast" role="status">
       <Info :size="15" /> {{ moduleNotice }}
-    </div>
-
-    <div v-if="graphEntityModal" class="modal-overlay" @click.self="graphEntityModal = false">
-      <div class="modal kbw-modal kbw-graph-entity-modal">
-        <div class="kbw-modal-heading">
-          <div><span><Database :size="18" /></span><div><h3>Neo4j 实体</h3><p>本知识库已抽取的实体名称，点击即可检索其子图</p></div></div>
-          <button @click="graphEntityModal = false"><X :size="17" /></button>
-        </div>
-        <div class="kbw-graph-entity-search">
-          <Search :size="14" />
-          <input v-model="graphEntityFilter" type="text" placeholder="过滤实体名称…" />
-          <span v-if="graphEntityFilter" class="kbw-graph-entity-count">{{ filteredGraphEntities.length }} / {{ graphEntities.length }}</span>
-        </div>
-        <div class="kbw-graph-entity-list">
-          <button
-            v-for="entity in filteredGraphEntities"
-            :key="entity.name"
-            @click="selectGraphEntity(entity.name)"
-          >
-            <span>{{ entity.name }}</span>
-            <small>{{ entity.entity_type || 'concept' }}</small>
-          </button>
-          <div v-if="!filteredGraphEntities.length" class="kbw-graph-entity-empty">
-            {{ graphEntities.length ? '没有匹配的实体' : '暂无实体 —— 请先点击"开始构建"生成图谱' }}
-          </div>
-        </div>
-      </div>
     </div>
 
     <div v-if="showCreate" class="modal-overlay" @click.self="showCreate = false">
@@ -868,7 +840,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, BarChart3, Binary, Blocks, Braces, CalendarDays, CheckCircle2,
@@ -879,6 +851,7 @@ import {
   UploadCloud, Waypoints, X,
 } from 'lucide-vue-next'
 import api from '../api'
+import * as echarts from 'echarts'
 
 const route = useRoute()
 const router = useRouter()
@@ -896,6 +869,191 @@ const validTabs = new Set(tabItems.map((tab) => tab.id))
 const kbList = ref([])
 const activeKb = ref(null)
 const activeTab = ref('files')
+
+// ── 知识图谱 ──────────────────────────────────────────────────────────
+const graphData = ref(null)
+const graphLoading = ref(false)
+const graphError = ref('')
+const graphContainer = ref(null)
+const graphNodeDetail = ref(null)
+let graphChart = null
+
+const PALETTE = ['#5b8def', '#34c77b', '#f5a623', '#e45b5b', '#9b6bf0', '#2ab8c2', '#e05ba0', '#8a9b6b', '#6b8f9b', '#c2a05b', '#8d6e63', '#5c6bc0', '#26a69a', '#ec407a', '#7cb342', '#ab47bc']
+
+// 从实际图谱数据动态统计实体类型并分配颜色（通用：不预设任何领域类型）
+const graphTypeColors = computed(() => {
+  const types = []
+  const seen = new Set()
+  for (const e of (graphData.value?.entities || [])) {
+    const t = e.entity_type || 'other'
+    if (!seen.has(t)) { seen.add(t); types.push(t) }
+  }
+  const map = {}
+  types.forEach((t, i) => { map[t] = PALETTE[i % PALETTE.length] })
+  return map
+})
+
+function entityColor(type) {
+  return graphTypeColors.value[type] || '#9aa0a6'
+}
+
+async function loadGraph() {
+  const kbId = activeKb.value?.id
+  if (!kbId) return
+  graphLoading.value = true
+  graphError.value = ''
+  graphNodeDetail.value = null
+  let fetched = null
+  try {
+    fetched = await api.get(`/knowledge/bases/${kbId}/graph`, { params: { limit: 300 } })
+    graphData.value = fetched
+  } catch (e) {
+    graphError.value = e.response?.data?.detail || '图谱加载失败，请稍后重试。'
+  } finally {
+    graphLoading.value = false
+  }
+  // 等 graphLoading=false 后容器才通过 v-show 显示（否则尺寸为 0，echarts.init 失败）
+  if (fetched) {
+    await nextTick()
+    try {
+      renderGraph(fetched)
+    } catch (e) {
+      console.error('[graph] renderGraph failed:', e)
+      graphError.value = '图谱渲染失败：' + (e && e.message ? e.message : String(e))
+    }
+  }
+}
+
+function renderGraph(data) {
+  if (graphChart) {
+    if (graphChart.__resizeHandler) window.removeEventListener('resize', graphChart.__resizeHandler)
+    graphChart.dispose()
+    graphChart = null
+  }
+  const el = graphContainer.value
+  if (!el || !data) return
+  // 容器必须已有实际尺寸（v-show 尚未生效时 clientWidth/Height 为 0，echarts 会渲染空白）
+  if (el.clientWidth === 0 || el.clientHeight === 0) {
+    requestAnimationFrame(() => renderGraph(data))
+    return
+  }
+  const entities = data.entities || []
+  const relations = data.relations || []
+
+  // 计算连接度
+  const degree = {}
+  for (const r of relations) {
+    degree[r.source_entity] = (degree[r.source_entity] || 0) + 1
+    degree[r.target_entity] = (degree[r.target_entity] || 0) + 1
+  }
+
+  // 类型 → 索引（categories）
+  const typeIndex = {}
+  const typeList = []
+  for (const e of entities) {
+    const t = e.entity_type || 'other'
+    if (!(t in typeIndex)) {
+      typeIndex[t] = typeList.length
+      typeList.push(t)
+    }
+  }
+
+  const nodes = entities.map((e) => ({
+    id: e.name,
+    name: e.name,
+    value: degree[e.name] || 0,
+    category: typeIndex[e.entity_type || 'other'],
+    description: e.description || '',
+    symbolSize: 8 + Math.min(degree[e.name] || 0, 12) * 2,
+  }))
+  const links = relations.map((r) => ({
+    source: r.source_entity,
+    target: r.target_entity,
+    value: r.relation_type,
+  }))
+
+  const colors = typeList.map((_, i) => PALETTE[i % PALETTE.length])
+
+  graphChart = echarts.init(el)
+  graphChart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      formatter: (p) => {
+        if (p.dataType === 'node') {
+          const t = p.data.category !== undefined ? typeList[p.data.category] : 'other'
+          return `${p.data.name} · ${t}`
+        }
+        return p.data.value || ''
+      },
+    },
+    series: [{
+      type: 'graph',
+      layout: 'force',
+      force: { repulsion: 400, edgeLength: 120, gravity: 0.1, layoutAnimation: false },
+      data: nodes,
+      links: links,
+      categories: typeList.map((t) => ({ name: t })),
+      roam: true,
+      draggable: true,
+      focusNodeAdjacency: true,
+      color: colors,
+      label: { show: true, position: 'right', formatter: '{b}', fontSize: 10, color: '#5a5e64' },
+      lineStyle: { color: '#c3c9d1', width: 1.2, curveness: 0.15, opacity: 0.6 },
+      edgeLabel: {
+        show: true,
+        formatter: (p) => p.data.value || '',
+        fontSize: 8,
+        color: '#8b9096',
+        position: 'middle',
+      },
+      itemStyle: {
+        shadowBlur: 8,
+        shadowColor: 'rgba(0,0,0,0.25)',
+        shadowOffsetY: 3,
+        borderColor: '#ffffff',
+        borderWidth: 1.5,
+      },
+      emphasis: {
+        focus: 'adjacency',
+        lineStyle: { color: '#4348ff', width: 2.5 },
+        itemStyle: { shadowBlur: 16, shadowColor: 'rgba(67,72,255,0.5)' },
+        label: { fontSize: 12, color: '#2c2e31' },
+      },
+    }],
+  })
+
+  // 容器尺寸变化时自适应
+  const onResize = () => { if (graphChart) graphChart.resize() }
+  window.addEventListener('resize', onResize)
+  graphChart.__resizeHandler = onResize
+
+  graphChart.on('click', (params) => {
+    if (params.dataType === 'node') {
+      graphNodeDetail.value = {
+        label: params.data.name,
+        type: params.data.category !== undefined ? typeList[params.data.category] : 'other',
+        description: params.data.description,
+      }
+    } else {
+      graphNodeDetail.value = null
+    }
+  })
+}
+
+onBeforeUnmount(() => {
+  if (graphChart) {
+    if (graphChart.__resizeHandler) window.removeEventListener('resize', graphChart.__resizeHandler)
+    graphChart.dispose()
+    graphChart = null
+  }
+})
+
+// 切到图谱页时自动加载（点击 tab 或 URL 刷新初始化都会触发）。
+// 同时监听 activeKb：URL 初始化时 activeTab 先变、activeKb 后设置，
+// 只监听 activeTab 会在 activeKb 还是 null 时触发 loadGraph 而直接返回。
+watch([activeTab, () => activeKb.value?.id], ([tab, kbId]) => {
+  if (tab === 'graph' && kbId) loadGraph()
+})
 const fileList = ref([])
 const loading = ref(true)
 const filesLoading = ref(false)
@@ -945,10 +1103,12 @@ const deleteSuccess = ref('')
 const retrievalQuery = ref('')
 const retrievalTopK = ref(5)
 const retrievalThreshold = ref(0.3)
+const retrievalMode = ref('basic')
 const retrievalAttempted = ref(false)
 const retrievalLoading = ref(false)
 const retrievalRun = ref(null)
 const retrievalError = ref('')
+const selectedSubQuestion = ref(-1)  // -1 = 全部，0/1/2... = 对应子问题
 let retrievalRequestRevision = 0
 const showEvaluationSetup = ref(false)
 const moduleNotice = ref('')
@@ -1026,203 +1186,42 @@ const retrievalContract = computed(() => JSON.stringify({
     query: retrievalQuery.value || '<用户问题>',
     top_k: retrievalTopK.value,
     score_threshold: retrievalThreshold.value,
+    mode: retrievalMode.value,
   },
 }, null, 2))
 
-// ── 知识图谱 (GraphRAG 阶段 5) ─────────────────────────────────────────────
-const graphConfig = reactive({
-  graph_enabled: false,
-  neo4j_uri: '',
-  neo4j_connected: false,
-  extractors: [],
-  entity_collection: '',
-})
-const graphStatus = reactive({
-  run: null,
-  neo4j: {},
-  indexed: 0,
-  pg_entities: 0,
-  pg_relations: 0,
-})
-const graphExtractor = ref('llm')
-const graphBuilding = ref(false)
-const graphStatusLoading = ref(false)
-const graphQuery = ref('')
-const graphDepth = ref(1)
-const graphSubgraph = reactive({ entities: [], nodes: [], edges: [] })
-const graphCenter = ref('')
-let graphPollTimer = null
-
-async function loadGraphConfig() {
-  if (!activeKb.value) return
-  try {
-    Object.assign(graphConfig, await api.get(`/knowledge/bases/${activeKb.value.id}/graph/config`))
-  } catch (error) {
-    notify(error.response?.data?.detail || '图谱配置加载失败。')
-  }
-}
-
-// 图谱面板统一加载入口：点击 Tab / 选择知识库 / F5 刷新路由恢复时都调用
-function loadGraphPanel() {
-  if (activeTab.value !== 'graph' || !activeKb.value) return
-  loadGraphConfig()
-  loadGraphStatus()
-  loadGraphEntities()
-}
-
-const graphEntities = ref([])
-const graphEntityModal = ref(false)
-const graphEntityFilter = ref('')
-
-const filteredGraphEntities = computed(() => {
-  const keyword = graphEntityFilter.value.trim()
-  if (!keyword) return graphEntities.value
-  return graphEntities.value.filter((entity) => entity.name.includes(keyword))
+const hasRetrievalResult = computed(() => {
+  const run = retrievalRun.value
+  if (!run) return false
+  if (run.mode === 'enhanced') return (run.knowledge_blocks?.length || 0) > 0
+  return (run.results?.length || 0) > 0
 })
 
-async function loadGraphEntities() {
-  if (!activeKb.value) return
-  try {
-    const data = await api.get(`/knowledge/bases/${activeKb.value.id}/graph/entities`, {
-      limit: 100,
-    })
-    graphEntities.value = data.entities || []
-  } catch (error) {
-    // Neo4j 未连接/未构建时保持空列表（面板已有连接状态提示）
-    graphEntities.value = []
-  }
-}
-
-function openGraphEntities() {
-  graphEntityFilter.value = ''
-  graphEntityModal.value = true
-  loadGraphEntities()
-}
-
-function selectGraphEntity(name) {
-  graphEntityModal.value = false
-  graphQuery.value = name
-  searchGraph()
-}
-
-async function loadGraphStatus() {
-  if (!activeKb.value) return
-  graphStatusLoading.value = true
-  try {
-    const data = await api.get(`/knowledge/bases/${activeKb.value.id}/graph/status`)
-    graphStatus.run = data.run
-    graphStatus.neo4j = data.neo4j || {}
-    graphStatus.indexed = data.indexed || 0
-    graphStatus.pg_entities = data.pg_entities || 0
-    graphStatus.pg_relations = data.pg_relations || 0
-    // 页面刷新后若看到 running 且没有活动轮询，自动恢复轮询
-    if (data.run && data.run.status === 'running' && !graphPollTimer) {
-      startGraphPolling()
-    }
-  } catch (error) {
-    notify(error.response?.data?.detail || '图谱状态加载失败。')
-  } finally {
-    graphStatusLoading.value = false
-  }
-}
-
-async function startGraphBuild() {
-  if (!activeKb.value || graphBuilding.value) return
-  graphBuilding.value = true
-  try {
-    const form = new FormData()
-    form.append('extractor', graphExtractor.value)
-    await api.post(`/knowledge/bases/${activeKb.value.id}/graph/build`, form)
-    notify('图谱构建已开始，正在后台抽取实体与关系…')
-    await loadGraphStatus()
-    startGraphPolling()
-  } catch (error) {
-    notify(error.response?.data?.detail || '图谱构建启动失败。')
-  } finally {
-    graphBuilding.value = false
-  }
-}
-
-function startGraphPolling() {
-  stopGraphPolling()
-  // 大型知识库可能超过 10 分钟；后台状态才是事实来源，不因前端计时停止轮询。
-  const LONG_RUNNING_NOTICE_TICKS = 200
-  let ticks = 0
-  let longRunningNotified = false
-  graphPollTimer = setInterval(async () => {
-    ticks += 1
-    await loadGraphStatus()
-    if (graphStatus.run && ['completed', 'failed'].includes(graphStatus.run.status)) {
-      stopGraphPolling()
-    } else if (!longRunningNotified && ticks >= LONG_RUNNING_NOTICE_TICKS) {
-      longRunningNotified = true
-      notify('图谱数据量较大，后台仍在构建；页面会继续自动刷新状态。')
-    }
-  }, 3000)
-}
-
-function stopGraphPolling() {
-  if (graphPollTimer) {
-    clearInterval(graphPollTimer)
-    graphPollTimer = null
-  }
-}
-
-async function resetGraph() {
-  if (!activeKb.value) return
-  if (!confirm('确定重置该知识库的图谱数据？将清空 Neo4j 子图、Milvus 语义索引、PostgreSQL 图谱记录与内存缓存。')) return
-  try {
-    await api.delete(`/knowledge/bases/${activeKb.value.id}/graph`)
-    graphSubgraph.entities = []
-    graphSubgraph.nodes = []
-    graphSubgraph.edges = []
-    graphCenter.value = ''
-    await loadGraphStatus()
-    notify('图谱数据已重置。')
-  } catch (error) {
-    notify(error.response?.data?.detail || '图谱重置失败。')
-  }
-}
-
-async function searchGraph() {
-  const keyword = graphQuery.value.trim()
-  if (!activeKb.value || !keyword) return
-  try {
-    const data = await api.get(`/knowledge/bases/${activeKb.value.id}/graph/search`, {
-      q: keyword,
-      depth: graphDepth.value,
-    })
-    graphSubgraph.entities = data.entities || []
-    graphSubgraph.nodes = data.nodes || []
-    graphSubgraph.edges = data.edges || []
-    graphCenter.value = graphSubgraph.entities[0]?.name || ''
-  } catch (error) {
-    notify(error.response?.data?.detail || '子图搜索失败。')
-  }
-}
-
-const graphNodePositions = computed(() => {
-  const positions = {}
-  const nodes = graphSubgraph.nodes
-  const centerId = graphCenter.value
-  const cx = 340
-  const cy = 200
-  const others = nodes.filter((node) => node.id !== centerId)
-  others.forEach((node, index) => {
-    const angle = (2 * Math.PI * index) / Math.max(others.length, 1) - Math.PI / 2
-    const radius = 110 + (index % 3) * 45
-    positions[node.id] = {
-      x: cx + radius * Math.cos(angle),
-      y: cy + radius * Math.sin(angle),
-    }
-  })
-  if (centerId) positions[centerId] = { x: cx, y: cy }
-  return positions
+// 按当前选中的子问题过滤知识块（-1 = 全部）
+const filteredBlocks = computed(() => {
+  const run = retrievalRun.value
+  if (!run || run.mode !== 'enhanced') return []
+  const blocks = run.knowledge_blocks || []
+  if (selectedSubQuestion.value < 0) return blocks
+  const subQuestions = run.query_decomposition?.sub_questions || []
+  const target = subQuestions[selectedSubQuestion.value]
+  if (!target) return blocks
+  return blocks.filter((b) => (b.sub_questions || []).includes(target))
 })
 
-function runStatusLabel(status) {
-  return { pending: '等待中', running: '构建中', completed: '已完成', failed: '失败' }[status] || status || '未构建'
-}
+const graphPreviewNodes = computed(() => {
+  const positions = [
+    { x: 110, y: 82 }, { x: 340, y: 62 }, { x: 570, y: 82 },
+    { x: 105, y: 268 }, { x: 340, y: 292 }, { x: 575, y: 268 },
+  ]
+  return fileList.value.slice(0, positions.length).map((file, index) => ({
+    id: file.id,
+    x: positions[index].x,
+    y: positions[index].y,
+    type: (file.file_type || 'FILE').toUpperCase(),
+    label: truncate(file.filename, 10),
+  }))
+})
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString('zh-CN')
@@ -1406,7 +1405,6 @@ async function selectKb(kb, syncRoute = true) {
   }
   if (selectionRevision !== knowledgeSelectionRevision) return
   await loadFiles(kb.id, selectionRevision)
-  loadGraphPanel()
 }
 
 async function leaveKb() {
@@ -1423,9 +1421,6 @@ async function selectTab(tabId) {
   if (!validTabs.has(tabId)) return
   activeTab.value = tabId
   await router.replace({ query: { ...route.query, kb: activeKb.value?.id, tab: tabId, file: undefined } })
-  if (tabId === 'graph') {
-    loadGraphPanel()
-  }
 }
 
 async function copyKbId() {
@@ -1452,6 +1447,7 @@ function resetRetrievalState() {
   retrievalAttempted.value = false
   retrievalRun.value = null
   retrievalError.value = ''
+  selectedSubQuestion.value = -1
 }
 
 async function runRetrievalPreview() {
@@ -1477,6 +1473,7 @@ async function runRetrievalPreview() {
       query,
       top_k: retrievalTopK.value,
       score_threshold: retrievalThreshold.value,
+      mode: retrievalMode.value,
     })
     if (
       requestRevision === retrievalRequestRevision
@@ -1748,6 +1745,56 @@ async function doDelete() {
   }
 }
 
+const reindexingIds = ref([])
+
+async function reindexFile(file) {
+  if (!activeKb.value || reindexingIds.value.includes(file.id)) return
+  reindexingIds.value = [...reindexingIds.value, file.id]
+  try {
+    await api.post(`/knowledge/bases/${activeKb.value.id}/files/${file.id}/reindex`)
+    notify(`「${file.filename}」已开始重新索引。`)
+    await loadFiles()
+    // 后台轮询完成状态（不阻塞：即使被打断导致文件卡在 processing，
+    // 按钮也能立即恢复可点，由 pollReindex 超时兜底结束轮询）
+    pollReindex(activeKb.value.id, file.id).then(async () => {
+      await loadFiles()
+      notify(`「${file.filename}」重新索引完成。`)
+    })
+  } catch (error) {
+    notify(error.response?.data?.detail || '重新索引失败，请稍后重试。')
+  } finally {
+    reindexingIds.value = reindexingIds.value.filter((id) => id !== file.id)
+  }
+}
+
+function pollReindex(kbId, fileId, timeoutMs = 10 * 60 * 1000) {
+  return new Promise((resolve) => {
+    const start = Date.now()
+    const timer = setInterval(async () => {
+      // 超时兜底：reindex 被打断（进程重启等）时文件会永久停在 processing，
+      // 无超时会让轮询永不结束、按钮永久 disabled。
+      if (Date.now() - start > timeoutMs) {
+        clearInterval(timer)
+        resolve()
+        return
+      }
+      try {
+        const files = await api.get(`/knowledge/bases/${kbId}/files`)
+        if (String(activeKb.value?.id || '') === String(kbId)) {
+          fileList.value = files
+        }
+        const target = files.find((f) => f.id === fileId)
+        if (!target) { clearInterval(timer); resolve(); return }
+        if (target.status !== 'processing' && target.status !== 'pending') {
+          clearInterval(timer); resolve(); return
+        }
+      } catch {
+        clearInterval(timer); resolve()
+      }
+    }, 2000)
+  })
+}
+
 async function applyRouteQuery() {
   const kbId = typeof route.query.kb === 'string' ? route.query.kb : ''
   const tab = typeof route.query.tab === 'string' && validTabs.has(route.query.tab) ? route.query.tab : 'files'
@@ -1758,7 +1805,6 @@ async function applyRouteQuery() {
   if (!kb) return
   activeTab.value = tab
   if (activeKb.value?.id !== kb.id) await selectKb(kb, false)
-  loadGraphPanel()
   if (fileId) {
     const file = fileList.value.find((item) => String(item.id) === fileId)
     if (file) await openPreview(file)
@@ -1777,7 +1823,6 @@ watch(() => [route.query.kb, route.query.tab, route.query.file], () => {
 onBeforeUnmount(() => {
   stopPolling()
   stopUploadClock()
-  stopGraphPolling()
   closeObjectUrl()
   if (noticeTimer) clearTimeout(noticeTimer)
 })
