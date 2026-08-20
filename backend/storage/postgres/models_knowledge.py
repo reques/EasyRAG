@@ -161,6 +161,71 @@ class KnowledgeRelation(Base):
     )
 
 
+class GraphBuildRun(Base):
+    """图谱构建运行记录（GraphRAG 阶段 5）— 从已入库 chunks 构建 Neo4j 图谱的任务状态。
+
+    status: pending / running / completed / failed
+    """
+
+    __tablename__ = "graph_build_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    extractor: Mapped[str] = mapped_column(String(64), default="llm", nullable=False)
+
+    total_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    entities_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    relations_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    entities_indexed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    relations_indexed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class GraphExtractionCache(Base):
+    """逐 chunk 图谱抽取缓存；模型或 prompt 变化会生成新的 cache_key。"""
+
+    __tablename__ = "graph_extraction_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chunk_id: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    extractor: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class EvaluationRun(Base):
     """检索评估运行（阶段 2D）— 一次命名评估的聚合指标 + 逐条明细。
 

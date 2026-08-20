@@ -163,6 +163,23 @@ class GraphCache:
             self._relations.clear()
             self._entity_relations.clear()
 
+    def clear_kb(self, kb_id: str) -> None:
+        """清空某知识库的全部缓存条目（图谱重置用）。"""
+        with self._lock:
+            self._entities = {
+                k: v for k, v in self._entities.items() if k[0] != kb_id
+            }
+            keep = [
+                (i, r) for i, r in enumerate(self._relations)
+                if r.get("kb_id") != kb_id
+            ]
+            self._relations = [r for _, r in keep]
+            rebuilt = defaultdict(list)
+            for new_idx, (_, rel) in enumerate(keep):
+                rebuilt[(rel["kb_id"], rel["source"])].append(new_idx)
+                rebuilt[(rel["kb_id"], rel["target"])].append(new_idx)
+            self._entity_relations = rebuilt
+
     @property
     def stats(self) -> Dict[str, int]:
         with self._lock:

@@ -179,7 +179,9 @@ class Orchestrator:
             # 3. 汇总
             _status("synthesize", "正在汇总结果...")
             if return_synthesize_payload:
-                # 调用方（chat_router）负责流式汇总，这里只打包 payload
+                # 调用方（chat_router）负责流式汇总，这里只打包 payload；
+                # 收尾状态 synthesize_done 由调用方在流式完成后补发，
+                # 避免"汇总完成"先于汇总内容到达前端。
                 synthesize_payload = {
                     "query": query,
                     "reports": reports,
@@ -190,7 +192,7 @@ class Orchestrator:
             else:
                 final_answer = self._synthesize(query, reports, final_inst, steps)
                 synthesize_payload = None
-            _status("synthesize_done", "汇总完成")
+                _status("synthesize_done", "汇总完成")
 
             elapsed = time.perf_counter() - start
             steps.append(f"orchestrator 完成，耗时 {elapsed:.2f}s")
