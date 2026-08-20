@@ -10,10 +10,12 @@ Chunking strategies (阶段 2A, selected by ``Settings.CHUNK_STRATEGY``):
     recursive    – recursive separator split (paragraph → sentence → word)
     markdown     – Markdown structure-aware (heading hierarchy, code blocks kept whole)
     parent_child – small child chunks for retrieval + large parent chunk as context
+    legal        – 法律条文结构感知切分（每个「第X条」一个 chunk，附章节标题）
 """
 from __future__ import annotations
 
 import io
+import re
 from typing import List, Tuple
 
 from app.core.config import get_settings
@@ -264,6 +266,61 @@ def split_parent_child(
     return pairs
 
 
+# ── 法律条文结构感知切分 ─────────────────────────────────────────────────────
+
+_LEGAL_ARTICLE_RE = re.compile(r"第[零一二三四五六七八九十百千〇0-9]+条")
+_LEGAL_BOUNDARY_RE = re.compile(r"第[零一二三四五六七八九十百千〇0-9]+(?:条|编|章|节)")
+
+
+def _looks_like_legal(text: str, min_articles: int = 20) -> bool:
+    """判断文本是否为法律条文（含大量「第X条」）。"""
+    return len(_LEGAL_ARTICLE_RE.findall(text)) >= min_articles
+
+
+def split_legal(text: str, chunk_size: int | None = None) -> List[str]:
+    """按法律条文切分：每个「第X条」一个 chunk，附所属章节标题前缀。
+
+    法律条文平均约 100 字、远小于 CHUNK_SIZE，按条切分能保证向量表示精确，
+    避免相邻条文（如买卖合同的检验期限 vs 借款合同的借款期限）被合并到同一
+    chunk 导致语义漂移。章节标题（第X编/章/节）作为 ``[章节]`` 前缀注入，
+    让条文携带合同类型等上下文参与向量匹配。
+    """
+    size = chunk_size or cfg.CHUNK_SIZE
+    text = text.strip()
+    if not text:
+        return []
+
+    matches = list(_LEGAL_BOUNDARY_RE.finditer(text))
+    article_count = sum(1 for m in matches if m.group(0).endswith("条"))
+    if article_count < 2:
+        return split_recursive(text, size)
+
+    chunks: List[str] = []
+    current_section = ""
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        seg = text[start:end].strip()
+        if not seg:
+            continue
+        token = m.group(0)
+        if token.endswith("条"):
+            body = f"[{current_section}]\n{seg}" if current_section else seg
+            if len(body) <= size:
+                chunks.append(body)
+            else:
+                # 超长条文（罕见）：递归切分，保留条文编号与章节前缀
+                prefix = f"[{current_section}]\n" if current_section else ""
+                for sub in split_recursive(seg, size):
+                    chunks.append(
+                        prefix + (sub if sub.startswith(token) else f"{token} {sub}")
+                    )
+        else:
+            # 章节标题：只更新当前章节（压缩空白），不单独成 chunk
+            current_section = " ".join(seg.split())
+    return chunks
+
+
 # ── High-level entry point ────────────────────────────────────────────────────
 
 def parse_and_chunk(
@@ -284,7 +341,7 @@ def parse_and_chunk(
 
     Returns:
         List of (text, metadata). metadata 至少含 ``{"source", "chunk_index", "strategy"}``；
-        markdown 策略额外含 ``section_path``；parent_child 策略额外含 ``parent_text``，
+        markdown/legal 策略额外含 ``section_path``；parent_child 策略额外含 ``parent_text``，
         检索命中后用 parent_text 替换返回内容以获得完整上下文。
     """
     full_text = extract_text(raw, filename)
@@ -303,6 +360,15 @@ def parse_and_chunk(
 
     elif strategy == "markdown":
         raw_chunks = split_markdown(full_text, chunk_size=chunk_size)
+        result = []
+        for i, c in enumerate(raw_chunks):
+            section = ""
+            if c.startswith("[") and "]\n" in c:
+                section = c[1:c.index("]\n")]
+            result.append((c, {**base_meta, "chunk_index": i, "section_path": section}))
+
+    elif strategy == "legal":
+        raw_chunks = split_legal(full_text, chunk_size=chunk_size)
         result = []
         for i, c in enumerate(raw_chunks):
             section = ""
@@ -344,14 +410,27 @@ def chunk_parsed_document(
         raise TypeError("chunk_parsed_document expects a ParsedDocument")
 
     base_meta = _parsed_document_metadata(document)
-    if strategy is None and document.provenance.parser_name != "local":
+    effective_strategy = strategy or cfg.CHUNK_STRATEGY
+
+    # 法律条文自动检测：含大量「第X条」时按条切分（优于结构化 block 切分，
+    # 后者会把相邻条文合并到同一 chunk，导致向量表示混杂、检索语义漂移）。
+    if effective_strategy == "legal" or (
+        strategy is None and _looks_like_legal(document.text)
+    ):
+        result = _chunk_parsed_text(
+            document.text,
+            chunk_size=chunk_size,
+            chunk_overlap=None,
+            strategy="legal",
+            base_meta=base_meta,
+        )
+    elif strategy is None and document.provenance.parser_name != "local":
         result = _chunk_structured_document(
             document,
             chunk_size=chunk_size,
             base_meta=base_meta,
         )
     else:
-        effective_strategy = strategy or cfg.CHUNK_STRATEGY
         result = _chunk_parsed_text(
             document.text,
             chunk_size=chunk_size,
@@ -411,6 +490,25 @@ def _chunk_parsed_text(
         ]
     if strategy == "markdown":
         texts = split_markdown(text, chunk_size=chunk_size)
+        chunks: List[Chunk] = []
+        for index, value in enumerate(texts):
+            section = ""
+            if value.startswith("[") and "]\n" in value:
+                section = value[1:value.index("]\n")]
+            chunks.append(
+                (
+                    value,
+                    {
+                        **base_meta,
+                        "strategy": strategy,
+                        "chunk_index": index,
+                        "section_path": section,
+                    },
+                )
+            )
+        return chunks
+    if strategy == "legal":
+        texts = split_legal(text, chunk_size=chunk_size)
         chunks: List[Chunk] = []
         for index, value in enumerate(texts):
             section = ""

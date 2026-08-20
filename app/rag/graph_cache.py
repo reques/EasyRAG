@@ -89,15 +89,18 @@ class GraphCache:
         if not allowed_ids:
             return []
         with self._lock:
-            matched = []
+            name_hits: List[Dict[str, Any]] = []
+            desc_hits: List[Dict[str, Any]] = []
             for (kb_id, name), info in self._entities.items():
                 if kb_id not in allowed_ids:
                     continue
+                desc = info.get("description", "") or ""
                 if any(kw in name or name in kw for kw in keywords):
-                    matched.append(dict(info))
-                if len(matched) >= top_n:
-                    break
-            return matched
+                    name_hits.append(dict(info))
+                elif any(kw and kw in desc for kw in keywords):
+                    desc_hits.append(dict(info))
+            # name 精确命中优先，description 命中兜底（通用：关键词可命中实体正文描述）
+            return (name_hits + desc_hits)[:top_n]
 
     def get_neighbor_relations(
         self,

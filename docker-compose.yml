@@ -1,8 +1,8 @@
-version: '3.8'
+name: easyrag
 
 services:
   # =========================================================================
-  # Milvus 向量数据库（已有）
+  # Milvus 向量数据库
   # =========================================================================
   etcd:
     container_name: milvus-etcd
@@ -63,7 +63,7 @@ services:
       - "minio-s3"
 
   # =========================================================================
-  # 阶段 1 新增：PostgreSQL — 用户/会话/知识库元数据
+  # PostgreSQL — 用户/会话/知识库元数据
   # =========================================================================
   postgres:
     container_name: easyrag-postgres
@@ -84,7 +84,7 @@ services:
       retries: 5
 
   # =========================================================================
-  # 阶段 1 新增：Redis — 缓存 / 会话 / 任务队列
+  # Redis — 缓存 / 会话 / 任务队列
   # =========================================================================
   redis:
     container_name: easyrag-redis
@@ -101,7 +101,7 @@ services:
       retries: 5
 
   # =========================================================================
-  # 阶段 1 新增：MinIO — 文件/文档对象存储
+  # MinIO — 文件/文档对象存储
   # =========================================================================
   minio:
     container_name: easyrag-minio
@@ -121,6 +121,50 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+
+  # =========================================================================
+  # MinerU — 独立文档解析服务 (GPU)
+  # 原 deploy/mineru/compose.yml 已合并到此文件
+  # =========================================================================
+  mineru-api:
+    container_name: easyrag-mineru-api
+    build:
+      context: ./deploy/mineru
+      args:
+        MINERU_VERSION: ${MINERU_VERSION:-3.4.4}
+        MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-modelscope}
+    image: easyrag/mineru-pipeline:${MINERU_VERSION:-3.4.4}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MINERU_PORT:-18000}:8000"
+    environment:
+      MINERU_MODEL_SOURCE: local
+      MINERU_API_OUTPUT_ROOT: /opt/mineru/output
+      MINERU_API_TASK_RETENTION_SECONDS: ${MINERU_TASK_RETENTION_SECONDS:-86400}
+      MINERU_API_TASK_CLEANUP_INTERVAL_SECONDS: ${MINERU_TASK_CLEANUP_INTERVAL_SECONDS:-300}
+      MINERU_API_MAX_CONCURRENT_REQUESTS: ${MINERU_MAX_CONCURRENT_REQUESTS:-1}
+      MINERU_PROCESSING_WINDOW_SIZE: ${MINERU_PROCESSING_WINDOW_SIZE:-16}
+      CUDA_VISIBLE_DEVICES: "0"
+    volumes:
+      - mineru-output:/opt/mineru/output
+    shm_size: "8gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/health > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+
+volumes:
+  mineru-output:
+    name: easyrag-mineru-output
 
 networks:
   default:

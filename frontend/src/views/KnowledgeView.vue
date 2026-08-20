@@ -242,6 +242,15 @@
                     </td>
                     <td>{{ formatDate(file.created_at) }}</td>
                     <td>
+                      <button
+                        class="kbw-icon-button"
+                        :class="{ 'is-busy': reindexingIds.includes(file.id) }"
+                        :title="reindexingIds.includes(file.id) ? '重新索引中' : '重新索引'"
+                        :disabled="reindexingIds.includes(file.id)"
+                        @click="reindexFile(file)"
+                      >
+                        <RefreshCw :size="15" :class="{ spin: reindexingIds.includes(file.id) }" />
+                      </button>
                       <button class="kbw-icon-danger" title="删除文件" @click="confirmDelete(file)">
                         <Trash2 :size="15" />
                       </button>
@@ -273,6 +282,24 @@
                 <span>问题</span>
                 <textarea v-model="retrievalQuery" rows="6" placeholder="输入一个真实问题，例如：这份文档的核心结论是什么？"></textarea>
               </label>
+              <div class="kbw-field">
+                <span>检索模式</span>
+                <div class="kbw-mode-switch">
+                  <button
+                    type="button"
+                    class="kbw-mode-btn"
+                    :class="{ 'is-active': retrievalMode === 'basic' }"
+                    @click="retrievalMode = 'basic'"
+                  >基础向量检索</button>
+                  <button
+                    type="button"
+                    class="kbw-mode-btn"
+                    :class="{ 'is-active': retrievalMode === 'enhanced' }"
+                    @click="retrievalMode = 'enhanced'"
+                  >增强检索（图谱+融合）</button>
+                </div>
+                <small v-if="retrievalMode === 'enhanced'">走查询分解 + 四路并行检索 + 图谱融合重排，相似度阈值对融合后的知识块评分生效。</small>
+              </div>
               <div class="kbw-field-grid">
                 <label class="kbw-field">
                   <span>Top K</span>
@@ -314,14 +341,14 @@
 
           <article class="kbw-panel-card kbw-result-panel">
             <div class="kbw-panel-title">
-              <div><ListFilter :size="17" /><strong>召回结果</strong></div>
+              <div><ListFilter :size="17" /><strong>{{ retrievalRun?.mode === 'enhanced' ? '增强检索结果' : '召回结果' }}</strong></div>
               <span v-if="retrievalRun">{{ retrievalRun.total }} 条 · {{ retrievalRun.elapsed_ms }} ms</span>
               <span v-else>0 条</span>
             </div>
             <div v-if="retrievalLoading" class="kbw-result-empty">
               <LoaderCircle :size="28" class="spin" />
               <strong>正在执行检索</strong>
-              <span>正在生成查询向量并从当前知识库召回内容。</span>
+              <span>{{ retrievalMode === 'enhanced' ? '正在查询分解、四路并行检索并融合重排。' : '正在生成查询向量并从当前知识库召回内容。' }}</span>
             </div>
             <div v-else-if="retrievalError" class="kbw-result-empty">
               <CircleAlert :size="28" />
@@ -329,10 +356,92 @@
               <span>{{ retrievalError }}</span>
               <button class="kbw-secondary-button" @click="runRetrievalPreview">重新测试</button>
             </div>
-            <div v-else-if="!retrievalRun?.results?.length" class="kbw-result-empty">
+            <div v-else-if="!hasRetrievalResult" class="kbw-result-empty">
               <Waypoints :size="28" />
               <strong>{{ retrievalAttempted ? '没有符合条件的召回结果' : '等待一次测试查询' }}</strong>
               <span>{{ retrievalAttempted ? '可以降低最低相似度或换一个更贴近文档内容的问题。' : '结果区将展示命中文件、分块正文、相似度、排名和耗时。' }}</span>
+            </div>
+            <div v-else-if="retrievalRun?.mode === 'enhanced'" class="kbw-enhanced-results">
+              <div v-if="retrievalRun.query_decomposition" class="kbw-decomp-card">
+                <div class="kbw-decomp-head">
+                  <strong>查询分解</strong>
+                  <span class="kbw-decomp-tags">
+                    <em>{{ retrievalRun.query_decomposition.query_type || 'unknown' }}</em>
+                    <em>{{ retrievalRun.query_decomposition.complexity || 'unknown' }}</em>
+                    <em v-if="retrievalRun.gap_rounds">缺口补充 {{ retrievalRun.gap_rounds }} 轮</em>
+                  </span>
+                </div>
+                <div v-if="retrievalRun.query_decomposition.sub_questions?.length" class="kbw-decomp-row">
+                  <span class="kbw-decomp-label">子问题</span>
+                  <ul><li v-for="(sq, si) in retrievalRun.query_decomposition.sub_questions" :key="si">{{ sq }}</li></ul>
+                </div>
+                <div v-if="retrievalRun.query_decomposition.explicit_entities?.length" class="kbw-decomp-row">
+                  <span class="kbw-decomp-label">实体</span>
+                  <span>{{ retrievalRun.query_decomposition.explicit_entities.map(e => e.name).join('、') }}</span>
+                </div>
+                <div v-if="retrievalRun.query_decomposition.relation_patterns?.length" class="kbw-decomp-row">
+                  <span class="kbw-decomp-label">关系模式</span>
+                  <span>{{ retrievalRun.query_decomposition.relation_patterns.map(r => `${r.subject} → ${r.predicate} → ${r.object}`).join('；') }}</span>
+                </div>
+              </div>
+
+              <div class="kbw-subq-tabs">
+                <button
+                  type="button"
+                  class="kbw-subq-tab"
+                  :class="{ 'is-active': selectedSubQuestion < 0 }"
+                  @click="selectedSubQuestion = -1"
+                >全部</button>
+                <button
+                  v-for="(sq, si) in (retrievalRun.query_decomposition?.sub_questions || [])"
+                  :key="si"
+                  type="button"
+                  class="kbw-subq-tab"
+                  :class="{ 'is-active': selectedSubQuestion === si }"
+                  :title="sq"
+                  @click="selectedSubQuestion = si"
+                >子问题 {{ si + 1 }}</button>
+              </div>
+
+              <div v-if="!filteredBlocks.length" class="kbw-result-empty">
+                <Waypoints :size="24" />
+                <span>该子问题下没有可展示的知识块。</span>
+              </div>
+
+              <div v-for="(block, bi) in filteredBlocks" :key="block.block_id || bi" class="kbw-block-card">
+                <header class="kbw-block-head">
+                  <strong>知识块 #{{ bi + 1 }}</strong>
+                  <span v-if="block.block_score != null">评分 {{ block.block_score }}</span>
+                </header>
+                <p v-if="block.summary" class="kbw-block-summary">{{ block.summary }}</p>
+                <div v-if="block.sub_questions?.length" class="kbw-block-relations">
+                  <span class="kbw-decomp-label">回答子问题</span>
+                  <ul>
+                    <li v-for="(sq, si) in block.sub_questions" :key="si">{{ sq }}</li>
+                  </ul>
+                </div>
+                <div v-if="block.entities?.length" class="kbw-block-entities">
+                  <span class="kbw-decomp-label">实体</span>
+                  <span>{{ block.entities.join('、') }}</span>
+                </div>
+                <div v-if="block.relations?.length" class="kbw-block-relations">
+                  <span class="kbw-decomp-label">关系</span>
+                  <ul>
+                    <li v-for="(r, ri) in block.relations" :key="ri">
+                      {{ r.source || r.subject }} --{{ r.relation || r.predicate }}--> {{ r.target || r.object }}
+                    </li>
+                  </ul>
+                </div>
+                <div v-for="(doc, di) in block.docs" :key="di" class="kbw-block-doc">
+                  <div class="kbw-block-doc-meta">
+                    <span v-if="doc.retrieval_path" class="kbw-path-tag">{{ doc.retrieval_path }}</span>
+                    <span v-if="doc.cross_path_hits > 1" class="kbw-path-tag">多路命中 ×{{ doc.cross_path_hits }}</span>
+                    <span v-if="doc.graph_entities?.length" class="kbw-path-tag">图谱实体：{{ doc.graph_entities.join('、') }}</span>
+                    <span v-if="doc.score != null" class="kbw-path-tag">相似度 {{ formatSimilarity(doc.score) }}</span>
+                  </div>
+                  <p>{{ doc.content }}</p>
+                </div>
+              </div>
             </div>
             <div v-else class="kbw-retrieval-results">
               <article v-for="hit in retrievalRun.results" :key="`${hit.rank}-${hit.file_id || hit.source || 'hit'}`" class="kbw-retrieval-hit">
@@ -368,55 +477,56 @@
             <div>
               <span class="kbw-eyebrow">KNOWLEDGE GRAPH</span>
               <h2>知识图谱</h2>
-              <p>先用真实文件目录预览图谱布局，实体与关系数据将在后端阶段接入。</p>
+              <p>实体与关系网络：颜色区分实体类型，节点大小代表连接度，点击节点查看详情。</p>
             </div>
-            <span class="kbw-module-status"><CircleDashed :size="14" /> 图谱数据待接入</span>
+            <div class="kbw-heading-actions">
+              <span v-if="graphData" class="kbw-module-status"><CheckCircle2 :size="14" /> {{ graphData.entities.length }} 实体 · {{ graphData.relations.length }} 关系</span>
+              <button type="button" class="kbw-secondary-button" @click="loadGraph"><RefreshCw :size="14" /> 刷新</button>
+            </div>
           </div>
 
           <div class="kbw-graph-layout">
             <article class="kbw-panel-card kbw-graph-canvas">
               <div class="kbw-panel-title">
-                <div><Network :size="17" /><strong>目录关系预览</strong></div>
-                <span>{{ graphPreviewNodes.length + 1 }} 个节点</span>
+                <div><Network :size="17" /><strong>实体关系图</strong></div>
               </div>
-              <div v-if="graphPreviewNodes.length" class="kbw-graph-stage">
-                <svg viewBox="0 0 680 350" role="img" aria-label="知识库与文件关系预览">
-                  <line
-                    v-for="node in graphPreviewNodes"
-                    :key="`edge-${node.id}`"
-                    x1="340" y1="175" :x2="node.x" :y2="node.y"
-                  />
-                  <g class="root-node">
-                    <circle cx="340" cy="175" r="48" />
-                    <text x="340" y="170">知识库</text>
-                    <text x="340" y="190">{{ truncate(activeKb.name, 10) }}</text>
-                  </g>
-                  <g v-for="node in graphPreviewNodes" :key="node.id" class="file-node">
-                    <circle :cx="node.x" :cy="node.y" r="34" />
-                    <text :x="node.x" :y="node.y - 4">{{ node.type }}</text>
-                    <text :x="node.x" :y="node.y + 13">{{ node.label }}</text>
-                  </g>
-                </svg>
+              <div v-if="graphLoading" class="kbw-result-empty">
+                <LoaderCircle :size="28" class="kbw-spin" />
+                <span>正在加载图谱…</span>
               </div>
-              <div v-else class="kbw-result-empty">
+              <div v-else-if="graphError" class="kbw-result-empty">
+                <CircleAlert :size="28" />
+                <strong>加载失败</strong>
+                <span>{{ graphError }}</span>
+              </div>
+              <div v-else-if="!graphData || !graphData.entities?.length" class="kbw-result-empty">
                 <Network :size="28" />
-                <strong>上传文件后显示目录关系</strong>
-                <span>实体抽取与跨文件关系将在后端图谱接口接入后展示。</span>
+                <strong>尚未抽取实体</strong>
+                <span>上传并处理文件后，系统会自动抽取实体与关系。点击右上角「刷新」重新加载。</span>
               </div>
+              <div
+                ref="graphContainer"
+                v-show="graphData && graphData.entities?.length && !graphLoading && !graphError"
+                class="kbw-graph-stage"
+              ></div>
             </article>
             <aside class="kbw-panel-card kbw-graph-sidebar">
               <div class="kbw-panel-title">
-                <div><PanelRight :size="17" /><strong>图谱概览</strong></div>
+                <div><PanelRight :size="17" /><strong>图例与详情</strong></div>
               </div>
-              <dl>
-                <div><dt>目录节点</dt><dd>{{ graphPreviewNodes.length + 1 }}</dd></div>
-                <div><dt>文件关系</dt><dd>{{ graphPreviewNodes.length }}</dd></div>
-                <div><dt>实体节点</dt><dd>—</dd></div>
-                <div><dt>跨文件关系</dt><dd>—</dd></div>
-              </dl>
-              <div class="kbw-sidebar-note">
-                <Sparkles :size="15" />
-                <p><strong>下一阶段</strong><span>接入实体、关系、置信度和来源分块。</span></p>
+              <div class="kbw-graph-legend">
+                <span v-for="(color, type) in graphTypeColors" :key="type" class="kbw-legend-item">
+                  <i :style="{ background: color }"></i>{{ type }}
+                </span>
+              </div>
+              <div v-if="graphNodeDetail" class="kbw-node-detail">
+                <strong>{{ graphNodeDetail.label }}</strong>
+                <span class="kbw-node-type" :style="{ color: entityColor(graphNodeDetail.type) }">{{ graphNodeDetail.type }}</span>
+                <p v-if="graphNodeDetail.description">{{ graphNodeDetail.description }}</p>
+              </div>
+              <div v-else class="kbw-sidebar-note">
+                <Info :size="15" />
+                <p><strong>提示</strong><span>点击实体聚焦并高亮其关联关系；拖拽旋转视角，滚轮缩放，右键平移。点击空白处复位。</span></p>
               </div>
             </aside>
           </div>
@@ -730,7 +840,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, BarChart3, Binary, Blocks, Braces, CalendarDays, CheckCircle2,
@@ -741,6 +851,7 @@ import {
   UploadCloud, Waypoints, X,
 } from 'lucide-vue-next'
 import api from '../api'
+import * as echarts from 'echarts'
 
 const route = useRoute()
 const router = useRouter()
@@ -758,6 +869,191 @@ const validTabs = new Set(tabItems.map((tab) => tab.id))
 const kbList = ref([])
 const activeKb = ref(null)
 const activeTab = ref('files')
+
+// ── 知识图谱 ──────────────────────────────────────────────────────────
+const graphData = ref(null)
+const graphLoading = ref(false)
+const graphError = ref('')
+const graphContainer = ref(null)
+const graphNodeDetail = ref(null)
+let graphChart = null
+
+const PALETTE = ['#5b8def', '#34c77b', '#f5a623', '#e45b5b', '#9b6bf0', '#2ab8c2', '#e05ba0', '#8a9b6b', '#6b8f9b', '#c2a05b', '#8d6e63', '#5c6bc0', '#26a69a', '#ec407a', '#7cb342', '#ab47bc']
+
+// 从实际图谱数据动态统计实体类型并分配颜色（通用：不预设任何领域类型）
+const graphTypeColors = computed(() => {
+  const types = []
+  const seen = new Set()
+  for (const e of (graphData.value?.entities || [])) {
+    const t = e.entity_type || 'other'
+    if (!seen.has(t)) { seen.add(t); types.push(t) }
+  }
+  const map = {}
+  types.forEach((t, i) => { map[t] = PALETTE[i % PALETTE.length] })
+  return map
+})
+
+function entityColor(type) {
+  return graphTypeColors.value[type] || '#9aa0a6'
+}
+
+async function loadGraph() {
+  const kbId = activeKb.value?.id
+  if (!kbId) return
+  graphLoading.value = true
+  graphError.value = ''
+  graphNodeDetail.value = null
+  let fetched = null
+  try {
+    fetched = await api.get(`/knowledge/bases/${kbId}/graph`, { params: { limit: 300 } })
+    graphData.value = fetched
+  } catch (e) {
+    graphError.value = e.response?.data?.detail || '图谱加载失败，请稍后重试。'
+  } finally {
+    graphLoading.value = false
+  }
+  // 等 graphLoading=false 后容器才通过 v-show 显示（否则尺寸为 0，echarts.init 失败）
+  if (fetched) {
+    await nextTick()
+    try {
+      renderGraph(fetched)
+    } catch (e) {
+      console.error('[graph] renderGraph failed:', e)
+      graphError.value = '图谱渲染失败：' + (e && e.message ? e.message : String(e))
+    }
+  }
+}
+
+function renderGraph(data) {
+  if (graphChart) {
+    if (graphChart.__resizeHandler) window.removeEventListener('resize', graphChart.__resizeHandler)
+    graphChart.dispose()
+    graphChart = null
+  }
+  const el = graphContainer.value
+  if (!el || !data) return
+  // 容器必须已有实际尺寸（v-show 尚未生效时 clientWidth/Height 为 0，echarts 会渲染空白）
+  if (el.clientWidth === 0 || el.clientHeight === 0) {
+    requestAnimationFrame(() => renderGraph(data))
+    return
+  }
+  const entities = data.entities || []
+  const relations = data.relations || []
+
+  // 计算连接度
+  const degree = {}
+  for (const r of relations) {
+    degree[r.source_entity] = (degree[r.source_entity] || 0) + 1
+    degree[r.target_entity] = (degree[r.target_entity] || 0) + 1
+  }
+
+  // 类型 → 索引（categories）
+  const typeIndex = {}
+  const typeList = []
+  for (const e of entities) {
+    const t = e.entity_type || 'other'
+    if (!(t in typeIndex)) {
+      typeIndex[t] = typeList.length
+      typeList.push(t)
+    }
+  }
+
+  const nodes = entities.map((e) => ({
+    id: e.name,
+    name: e.name,
+    value: degree[e.name] || 0,
+    category: typeIndex[e.entity_type || 'other'],
+    description: e.description || '',
+    symbolSize: 8 + Math.min(degree[e.name] || 0, 12) * 2,
+  }))
+  const links = relations.map((r) => ({
+    source: r.source_entity,
+    target: r.target_entity,
+    value: r.relation_type,
+  }))
+
+  const colors = typeList.map((_, i) => PALETTE[i % PALETTE.length])
+
+  graphChart = echarts.init(el)
+  graphChart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      formatter: (p) => {
+        if (p.dataType === 'node') {
+          const t = p.data.category !== undefined ? typeList[p.data.category] : 'other'
+          return `${p.data.name} · ${t}`
+        }
+        return p.data.value || ''
+      },
+    },
+    series: [{
+      type: 'graph',
+      layout: 'force',
+      force: { repulsion: 400, edgeLength: 120, gravity: 0.1, layoutAnimation: false },
+      data: nodes,
+      links: links,
+      categories: typeList.map((t) => ({ name: t })),
+      roam: true,
+      draggable: true,
+      focusNodeAdjacency: true,
+      color: colors,
+      label: { show: true, position: 'right', formatter: '{b}', fontSize: 10, color: '#5a5e64' },
+      lineStyle: { color: '#c3c9d1', width: 1.2, curveness: 0.15, opacity: 0.6 },
+      edgeLabel: {
+        show: true,
+        formatter: (p) => p.data.value || '',
+        fontSize: 8,
+        color: '#8b9096',
+        position: 'middle',
+      },
+      itemStyle: {
+        shadowBlur: 8,
+        shadowColor: 'rgba(0,0,0,0.25)',
+        shadowOffsetY: 3,
+        borderColor: '#ffffff',
+        borderWidth: 1.5,
+      },
+      emphasis: {
+        focus: 'adjacency',
+        lineStyle: { color: '#4348ff', width: 2.5 },
+        itemStyle: { shadowBlur: 16, shadowColor: 'rgba(67,72,255,0.5)' },
+        label: { fontSize: 12, color: '#2c2e31' },
+      },
+    }],
+  })
+
+  // 容器尺寸变化时自适应
+  const onResize = () => { if (graphChart) graphChart.resize() }
+  window.addEventListener('resize', onResize)
+  graphChart.__resizeHandler = onResize
+
+  graphChart.on('click', (params) => {
+    if (params.dataType === 'node') {
+      graphNodeDetail.value = {
+        label: params.data.name,
+        type: params.data.category !== undefined ? typeList[params.data.category] : 'other',
+        description: params.data.description,
+      }
+    } else {
+      graphNodeDetail.value = null
+    }
+  })
+}
+
+onBeforeUnmount(() => {
+  if (graphChart) {
+    if (graphChart.__resizeHandler) window.removeEventListener('resize', graphChart.__resizeHandler)
+    graphChart.dispose()
+    graphChart = null
+  }
+})
+
+// 切到图谱页时自动加载（点击 tab 或 URL 刷新初始化都会触发）。
+// 同时监听 activeKb：URL 初始化时 activeTab 先变、activeKb 后设置，
+// 只监听 activeTab 会在 activeKb 还是 null 时触发 loadGraph 而直接返回。
+watch([activeTab, () => activeKb.value?.id], ([tab, kbId]) => {
+  if (tab === 'graph' && kbId) loadGraph()
+})
 const fileList = ref([])
 const loading = ref(true)
 const filesLoading = ref(false)
@@ -807,10 +1103,12 @@ const deleteSuccess = ref('')
 const retrievalQuery = ref('')
 const retrievalTopK = ref(5)
 const retrievalThreshold = ref(0.3)
+const retrievalMode = ref('basic')
 const retrievalAttempted = ref(false)
 const retrievalLoading = ref(false)
 const retrievalRun = ref(null)
 const retrievalError = ref('')
+const selectedSubQuestion = ref(-1)  // -1 = 全部，0/1/2... = 对应子问题
 let retrievalRequestRevision = 0
 const showEvaluationSetup = ref(false)
 const moduleNotice = ref('')
@@ -888,8 +1186,28 @@ const retrievalContract = computed(() => JSON.stringify({
     query: retrievalQuery.value || '<用户问题>',
     top_k: retrievalTopK.value,
     score_threshold: retrievalThreshold.value,
+    mode: retrievalMode.value,
   },
 }, null, 2))
+
+const hasRetrievalResult = computed(() => {
+  const run = retrievalRun.value
+  if (!run) return false
+  if (run.mode === 'enhanced') return (run.knowledge_blocks?.length || 0) > 0
+  return (run.results?.length || 0) > 0
+})
+
+// 按当前选中的子问题过滤知识块（-1 = 全部）
+const filteredBlocks = computed(() => {
+  const run = retrievalRun.value
+  if (!run || run.mode !== 'enhanced') return []
+  const blocks = run.knowledge_blocks || []
+  if (selectedSubQuestion.value < 0) return blocks
+  const subQuestions = run.query_decomposition?.sub_questions || []
+  const target = subQuestions[selectedSubQuestion.value]
+  if (!target) return blocks
+  return blocks.filter((b) => (b.sub_questions || []).includes(target))
+})
 
 const graphPreviewNodes = computed(() => {
   const positions = [
@@ -1129,6 +1447,7 @@ function resetRetrievalState() {
   retrievalAttempted.value = false
   retrievalRun.value = null
   retrievalError.value = ''
+  selectedSubQuestion.value = -1
 }
 
 async function runRetrievalPreview() {
@@ -1154,6 +1473,7 @@ async function runRetrievalPreview() {
       query,
       top_k: retrievalTopK.value,
       score_threshold: retrievalThreshold.value,
+      mode: retrievalMode.value,
     })
     if (
       requestRevision === retrievalRequestRevision
@@ -1423,6 +1743,56 @@ async function doDelete() {
   } finally {
     deleting.value = false
   }
+}
+
+const reindexingIds = ref([])
+
+async function reindexFile(file) {
+  if (!activeKb.value || reindexingIds.value.includes(file.id)) return
+  reindexingIds.value = [...reindexingIds.value, file.id]
+  try {
+    await api.post(`/knowledge/bases/${activeKb.value.id}/files/${file.id}/reindex`)
+    notify(`「${file.filename}」已开始重新索引。`)
+    await loadFiles()
+    // 后台轮询完成状态（不阻塞：即使被打断导致文件卡在 processing，
+    // 按钮也能立即恢复可点，由 pollReindex 超时兜底结束轮询）
+    pollReindex(activeKb.value.id, file.id).then(async () => {
+      await loadFiles()
+      notify(`「${file.filename}」重新索引完成。`)
+    })
+  } catch (error) {
+    notify(error.response?.data?.detail || '重新索引失败，请稍后重试。')
+  } finally {
+    reindexingIds.value = reindexingIds.value.filter((id) => id !== file.id)
+  }
+}
+
+function pollReindex(kbId, fileId, timeoutMs = 10 * 60 * 1000) {
+  return new Promise((resolve) => {
+    const start = Date.now()
+    const timer = setInterval(async () => {
+      // 超时兜底：reindex 被打断（进程重启等）时文件会永久停在 processing，
+      // 无超时会让轮询永不结束、按钮永久 disabled。
+      if (Date.now() - start > timeoutMs) {
+        clearInterval(timer)
+        resolve()
+        return
+      }
+      try {
+        const files = await api.get(`/knowledge/bases/${kbId}/files`)
+        if (String(activeKb.value?.id || '') === String(kbId)) {
+          fileList.value = files
+        }
+        const target = files.find((f) => f.id === fileId)
+        if (!target) { clearInterval(timer); resolve(); return }
+        if (target.status !== 'processing' && target.status !== 'pending') {
+          clearInterval(timer); resolve(); return
+        }
+      } catch {
+        clearInterval(timer); resolve()
+      }
+    }, 2000)
+  })
 }
 
 async function applyRouteQuery() {
