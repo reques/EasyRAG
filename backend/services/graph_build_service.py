@@ -16,17 +16,24 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import math
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import get_settings
 from app.core.logger import get_logger
+from app.rag.extractors.base import ExtractionResult, GraphExtractor
 from backend.storage.postgres.manager import get_session
 from backend.storage.postgres.models_knowledge import (
     GraphBuildRun,
+    GraphExtractionCache,
     KnowledgeEntity,
     KnowledgeRelation,
 )
@@ -121,17 +128,19 @@ async def run_build(run_id: uuid.UUID) -> None:
         extractor = get_extractor(extractor_name)
 
         async def report(i: int, total: int, message: str) -> None:
-            if i % 5 == 0 or i == total:
-                async with get_session() as s:
-                    r = await s.get(GraphBuildRun, run_id)
-                    if r is not None:
-                        r.processed_chunks = i
-                        await s.commit()
+            async with get_session() as s:
+                r = await s.get(GraphBuildRun, run_id)
+                if r is not None:
+                    r.processed_chunks = i
+                    await s.commit()
 
-        results = await extractor.extract_batch(
+        results = await _extract_chunks_with_cache(
+            kb_id,
+            extractor,
             chunks,
             progress_callback=report,
             concurrency=cfg.GRAPH_EXTRACT_CONCURRENCY,
+            cache_enabled=cfg.GRAPH_EXTRACT_CACHE_ENABLED,
         )
 
         # 3) Neo4j 写入（同步 driver → 线程池）
@@ -219,6 +228,175 @@ async def _load_kb_chunks(kb_id: uuid.UUID) -> List[Tuple[str, Dict[str, str]]]:
             break
     logger.info("[graph_build] kb %s: %d chunks loaded from Milvus", kb_id, len(chunks))
     return chunks
+
+
+def _graph_cache_key(
+    kb_id: uuid.UUID,
+    extractor: GraphExtractor,
+    text: str,
+) -> str:
+    """生成知识库隔离、模型/prompt 感知的稳定内容缓存键。"""
+    payload = "\0".join((
+        str(kb_id),
+        extractor.cache_fingerprint(),
+        extractor.cache_input(text),
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+async def _load_cached_extractions(
+    kb_id: uuid.UUID,
+    cache_keys: Sequence[str],
+) -> Dict[str, ExtractionResult]:
+    if not cache_keys:
+        return {}
+    async with get_session() as session:
+        rows = (await session.execute(
+            select(GraphExtractionCache).where(
+                GraphExtractionCache.knowledge_base_id == kb_id,
+                GraphExtractionCache.cache_key.in_(list(set(cache_keys))),
+            )
+        )).scalars().all()
+    cached: Dict[str, ExtractionResult] = {}
+    for row in rows:
+        try:
+            cached[row.cache_key] = ExtractionResult.from_dict(
+                json.loads(row.result_json)
+            )
+        except Exception as exc:
+            logger.warning(
+                "[graph_build] ignoring corrupt extraction cache %s: %s",
+                row.cache_key,
+                exc,
+            )
+    return cached
+
+
+async def _store_cached_extractions(records: Sequence[Dict[str, Any]]) -> None:
+    if not records:
+        return
+    # 同一文档可能包含完全相同的 chunk；单条 upsert 语句不能重复更新同一键。
+    unique_records = {record["cache_key"]: record for record in records}
+    values = list(unique_records.values())
+    statement = pg_insert(GraphExtractionCache).values(values)
+    statement = statement.on_conflict_do_update(
+        index_elements=[GraphExtractionCache.cache_key],
+        set_={
+            "chunk_id": statement.excluded.chunk_id,
+            "content_hash": statement.excluded.content_hash,
+            "extractor": statement.excluded.extractor,
+            "model_name": statement.excluded.model_name,
+            "prompt_version": statement.excluded.prompt_version,
+            "result_json": statement.excluded.result_json,
+            "updated_at": func.now(),
+        },
+    )
+    async with get_session() as session:
+        await session.execute(statement)
+        await session.commit()
+
+
+async def _extract_chunks_with_cache(
+    kb_id: uuid.UUID,
+    extractor: GraphExtractor,
+    chunks: List[tuple],
+    *,
+    progress_callback=None,
+    concurrency: int = 4,
+    cache_enabled: bool = True,
+) -> List[ExtractionResult]:
+    """复用命中结果，只把未命中的原始 chunk 交给打包抽取器。"""
+    if not cache_enabled:
+        return await extractor.extract_batch(
+            chunks,
+            progress_callback=progress_callback,
+            concurrency=concurrency,
+        )
+
+    cache_keys = [
+        _graph_cache_key(kb_id, extractor, text)
+        for text, _meta in chunks
+    ]
+    try:
+        cached = await _load_cached_extractions(kb_id, cache_keys)
+    except Exception as exc:
+        logger.warning("[graph_build] extraction cache lookup skipped: %s", exc)
+        cached = {}
+
+    results: List[Optional[ExtractionResult]] = [None] * len(chunks)
+    missing_chunks: List[tuple] = []
+    missing_indices: List[int] = []
+    for index, (chunk, cache_key) in enumerate(zip(chunks, cache_keys)):
+        if cache_key in cached:
+            results[index] = cached[cache_key]
+        else:
+            missing_indices.append(index)
+            missing_chunks.append(chunk)
+
+    cache_hits = len(chunks) - len(missing_chunks)
+    if progress_callback and cache_hits:
+        callback_result = progress_callback(
+            cache_hits,
+            len(chunks),
+            f"复用图谱抽取缓存 {cache_hits}/{len(chunks)}",
+        )
+        if asyncio.iscoroutine(callback_result):
+            await callback_result
+
+    if missing_chunks:
+        async def report_misses(done: int, _total: int, _message: str) -> None:
+            if not progress_callback:
+                return
+            callback_result = progress_callback(
+                cache_hits + done,
+                len(chunks),
+                f"正在抽取知识图谱 {cache_hits + done}/{len(chunks)}",
+            )
+            if asyncio.iscoroutine(callback_result):
+                await callback_result
+
+        missing_results = await extractor.extract_batch(
+            missing_chunks,
+            progress_callback=report_misses,
+            concurrency=concurrency,
+        )
+        records: List[Dict[str, Any]] = []
+        for original_index, result in zip(missing_indices, missing_results):
+            results[original_index] = result
+            if not result.cacheable:
+                continue
+            text, meta = chunks[original_index]
+            cache_input = extractor.cache_input(text)
+            records.append({
+                "cache_key": cache_keys[original_index],
+                "knowledge_base_id": kb_id,
+                "chunk_id": str(meta.get("chunk_id", ""))[:512],
+                "content_hash": hashlib.sha256(
+                    cache_input.encode("utf-8")
+                ).hexdigest(),
+                "extractor": extractor.name[:64],
+                "model_name": str(extractor.model_name)[:256],
+                "prompt_version": extractor.prompt_version[:64],
+                "result_json": json.dumps(
+                    result.to_dict(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            })
+        try:
+            await _store_cached_extractions(records)
+        except Exception as exc:
+            logger.warning("[graph_build] extraction cache write skipped: %s", exc)
+
+    logger.info(
+        "[graph_build] extraction cache: %d hit(s), %d miss(es)",
+        cache_hits,
+        len(missing_chunks),
+    )
+    return [
+        result if result is not None else ExtractionResult(cacheable=False)
+        for result in results
+    ]
 
 
 def _write_neo4j(
@@ -310,6 +488,101 @@ async def _persist_pg(
         return entities_found, relations_found
 
 
+def _sanitize_graph_embedding_text(text: str) -> str:
+    """去除控制字符并统一 Unicode，降低本地 embedding 产生 NaN 的概率。"""
+    normalized = unicodedata.normalize("NFKC", str(text or ""))
+    printable = "".join(
+        character if character.isprintable() else " "
+        for character in normalized
+    )
+    return " ".join(printable.split())[:500]
+
+
+def _validate_embedding_vectors(
+    vectors: Sequence[Sequence[float]],
+    expected: int,
+) -> List[List[float]]:
+    if len(vectors) != expected:
+        raise ValueError(
+            f"embedder returned {len(vectors)} vectors for {expected} texts"
+        )
+    validated: List[List[float]] = []
+    for vector in vectors:
+        values = [float(value) for value in vector]
+        if not values or not all(math.isfinite(value) for value in values):
+            raise ValueError("embedder returned an empty or non-finite vector")
+        validated.append(values)
+    return validated
+
+
+def _embed_graph_items_with_fallback(
+    items: Sequence[Dict[str, Any]],
+    texts: Sequence[str],
+    embedder: Any,
+    *,
+    batch_size: int,
+) -> Tuple[List[Dict[str, Any]], List[List[float]]]:
+    """批量向量化；失败时二分定位，只跳过无法恢复的单条脏数据。"""
+    kept_items: List[Dict[str, Any]] = []
+    kept_vectors: List[List[float]] = []
+
+    def embed_batch(
+        batch_items: Sequence[Dict[str, Any]],
+        batch_texts: Sequence[str],
+    ) -> None:
+        try:
+            vectors = _validate_embedding_vectors(
+                embedder.embed_texts(list(batch_texts)),
+                len(batch_texts),
+            )
+        except Exception as exc:
+            if len(batch_items) > 1:
+                midpoint = len(batch_items) // 2
+                embed_batch(batch_items[:midpoint], batch_texts[:midpoint])
+                embed_batch(batch_items[midpoint:], batch_texts[midpoint:])
+                return
+
+            item = batch_items[0]
+            original_text = batch_texts[0]
+            sanitized_text = _sanitize_graph_embedding_text(original_text)
+            if sanitized_text and sanitized_text != original_text:
+                try:
+                    vectors = _validate_embedding_vectors(
+                        embedder.embed_texts([sanitized_text]),
+                        1,
+                    )
+                except Exception as retry_exc:
+                    logger.warning(
+                        "[graph_build] skip non-embeddable graph item %s (%s): %s",
+                        item.get("id", ""),
+                        item.get("kind", ""),
+                        retry_exc,
+                    )
+                    return
+                kept_items.append(dict(item))
+                kept_vectors.extend(vectors)
+                return
+
+            logger.warning(
+                "[graph_build] skip non-embeddable graph item %s (%s): %s",
+                item.get("id", ""),
+                item.get("kind", ""),
+                exc,
+            )
+            return
+
+        kept_items.extend(dict(item) for item in batch_items)
+        kept_vectors.extend(vectors)
+
+    safe_batch_size = max(1, int(batch_size))
+    for start in range(0, len(texts), safe_batch_size):
+        embed_batch(
+            items[start:start + safe_batch_size],
+            texts[start:start + safe_batch_size],
+        )
+    return kept_items, kept_vectors
+
+
 def _index_unique_graph_items(
     kb_id: str,
     results: Sequence[Any],
@@ -359,21 +632,31 @@ def _index_unique_graph_items(
     if not items:
         return 0, 0
 
-    # 批量向量化（按配置批大小）
+    # 批量向量化；单条异常不再导致整次构建在最后一步失败。
     embedder = get_embedder()
-    vectors: List[List[float]] = []
-    for start in range(0, len(texts), cfg.GRAPH_BUILD_BATCH_SIZE):
-        vectors.extend(embedder.embed_texts(
-            texts[start:start + cfg.GRAPH_BUILD_BATCH_SIZE]
-        ))
+    indexed_items, vectors = _embed_graph_items_with_fallback(
+        items,
+        texts,
+        embedder,
+        batch_size=cfg.GRAPH_BUILD_BATCH_SIZE,
+    )
+    if not indexed_items:
+        logger.warning("[graph_build] no graph items could be embedded for kb %s", kb_id)
+        return 0, 0
 
     index = get_graph_vector_index()
-    index.upsert(items, vectors)
+    index.upsert(indexed_items, vectors)
+    entities_indexed = sum(
+        1 for item in indexed_items if item.get("kind") == "entity"
+    )
+    relations_indexed = sum(
+        1 for item in indexed_items if item.get("kind") == "triple"
+    )
     logger.info(
         "[graph_build] kb %s: indexed %d entities + %d triples into Milvus",
-        kb_id, len(entities), len(triples),
+        kb_id, entities_indexed, relations_indexed,
     )
-    return len(entities), len(triples)
+    return entities_indexed, relations_indexed
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -1145,17 +1145,18 @@ async function startGraphBuild() {
 
 function startGraphPolling() {
   stopGraphPolling()
-  // 超时保护：3s × 200 = 10 分钟，防止"僵尸 running"导致无限轮询
-  const MAX_GRAPH_POLL_TICKS = 200
+  // 大型知识库可能超过 10 分钟；后台状态才是事实来源，不因前端计时停止轮询。
+  const LONG_RUNNING_NOTICE_TICKS = 200
   let ticks = 0
+  let longRunningNotified = false
   graphPollTimer = setInterval(async () => {
     ticks += 1
     await loadGraphStatus()
     if (graphStatus.run && ['completed', 'failed'].includes(graphStatus.run.status)) {
       stopGraphPolling()
-    } else if (ticks >= MAX_GRAPH_POLL_TICKS) {
-      stopGraphPolling()
-      notify('图谱构建超时（10 分钟），可能已被中断。请刷新状态后重新构建。')
+    } else if (!longRunningNotified && ticks >= LONG_RUNNING_NOTICE_TICKS) {
+      longRunningNotified = true
+      notify('图谱数据量较大，后台仍在构建；页面会继续自动刷新状态。')
     }
   }, 3000)
 }

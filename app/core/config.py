@@ -119,10 +119,14 @@ class Settings(BaseSettings):
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str = "easyrag_neo4j_secret"
     GRAPH_ENTITY_COLLECTION: str = "graph_entity_index"   # Milvus 中唯一实体/三元组的语义索引 collection
-    GRAPH_BUILD_BATCH_SIZE: int = 10       # 构建时 embedding 的批大小
+    GRAPH_BUILD_BATCH_SIZE: int = 32       # 构建时 embedding 的批大小（与 Ollama 安全批次一致）
     GRAPH_RRF_K: int = 60                  # RRF 融合常数（reciprocal rank fusion）
     GRAPH_ENTITY_TOP_K: int = 5            # 图谱召回时最多命中的实体/三元组数
-    GRAPH_EXTRACT_CONCURRENCY: int = 4     # 构建时 LLM 抽取并发数（注意 API 限流，过大易 429）
+    GRAPH_EXTRACT_CONCURRENCY: int = 8     # 构建时打包 LLM 请求并发数（遇到 429 时调低）
+    GRAPH_EXTRACT_PACK_MAX_CHARS: int = 1800   # 单次请求最多聚合的原始文本字符数
+    GRAPH_EXTRACT_PACK_MAX_CHUNKS: int = 4     # 单次请求最多聚合的原始 chunk 数
+    GRAPH_EXTRACT_MAX_TOKENS: int = 1024       # 图谱 JSON 的专用输出上限，不影响聊天
+    GRAPH_EXTRACT_CACHE_ENABLED: bool = True   # 按内容/模型/prompt 复用逐 chunk 抽取结果
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
     # 阶段 2A: 分块策略
