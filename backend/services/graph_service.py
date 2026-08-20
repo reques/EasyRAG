@@ -23,20 +23,8 @@ from app.rag.graph_cache import graph_cache
 logger = get_logger(__name__)
 cfg = get_settings()
 
-_EXTRACT_PROMPT = """从下面的文本中抽取知识图谱元素（实体与关系）。
-
-要求：
-1. 实体：名词性概念（技术、产品、人物、组织、方法等），给出 name、type（如 technology/product/person/concept）、一句话 description。
-2. 关系：实体之间的有向关系，给出 source、target、relation（如 "属于"/"使用"/"对比"/"依赖"）、一句话 description。
-3. 只抽取文本中明确表达的信息，不要臆造。实体名用原文表述。
-4. 如果没有可抽取的内容，返回空数组。
-
-严格输出 JSON（不要输出其他内容）：
-{{"entities": [{{"name": "...", "type": "...", "description": "..."}}],
-  "relations": [{{"source": "...", "target": "...", "relation": "...", "description": "..."}}]}}
-
-文本：
-{chunk}"""
+# 抽取 prompt 单一来源：app/rag/extractors/llm_extractor.py
+from app.rag.extractors import EXTRACT_PROMPT as _EXTRACT_PROMPT
 
 
 async def extract_graph_from_chunks(

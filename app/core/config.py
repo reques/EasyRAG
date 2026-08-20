@@ -114,6 +114,19 @@ class Settings(BaseSettings):
     GRAPH_ENABLED: bool = False            # 上传时是否抽取实体/关系（慢，需 LLM 调用）
     GRAPH_MAX_CHUNKS_PER_FILE: int = 30    # 单文件最多送入抽取的 chunk 数（成本控制）
     GRAPH_QUERY_TOP_ENTITIES: int = 3      # 检索增强时最多展开的实体数
+    # 阶段 5: Neo4j GraphRAG 图谱
+    NEO4J_URI: str = "bolt://localhost:7687"
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = "easyrag_neo4j_secret"
+    GRAPH_ENTITY_COLLECTION: str = "graph_entity_index"   # Milvus 中唯一实体/三元组的语义索引 collection
+    GRAPH_BUILD_BATCH_SIZE: int = 32       # 构建时 embedding 的批大小（与 Ollama 安全批次一致）
+    GRAPH_RRF_K: int = 60                  # RRF 融合常数（reciprocal rank fusion）
+    GRAPH_ENTITY_TOP_K: int = 5            # 图谱召回时最多命中的实体/三元组数
+    GRAPH_EXTRACT_CONCURRENCY: int = 8     # 构建时打包 LLM 请求并发数（遇到 429 时调低）
+    GRAPH_EXTRACT_PACK_MAX_CHARS: int = 1800   # 单次请求最多聚合的原始文本字符数
+    GRAPH_EXTRACT_PACK_MAX_CHUNKS: int = 4     # 单次请求最多聚合的原始 chunk 数
+    GRAPH_EXTRACT_MAX_TOKENS: int = 1024       # 图谱 JSON 的专用输出上限，不影响聊天
+    GRAPH_EXTRACT_CACHE_ENABLED: bool = True   # 按内容/模型/prompt 复用逐 chunk 抽取结果
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
     # 阶段 2A: 分块策略
@@ -165,7 +178,7 @@ class Settings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 20   # LangGraph recursion_limit
     MAX_PLAN_STEPS: int = 5          # max sub-tasks per plan
     SESSION_TTL: int = 3600          # seconds to keep session state
-    AGENT_MODE: Literal["auto", "single", "multi"] = "auto"  # 多智能体开关: auto=智能路由
+    AGENT_MODE: Literal["auto", "single", "multi", "deepagents"] = "auto"  # 多智能体开关: auto=智能路由; deepagents=DeepAgents 风格主Agent+SubAgent
 
     # ── Answer quality ───────────────────────────────────────────────────
     ANSWER_VALIDATION_ENABLED: bool = True

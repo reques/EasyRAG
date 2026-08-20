@@ -7,7 +7,7 @@ from time import perf_counter
 import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -373,6 +373,233 @@ async def get_kb_graph(
                 relation_type=r.relation_type, description=r.description, weight=r.weight,
             ) for r in relations],
         )
+
+
+# ── GraphRAG 阶段 5: Neo4j 图谱管理 ────────────────────────────────────────
+
+class GraphConfigResponse(BaseModel):
+    graph_enabled: bool
+    neo4j_uri: str
+    neo4j_connected: bool
+    extractors: list[str]
+    entity_collection: str
+
+
+class GraphBuildResponse(BaseModel):
+    run_id: str
+    status: str
+
+
+class GraphStatusResponse(BaseModel):
+    run: Optional[dict] = None
+    neo4j: dict = {}
+    indexed: int = 0
+    pg_entities: int = 0
+    pg_relations: int = 0
+
+
+class GraphSearchResponse(BaseModel):
+    entities: list[dict]
+    nodes: list[dict]
+    edges: list[dict]
+
+
+class GraphEntitiesResponse(BaseModel):
+    total: int
+    entities: list[dict]
+
+
+async def _require_owned_kb(kb_id: str, current_user: User):
+    """加载并校验知识库归属，返回 KnowledgeBase 或抛 404。"""
+    async with get_session() as session:
+        kb_repo = KnowledgeBaseRepository(session)
+        kb = await kb_repo.get_by_id(uuid.UUID(kb_id))
+        if not kb or kb.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Knowledge base not found")
+        return kb
+
+
+@router.get("/bases/{kb_id}/graph/config", response_model=GraphConfigResponse)
+async def get_graph_config(
+    kb_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """图谱配置：开关、Neo4j 连接状态、可用抽取器。"""
+    await _require_owned_kb(kb_id, current_user)
+    from backend.storage.neo4j.client import get_neo4j_client
+
+    try:
+        connected = get_neo4j_client().available
+    except Exception:
+        connected = False
+    return GraphConfigResponse(
+        graph_enabled=cfg.GRAPH_ENABLED,
+        neo4j_uri=cfg.NEO4J_URI,
+        neo4j_connected=connected,
+        extractors=["llm"],
+        entity_collection=cfg.GRAPH_ENTITY_COLLECTION,
+    )
+
+
+@router.post(
+    "/bases/{kb_id}/graph/build",
+    response_model=GraphBuildResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def build_kb_graph(
+    kb_id: str,
+    background_tasks: BackgroundTasks,
+    extractor: str = Form(default="llm", description="抽取器: llm"),
+    current_user: User = Depends(get_current_user),
+):
+    """从已入库 chunks 触发图谱构建（后台任务）。返回 run_id 供轮询状态。"""
+    kb = await _require_owned_kb(kb_id, current_user)
+    from backend.services.graph_build_service import create_build_run, run_build
+
+    try:
+        run_id = await create_build_run(kb.id, extractor)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    background_tasks.add_task(run_build, run_id)
+    return GraphBuildResponse(run_id=str(run_id), status="pending")
+
+
+@router.get("/bases/{kb_id}/graph/status", response_model=GraphStatusResponse)
+async def get_graph_status(
+    kb_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """图谱构建状态与统计：最新 run + Neo4j/PG/Milvus 三方计数。"""
+    kb = await _require_owned_kb(kb_id, current_user)
+    from sqlalchemy import func, select
+    from backend.services.graph_build_service import latest_build_run
+    from backend.storage.postgres.models_knowledge import (
+        KnowledgeEntity,
+        KnowledgeRelation,
+    )
+
+    run = await latest_build_run(kb.id)
+    run_dict = None
+    if run:
+        run_dict = {
+            "id": str(run.id),
+            "status": run.status,
+            "extractor": run.extractor,
+            "total_chunks": run.total_chunks,
+            "processed_chunks": run.processed_chunks,
+            "entities_found": run.entities_found,
+            "relations_found": run.relations_found,
+            "entities_indexed": run.entities_indexed,
+            "relations_indexed": run.relations_indexed,
+            "error_message": run.error_message,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        }
+
+    neo4j_stats: dict = {}
+    try:
+        from backend.storage.neo4j.client import get_neo4j_client
+
+        client = get_neo4j_client()
+        if client.available:
+            neo4j_stats = client.count_stats(str(kb.id))
+    except Exception as exc:
+        logger.warning("[graph] neo4j stats failed: %s", exc)
+
+    indexed = 0
+    try:
+        from app.rag.graph_vector_index import get_graph_vector_index
+
+        indexed = get_graph_vector_index().count(str(kb.id))
+    except Exception as exc:
+        logger.warning("[graph] milvus graph index stats failed: %s", exc)
+
+    async with get_session() as session:
+        pg_entities = (await session.execute(
+            select(func.count()).select_from(KnowledgeEntity).where(
+                KnowledgeEntity.knowledge_base_id == kb.id
+            )
+        )).scalar_one()
+        pg_relations = (await session.execute(
+            select(func.count()).select_from(KnowledgeRelation).where(
+                KnowledgeRelation.knowledge_base_id == kb.id
+            )
+        )).scalar_one()
+
+    return GraphStatusResponse(
+        run=run_dict,
+        neo4j=neo4j_stats,
+        indexed=indexed,
+        pg_entities=pg_entities,
+        pg_relations=pg_relations,
+    )
+
+
+@router.get("/bases/{kb_id}/graph/entities", response_model=GraphEntitiesResponse)
+async def list_kb_graph_entities(
+    kb_id: str,
+    q: str = Query(default="", max_length=100, description="实体名过滤关键词，空则浏览全部"),
+    limit: int = Query(default=100, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
+):
+    """知识库实体列表（浏览/点选子图检索入口）。
+
+    与子图搜索同源（Neo4j）：q 为空时返回前 limit 个实体（CONTAINS ''
+    匹配全部，按名称长度排序）；q 非空时模糊过滤。
+    """
+    kb = await _require_owned_kb(kb_id, current_user)
+    from backend.storage.neo4j.client import Neo4jUnavailableError, get_neo4j_client
+
+    try:
+        client = get_neo4j_client()
+        if not client.available:
+            raise HTTPException(status_code=503, detail="Neo4j 未连接，请先启动 neo4j 服务")
+    except Neo4jUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=f"Neo4j 未连接: {exc}")
+
+    entities = client.search_entities(str(kb.id), q, limit=limit)
+    return GraphEntitiesResponse(total=len(entities), entities=entities)
+
+
+@router.get("/bases/{kb_id}/graph/search", response_model=GraphSearchResponse)
+async def search_kb_graph(
+    kb_id: str,
+    q: str = Query(default="", max_length=100, description="实体名关键词"),
+    depth: int = Query(default=1, ge=1, le=3, description="子图扩展深度"),
+    current_user: User = Depends(get_current_user),
+):
+    """子图搜索：实体名模糊匹配 → 以首个命中实体为中心扩展子图。"""
+    kb = await _require_owned_kb(kb_id, current_user)
+    from backend.storage.neo4j.client import Neo4jUnavailableError, get_neo4j_client
+
+    try:
+        client = get_neo4j_client()
+        if not client.available:
+            raise HTTPException(status_code=503, detail="Neo4j 未连接，请先启动 neo4j 服务")
+    except Neo4jUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=f"Neo4j 未连接: {exc}")
+
+    entities = client.search_entities(str(kb.id), q, limit=10) if q else []
+    nodes: list = []
+    edges: list = []
+    if entities:
+        subgraph = client.get_subgraph(
+            str(kb.id), entities[0]["name"], depth=depth, max_nodes=60
+        )
+        nodes, edges = subgraph["nodes"], subgraph["edges"]
+    return GraphSearchResponse(entities=entities, nodes=nodes, edges=edges)
+
+
+@router.delete("/bases/{kb_id}/graph", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_kb_graph(
+    kb_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """重置图谱：清空 Neo4j 子图 + Milvus 语义索引 + PG 本体 + 内存缓存。"""
+    kb = await _require_owned_kb(kb_id, current_user)
+    from backend.services.graph_build_service import reset_kb_graph as _reset
+
+    await _reset(kb.id)
 
 
 @router.post("/bases/{kb_id}/upload", response_model=UploadResponse, status_code=status.HTTP_202_ACCEPTED)

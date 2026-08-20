@@ -20,7 +20,15 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Dict, Iterator, List, Optional, Union
 
-from openai import AsyncOpenAI, OpenAI, APITimeoutError, RateLimitError, APIConnectionError
+from openai import (
+    AsyncOpenAI,
+    OpenAI,
+    APITimeoutError,
+    RateLimitError,
+    APIConnectionError,
+    BadRequestError,
+    UnprocessableEntityError,
+)
 
 from app.core.config import get_settings
 from app.core.exceptions import LLMClientError, LLMOutputParseError, LLMTimeoutError
@@ -91,7 +99,7 @@ class LLMClient:
 
     @staticmethod
     def _parse_json(text: str) -> Any:
-        """Extract JSON from LLM output that may contain markdown fences."""
+        """Extract JSON from LLM output that may contain markdown fences or prose."""
         # Try direct parse first
         try:
             return json.loads(text.strip())
@@ -104,6 +112,17 @@ class LLMClient:
                 return json.loads(match.group(1).strip())
             except json.JSONDecodeError:
                 pass
+        # Fallback: extract the first balanced {…} or […] span.
+        # LLM 常在 JSON 前后附加解释文字，直接找最外层括号片段可救回大多数情况。
+        for open_ch, close_ch in (("{", "}"), ("[", "]")):
+            start = text.find(open_ch)
+            end = text.rfind(close_ch)
+            if start != -1 and end > start:
+                candidate = text[start:end + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
         raise LLMOutputParseError(
             f"Failed to parse JSON from LLM output: {text[:200]}"
         )
@@ -176,9 +195,36 @@ class LLMClient:
         messages: List[Dict[str, str]],
         **extra,
     ) -> Any:
-        """Async chat + JSON parse."""
-        text = await self.chat(messages, **extra)
-        return self._parse_json(text)
+        """Async chat + JSON parse.
+
+        - 默认请求 ``response_format=json_object``（模型/网关不支持时自动降级重试）；
+        - JSON 解析失败时整体重试一次（模型偶发输出非 JSON 内容）。
+        """
+        text = await self._chat_with_json_mode(messages, **extra)
+        try:
+            return self._parse_json(text)
+        except LLMOutputParseError:
+            logger.warning(
+                "[llm] JSON parse failed, retrying once (head: %s)", text[:80]
+            )
+            text = await self._chat_with_json_mode(messages, **extra)
+            return self._parse_json(text)
+
+    async def _chat_with_json_mode(
+        self,
+        messages: List[Dict[str, str]],
+        **extra,
+    ) -> str:
+        """带 ``response_format=json_object`` 请求；不支持时（400/422）去掉参数重试。"""
+        try:
+            return await self.chat(
+                messages, response_format={"type": "json_object"}, **extra
+            )
+        except (BadRequestError, UnprocessableEntityError):
+            logger.warning(
+                "[llm] response_format=json_object unsupported, retrying without it"
+            )
+            return await self.chat(messages, **extra)
 
     async def chat_stream(
         self,
@@ -204,6 +250,45 @@ class LLMClient:
                 delta = chunk.choices[0].delta.content
                 if delta:
                     yield delta
+        except APITimeoutError as exc:
+            raise LLMTimeoutError("LLM request timed out") from exc
+        except (RateLimitError, APIConnectionError) as exc:
+            raise LLMClientError(f"LLM API error: {exc}") from exc
+
+    async def chat_stream_events(
+        self,
+        messages: List[Dict[str, str]],
+        **extra,
+    ):
+        """流式事件生成器 — yield ``{"type": "content"|"thought", "text": ...}``。
+
+        - ``content``: 正式回答的增量文本（与 ``chat_stream`` 一致）。
+        - ``thought``: 模型的思考 token 增量（DeepSeek 类推理模型的
+          ``reasoning_content``）。其他模型/网关不支持时安全降级——
+          只产生 content 事件，不影响既有调用方。
+
+        用于 SSE 端点把"生成阶段"的思维链也实时推给前端，让用户看到
+        模型在最终回答前思考了什么。
+        """
+        try:
+            logger.debug("LLM stream events | model=%s | msgs=%d", self.model, len(messages))
+            stream = await self._async_client.chat.completions.create(
+                messages=messages, stream=True, **self._call_kwargs(**extra)
+            )
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                # DeepSeek 推理模型：思考 token 在 delta.reasoning_content；
+                # openai SDK 可能把它放进 model_extra，双保险取值。
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning is None:
+                    reasoning = (getattr(delta, "model_extra", None) or {}).get("reasoning_content")
+                if reasoning:
+                    yield {"type": "thought", "text": reasoning}
+                content = getattr(delta, "content", None)
+                if content:
+                    yield {"type": "content", "text": content}
         except APITimeoutError as exc:
             raise LLMTimeoutError("LLM request timed out") from exc
         except (RateLimitError, APIConnectionError) as exc:

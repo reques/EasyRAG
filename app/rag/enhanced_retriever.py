@@ -386,6 +386,22 @@ class EnhancedRetriever:
             query, decomposition, allowed_ids
         )
 
+        # ── 第 2.5 步：图谱召回（GraphRAG 阶段 5）+ RRF 融合 ────────────
+        graph_docs = self._graph_recall(query, allowed_ids)
+        if graph_docs:
+            from app.rag.rrf import rrf_fuse, rrf_normalize
+
+            graph_ranked = [self._dedup_key(d) for d in graph_docs]
+            vector_ranked = [self._dedup_key(d) for d in all_candidates]
+            fused = rrf_fuse([graph_ranked, vector_ranked], k=cfg.GRAPH_RRF_K)
+            rrf_scores = rrf_normalize(fused)
+            for d in graph_docs:
+                d.metadata["rrf_graph"] = rrf_scores.get(
+                    self._dedup_key(d), 0.0
+                )
+            seen: Set[str] = set()
+            self._merge_path_docs(all_candidates, seen, "graph", graph_docs)
+
         # ── 第 3 步：图谱感知融合重排序 ─────────────────────────────────────
         ranked = self._fusion_rerank(all_candidates, decomposition)
 
@@ -875,6 +891,85 @@ class EnhancedRetriever:
             for r in results
         ]
 
+    # ── Path E: 图谱召回 (GraphRAG 阶段 5) ─────────────────────────────────
+
+    def _graph_recall(
+        self,
+        query: str,
+        knowledge_base_ids: Sequence[str],
+    ) -> List[CandidateDoc]:
+        """Path E: Milvus 图谱语义索引召回 + Neo4j 展开 → chunk 候选。
+
+        仅当 GRAPH_ENABLED 且图谱索引/Neo4j 可用时返回非空；任何异常
+        降级为空（不阻塞主链路）。
+        """
+        if not cfg.GRAPH_ENABLED:
+            return []
+        try:
+            from app.rag.graph_retriever import get_graph_retriever
+
+            recall = get_graph_retriever().retrieve(
+                query, knowledge_base_ids, top_k=self.top_k_per_path
+            )
+        except Exception as exc:
+            logger.debug("[enhanced] Path E graph recall failed: %s", exc)
+            return []
+        if not recall["chunk_ids"]:
+            return []
+
+        fetched = self._fetch_chunks_by_ids(recall["chunk_ids"])
+        docs: List[CandidateDoc] = []
+        for item in fetched:
+            docs.append(CandidateDoc(
+                content=item["content"],
+                metadata={
+                    "source": item.get("source", ""),
+                    "knowledge_base_id": item.get("knowledge_base_id", ""),
+                    "chunk_id": item["chunk_id"],
+                    "graph_path": "neo4j",
+                },
+                score=1.0,  # 图谱候选分数由 RRF 融合决定
+                retrieval_path="graph",
+                graph_entities=[e["name"] for e in recall["entities"]],
+            ))
+        logger.info("[enhanced] Path E graph recall: %d chunk candidates", len(docs))
+        return docs
+
+    def _fetch_chunks_by_ids(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
+        """按 id 从 Milvus chunk collection 回查内容（保持传入顺序）。"""
+        if not chunk_ids:
+            return []
+        try:
+            from pymilvus import Collection, connections, utility
+
+            connections.connect(host=cfg.MILVUS_HOST, port=cfg.MILVUS_PORT)
+            if not utility.has_collection(cfg.MILVUS_COLLECTION):
+                return []
+            col = Collection(cfg.MILVUS_COLLECTION)
+            try:
+                col.load()
+            except Exception:
+                pass
+            by_id: Dict[str, Dict[str, Any]] = {}
+            for start in range(0, len(chunk_ids), 64):
+                batch = chunk_ids[start:start + 64]
+                expr = "id in [" + ", ".join(f'"{i}"' for i in batch) + "]"
+                res = col.query(
+                    expr=expr,
+                    output_fields=["id", "content", "source", "knowledge_base_id"],
+                )
+                for r in res:
+                    by_id[r["id"]] = {
+                        "chunk_id": r["id"],
+                        "content": r.get("content", ""),
+                        "source": r.get("source", ""),
+                        "knowledge_base_id": r.get("knowledge_base_id", ""),
+                    }
+            return [by_id[cid] for cid in chunk_ids if cid in by_id]
+        except Exception as exc:
+            logger.warning("[enhanced] fetch chunks by id failed: %s", exc)
+            return []
+
     # ═══════════════════════════════════════════════════════════════════════════
     # ③ 图谱感知融合重排序
     # ═══════════════════════════════════════════════════════════════════════════
@@ -902,6 +997,9 @@ class EnhancedRetriever:
 
             # ② 图谱接近度：文档关联实体到查询实体的距离
             graph_dist = self._compute_graph_proximity(doc, query_entities)
+            # GraphRAG 阶段 5：图谱召回候选注入 RRF 融合分（归一化 [0,1]）
+            if doc.metadata.get("rrf_graph") is not None:
+                graph_dist = max(graph_dist, float(doc.metadata["rrf_graph"]))
 
             # ③ 跨路共识：多路命中加成
             cross_consensus = self._compute_cross_consensus(doc)

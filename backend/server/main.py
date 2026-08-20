@@ -64,6 +64,16 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("[lifespan] minio init skipped: %s", exc)
 
+    # 清理图谱构建的孤儿运行记录（上次进程被强杀/重启时遗留的 running 状态）
+    try:
+        from backend.services.graph_build_service import mark_interrupted_runs
+
+        cleaned = await mark_interrupted_runs()
+        if cleaned:
+            logger.info("[lifespan] marked %d interrupted graph build run(s) as failed", cleaned)
+    except Exception as exc:
+        logger.warning("[lifespan] graph build run cleanup skipped: %s", exc)
+
     # MCP 外部工具服务：启动所有 enabled 的 server（失败不阻塞应用启动）
     try:
         from app.tools.mcp.manager import get_mcp_manager
