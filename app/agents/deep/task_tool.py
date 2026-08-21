@@ -6,7 +6,7 @@ SubAgent。设计参考 DeepAgents SubAgentMiddleware / Yuxi subagent_task：
 - 工具描述动态注入可用 SubAgent 名册（模型看到可选集，自动路由）
 - 子 Agent 独立 state 运行（上下文隔离），返回最终结果文本
 - 结果作为 ToolMessage 回到主 Agent，主 Agent 继续推理
-- 未知 subagent_type / 子 Agent 异常 → 抛错回主 Agent（可自我修正）
+- 未知 subagent_type → 抛错回主 Agent；子 Agent 异常 → 返回错误消息回主 Agent（可自我修正）
 """
 from __future__ import annotations
 

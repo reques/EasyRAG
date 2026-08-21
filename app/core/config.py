@@ -140,7 +140,7 @@ class Settings(BaseSettings):
 
     # Document parsing / MinerU
     # Keep MinerU behind a feature flag until the ingestion pipeline is wired to it.
-    MINERU_ENABLED: bool = False
+    MINERU_ENABLED: bool = True
     MINERU_API_URL: str = "http://127.0.0.1:18000"
     MINERU_BACKEND: str = "pipeline"
     MINERU_LANG: str = "ch"
@@ -154,6 +154,10 @@ class Settings(BaseSettings):
     # ── 增强检索 (阶段 3) ──────────────────────────────────────────────────
     # 是否启用增强检索（查询分解 × 四路并行 × 图谱融合重排 × 知识块聚类 × 迭代补充）
     ENHANCED_RETRIEVAL_ENABLED: bool = False
+    # 查询分解缓存 TTL（秒）：同一 query 在窗口内返回完全相同的子问题划分。
+    # LLM 在 temperature=0 下仍会波动（代理端点采样/路由），缓存是唯一能保证
+    # 「同一问题结果一致」的手段。默认 3600（1 小时），调大可更稳定，调小更灵敏
+    ENHANCED_DECOMPOSITION_CACHE_TTL: int = 3600
     # 迭代缺口检测：发现检索不足时自动补充检索（最多2轮）
     ENHANCED_ITERATIVE_GAP_FILLING: bool = True
     ENHANCED_MAX_GAP_ROUNDS: int = 2
