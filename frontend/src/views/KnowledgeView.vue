@@ -522,7 +522,30 @@
               <div v-if="graphNodeDetail" class="kbw-node-detail">
                 <strong>{{ graphNodeDetail.label }}</strong>
                 <span class="kbw-node-type" :style="{ color: entityColor(graphNodeDetail.type) }">{{ graphNodeDetail.type }}</span>
-                <p v-if="graphNodeDetail.description">{{ graphNodeDetail.description }}</p>
+                <p v-if="graphNodeDetail.description" class="kbw-node-desc">{{ graphNodeDetail.description }}</p>
+                <div class="kbw-node-neighbors">
+                  <div class="kbw-neighbors-head">
+                    <span>关联关系</span>
+                    <em v-if="graphNodeDetail.neighborTotal != null">{{ graphNodeDetail.neighborTotal }}</em>
+                  </div>
+                  <div v-if="graphNodeDetail.neighborsLoading" class="kbw-neighbors-state">加载中…</div>
+                  <div v-else-if="graphNodeDetail.neighborsError" class="kbw-neighbors-state is-error">{{ graphNodeDetail.neighborsError }}</div>
+                  <div v-else-if="!graphNodeDetail.neighbors?.length" class="kbw-neighbors-state">暂无关联关系</div>
+                  <ul v-else class="kbw-neighbors-list">
+                    <li
+                      v-for="(n, ni) in graphNodeDetail.neighbors"
+                      :key="ni"
+                      class="kbw-neighbor-item"
+                      :title="n.relation_description || ''"
+                      @click="focusNeighbor(n)"
+                    >
+                      <span class="kbw-neighbor-arrow" :class="n.direction">{{ n.direction === 'out' ? '→' : '←' }}</span>
+                      <span class="kbw-neighbor-rel">{{ n.relation_type }}</span>
+                      <span class="kbw-neighbor-name">{{ n.name }}</span>
+                      <span class="kbw-neighbor-type" :style="{ color: entityColor(n.entity_type) }">{{ n.entity_type }}</span>
+                    </li>
+                  </ul>
+                </div>
               </div>
               <div v-else class="kbw-sidebar-note">
                 <Info :size="15" />
@@ -905,7 +928,7 @@ async function loadGraph() {
   graphNodeDetail.value = null
   let fetched = null
   try {
-    fetched = await api.get(`/knowledge/bases/${kbId}/graph`, { params: { limit: 300 } })
+    fetched = await api.get(`/knowledge/bases/${kbId}/graph`, { limit: 300 })
     graphData.value = fetched
   } catch (e) {
     graphError.value = e.response?.data?.detail || '图谱加载失败，请稍后重试。'
@@ -1029,15 +1052,77 @@ function renderGraph(data) {
 
   graphChart.on('click', (params) => {
     if (params.dataType === 'node') {
+      clearHighlight()
       graphNodeDetail.value = {
         label: params.data.name,
         type: params.data.category !== undefined ? typeList[params.data.category] : 'other',
         description: params.data.description,
+        neighbors: null,
+        neighborTotal: 0,
+        neighborsLoading: true,
+        neighborsError: '',
       }
+      loadNeighbors(params.data.name)
     } else {
+      clearHighlight()
       graphNodeDetail.value = null
     }
   })
+}
+
+// 高亮的节点索引（点击邻居跳转时切换高亮）
+let lastHighlightedIndex = -1
+
+function clearHighlight() {
+  if (graphChart && lastHighlightedIndex >= 0) {
+    graphChart.dispatchAction({ type: 'downplay', seriesIndex: 0, dataIndex: lastHighlightedIndex })
+    lastHighlightedIndex = -1
+  }
+}
+
+// 加载选中实体的全部邻居（不受图可视化的 top-N 截断影响）
+async function loadNeighbors(name) {
+  const kbId = activeKb.value?.id
+  const detail = graphNodeDetail.value
+  if (!kbId || !detail) return
+  detail.neighborsLoading = true
+  detail.neighborsError = ''
+  try {
+    const res = await api.get(`/knowledge/bases/${kbId}/graph/neighbors`, { entity: name, limit: 50 })
+    detail.neighbors = res.neighbors || []
+    detail.neighborTotal = res.total
+  } catch (e) {
+    detail.neighborsError = e.response?.data?.detail || '关联关系加载失败'
+    detail.neighbors = []
+    detail.neighborTotal = 0
+  } finally {
+    detail.neighborsLoading = false
+  }
+}
+
+// 点击右侧栏邻居：加载该邻居的详情与它的邻居，并高亮图中的对应节点
+async function focusNeighbor(n) {
+  const kbId = activeKb.value?.id
+  if (!kbId) return
+  clearHighlight()
+  graphNodeDetail.value = {
+    label: n.name,
+    type: n.entity_type || 'other',
+    description: n.description || '',
+    neighbors: null,
+    neighborTotal: 0,
+    neighborsLoading: true,
+    neighborsError: '',
+  }
+  await loadNeighbors(n.name)
+  if (graphChart) {
+    const data = graphChart.getOption()?.series?.[0]?.data || []
+    const idx = data.findIndex((d) => d && d.name === n.name)
+    if (idx >= 0) {
+      lastHighlightedIndex = idx
+      graphChart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: idx })
+    }
+  }
 }
 
 onBeforeUnmount(() => {
