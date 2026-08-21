@@ -10,7 +10,7 @@ SubAgent。设计参考 DeepAgents SubAgentMiddleware / Yuxi subagent_task：
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from app.agents.deep.subagents import (
     get_subagent_config,
@@ -45,12 +45,18 @@ TASK_TOOL_DESCRIPTION = """把独立子任务委派给已配置的子智能体�
 """
 
 
-def build_task_tool(model=None, recursion_limit: int = 20) -> Any:
+def build_task_tool(model=None, recursion_limit: Optional[int] = None) -> Any:
     """构建 ``task`` StructuredTool（同步执行 SubAgent）。
 
     model: 测试可注入 mock（透传给子 Agent）；None = 项目真实模型。
+    recursion_limit: 子 Agent 的 LangGraph recursion_limit（None =
+    DEEP_SUBAGENT_RECURSION_LIMIT 配置）。
     """
     from langchain_core.tools import StructuredTool
+    from app.core.config import get_settings
+
+    if recursion_limit is None:
+        recursion_limit = get_settings().DEEP_SUBAGENT_RECURSION_LIMIT
 
     def _task(description: str, subagent_type: str) -> str:
         cfg = get_subagent_config(subagent_type)
@@ -63,7 +69,23 @@ def build_task_tool(model=None, recursion_limit: int = 20) -> Any:
             "[deepagents] task -> subagent=%s description=%r",
             subagent_type, description[:100],
         )
-        return run_subagent(cfg, description, model=model, recursion_limit=recursion_limit)
+        try:
+            # S3 步骤透传：主 Agent 的 SSE 回调（use_task_observers 设置）
+            # → 子 Agent 观察者（run_subagent 的 stream 循环读取）
+            from app.agents.deep.observe import get_task_observers, use_subagent_observers
+
+            on_step, on_artifact = get_task_observers() or (None, None)
+            if on_step is None and on_artifact is None:
+                return run_subagent(
+                    cfg, description, model=model, recursion_limit=recursion_limit
+                )
+            with use_subagent_observers(on_step, on_artifact):
+                return run_subagent(
+                    cfg, description, model=model, recursion_limit=recursion_limit
+                )
+        except Exception as e:
+            logger.warning("[deepagents] task -> subagent=%s failed: %s", subagent_type, e)
+            return f"子智能体执行失败: {e}"
 
     return StructuredTool.from_function(
         func=_task,

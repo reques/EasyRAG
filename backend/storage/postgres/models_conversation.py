@@ -27,6 +27,10 @@ class Conversation(Base):
     )
     # 情景记忆：长对话的增量摘要（每 10 轮由 LLM 压缩一次，注入 prompt 替代全部历史）
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 情景记忆可靠性：上次成功折叠进摘要的最后一条消息 id（含）。
+    # 摘要折叠只处理该 id 之后的新消息；LLM 失败时不推进指针，
+    # 下次触发重试同一段，避免"中间段消息从摘要里永久丢失"。
+    last_summarized_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

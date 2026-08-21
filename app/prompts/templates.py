@@ -58,7 +58,7 @@ references, not to change the topic — classify what the user is asking NOW.
 
 Return ONLY valid JSON in this exact format:
 {{
-  "intent": "<one of: knowledge_qa | tool_use | complex_task | chitchat>",
+  "intent": "<one of: knowledge_qa | tool_use | complex_task | direct | chitchat>",
   "confidence": <float 0.0-1.0>,
   "requires_retrieval": <true|false>,
   "requires_tool": <true|false>,
@@ -74,9 +74,17 @@ Intent definitions:
 - knowledge_qa  : question answerable from a stored knowledge base (laws, docs, manuals)
 - tool_use      : needs a live tool — calculation, current time, OR real-time web info
 - complex_task  : multi-step task combining retrieval AND tools
+- direct        : general-knowledge / life-advice / how-to / common-sense / writing question
+                  answerable from the model's own knowledge WITHOUT any tool or
+                  knowledge base (e.g. "吃坏肚子怎么办", "如何做红烧肉", "什么是光合作用")
 - chitchat      : greeting, thanks, small talk with no factual ask
 
 CRITICAL routing rules:
+- 常识/生活建议/健康/科普/做法/写作类问题（如"在餐馆吃坏肚子怎么办""如何做红烧肉"
+  "什么是光合作用""帮我写一封辞职信"）→ direct，requires_retrieval=false、
+  requires_tool=false。不要因为"可能查得到"就调 web_search。
+- Only use web_search for genuinely live/real-time data: weather, news, stock prices,
+  exchange rates, currency conversion, current time, today's events. 一般知识性问题不要联网。
 - Weather, news, stock prices, exchange rates, "今天/现在/最新" real-time facts → tool_use + web_search, requires_retrieval=false. NEVER route these to knowledge_qa just because a KB exists.
 - "today/yesterday/tomorrow" + a topic → almost always real-time → tool_use + web_search.
 - Only use knowledge_qa when the user asks about content that plausibly lives in uploaded documents (法律条文, 公司文档, 产品手册).
@@ -111,6 +119,9 @@ REACT_REASONING = PromptTemplate(
 
 可用工具:
 {tools}
+
+对话历史（最近，可能为空）:
+{history}
 
 过往观察（按时间顺序）:
 {observations}

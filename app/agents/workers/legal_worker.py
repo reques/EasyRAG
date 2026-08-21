@@ -32,6 +32,11 @@ class LegalWorker(BaseWorker):
 
             messages = [
                 {"role": "system", "content": self.persona},
+            ]
+            history_msg = self._history_context_message(brief)
+            if history_msg:
+                messages.append(history_msg)
+            messages.append(
                 {
                     "role": "user",
                     "content": (
@@ -42,7 +47,7 @@ class LegalWorker(BaseWorker):
                         f"请完成上述法律相关任务。"
                     ),
                 },
-            ]
+            )
 
             answer = self._chat(messages, temperature=0.2, max_tokens=8192)
             steps.append(f"LLM 生成完成，回答长度 {len(answer)} 字符")

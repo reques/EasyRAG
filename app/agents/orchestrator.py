@@ -83,6 +83,11 @@ class Orchestrator:
 3. task_id 格式为 task-N（N 从 1 开始）
 4. execution_mode: 子任务间无依赖用 parallel，有依赖用 sequential
 5. final_instruction 说明如何整合结果（如"综合法律条文和计算脚本给出完整方案"）
+6. 用户查询可能是追问（如"那第二个呢"），必须结合对话历史理解其真实意图，
+   并把历史中已明确的信息体现在子任务 goal 里（子任务必须自包含）
+
+对话历史（最近，可能为空）：
+{history}
 
 用户查询：{query}"""
 
@@ -160,6 +165,8 @@ class Orchestrator:
             for brief in briefs:
                 brief.knowledge_base_ids = authorised_ids
                 brief.knowledge_catalog = authorised_catalog
+                # P1: 子任务携带最近对话，Worker 才能理解指代/追问
+                brief.history = list(history or [])
 
             # 拆解完成 → 通知前端渲染侧边任务进度面板的待办清单
             if tasks_callback:
@@ -186,11 +193,12 @@ class Orchestrator:
                     "query": query,
                     "reports": reports,
                     "final_inst": final_inst,
+                    "history": history or [],
                 }
                 final_answer = ""  # 由调用方流式生成
                 steps.append("跳过内部汇总，交由调用方流式生成")
             else:
-                final_answer = self._synthesize(query, reports, final_inst, steps)
+                final_answer = self._synthesize(query, reports, final_inst, steps, history)
                 synthesize_payload = None
                 _status("synthesize_done", "汇总完成")
 
@@ -262,6 +270,7 @@ class Orchestrator:
     ) -> tuple[List[TaskBrief], str, str]:
         """LLM 拆解查询为 TaskBrief 列表。"""
         from app.skills.context import get_active_skill_prompt
+        from app.graph.nodes import _format_history_for_prompt
 
         skill_prompt = get_active_skill_prompt()
         system_prompt = "你是一个任务拆解专家，输出严格 JSON。"
@@ -269,7 +278,10 @@ class Orchestrator:
             system_prompt += "\n\n" + skill_prompt
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": self._DECOMPOSE_PROMPT.format(query=query)},
+            {"role": "user", "content": self._DECOMPOSE_PROMPT.format(
+                history=_format_history_for_prompt(history),
+                query=query,
+            )},
         ]
 
         try:
@@ -481,8 +493,11 @@ class Orchestrator:
         reports: List[WorkerReport],
         final_inst: str,
         steps: List[str],
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """汇总各 Worker 产出为最终回答。"""
+        from app.graph.nodes import _format_history_for_prompt
+
         # 单任务成功直接返回，不二次加工
         if len(reports) == 1 and reports[0].ok():
             steps.append("单任务成功，直接返回")
@@ -499,6 +514,8 @@ class Orchestrator:
             return "所有子任务执行失败，无法生成回答。"
 
         prompt = (
+            f"对话历史（最近，供理解指代与追问）:\n"
+            f"{_format_history_for_prompt(history)}\n\n"
             f"用户原始查询：{query}\n\n"
             f"各子任务产出：\n{combined}\n\n"
             f"汇总要求：{final_inst or '综合各子任务结果，给出完整、连贯的回答。'}"

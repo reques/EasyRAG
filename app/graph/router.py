@@ -13,6 +13,7 @@ logger = get_logger(__name__)
 cfg = get_settings()
 
 # Node name constants
+QUERY_REWRITE       = "query_rewrite"
 INTENT_RECOGNITION  = "intent_recognition"
 TASK_PLANNING       = "task_planning"
 KNOWLEDGE_RETRIEVAL = "knowledge_retrieval"
@@ -41,6 +42,8 @@ def route_after_intent(state: AgentState) -> str:
         return TOOL_SELECTION
     if intent == "knowledge_qa":
         return KNOWLEDGE_RETRIEVAL
+    if intent == "direct":
+        return ANSWER_GENERATION  # 直接回答（快速路径）：不检索、不调工具
     return ANSWER_GENERATION  # chitchat / unknown
 
 
@@ -91,9 +94,15 @@ def route_after_tool_execution(state: AgentState) -> str:
 
 
 def route_after_generation(state: AgentState) -> str:
-    """After generation: error -> fallback, else validate."""
+    """After generation: error -> fallback, else validate.
+
+    direct（快速路径）回答是简单常识问题，跳过校验环节直接结束，
+    省一次 LLM 调用；其余路径保持原有校验/重生成逻辑。
+    """
     if state.get("error_message") or not state.get("draft_answer"):
         return FALLBACK_HANDLER
+    if state.get("intent") == "direct":
+        return END
     return ANSWER_VALIDATION
 
 

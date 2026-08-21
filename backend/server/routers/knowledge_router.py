@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -19,6 +19,7 @@ from backend.services.knowledge_service import (
     add_file_record,
     list_kb_files,
     update_file_status,
+    update_knowledge_base,
 )
 from backend.repositories.knowledge_repository import (
     KnowledgeBaseRepository,
@@ -38,6 +39,19 @@ router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 class KBCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=256)
     description: Optional[str] = Field(None, max_length=1024)
+
+
+class KBUpdateRequest(BaseModel):
+    """更新知识库 — name/description 至少提供一个(未提供的字段保持不变)。"""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=256)
+    description: Optional[str] = Field(None, max_length=1024)
+
+    @model_validator(mode="after")
+    def check_at_least_one(self) -> "KBUpdateRequest":
+        if self.name is None and self.description is None:
+            raise ValueError("At least one of name or description must be provided")
+        return self
 
 
 class KBResponse(BaseModel):
@@ -165,6 +179,44 @@ async def list_kbs(current_user: User = Depends(get_current_user)):
             )
             for kb in kbs
         ]
+
+
+@router.patch("/bases/{kb_id}", response_model=KBResponse)
+async def update_kb(
+    kb_id: str,
+    req: KBUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """更新知识库的名称/描述(只更新请求中提供的字段)。"""
+    async with get_session() as session:
+        repo = KnowledgeBaseRepository(session)
+        kb = await repo.get_by_id(uuid.UUID(kb_id))
+        if not kb or kb.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+        if req.name is not None and req.name != kb.name:
+            existing = await repo.get_by_name(req.name, current_user.id)
+            if existing is not None and existing.id != kb.id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Knowledge base '{req.name}' already exists",
+                )
+
+        await update_knowledge_base(
+            session,
+            kb,
+            name=req.name,
+            description=req.description,
+        )
+        await session.commit()
+        await session.refresh(kb)
+        return KBResponse(
+            id=str(kb.id),
+            name=kb.name,
+            description=kb.description,
+            collection_name=kb.collection_name,
+            created_at=kb.created_at.isoformat() if kb.created_at else "",
+        )
 
 
 @router.get("/bases/{kb_id}/files", response_model=list[FileResponse])

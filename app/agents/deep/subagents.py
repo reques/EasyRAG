@@ -40,12 +40,13 @@ DEFAULT_SUBAGENTS: List[SubAgentConfig] = [
         system_prompt=(
             "你是一名资深研究助理。你的职责是围绕任务目标进行资料搜索与深入研究。\n"
             "规则：\n"
-            "1. 需要外部信息时优先使用 web_search 工具检索，不要编造事实。\n"
+            "1. 需要外部信息时优先使用 web_search 工具检索，不要编造事实；\n"
+            "   企业内部资料优先使用 kb_search 检索知识库。\n"
             "2. 检索后归纳关键结论，标注来源。\n"
             "3. 最终用中文输出结构化研究结果（要点列表 + 简短总结），"
             "不要提及工具调用过程，直接给结论。"
         ),
-        tools=("web_search", "text_tool", "datetime_tool"),
+        tools=("web_search", "kb_search", "text_tool", "datetime_tool"),
     ),
     SubAgentConfig(
         name="coding-agent",
@@ -62,34 +63,65 @@ DEFAULT_SUBAGENTS: List[SubAgentConfig] = [
 ]
 
 
-def _load_subagents_file(path: Optional[str]) -> Optional[List[Dict[str, Any]]]:
-    """从 JSON/YAML 文件读取 SubAgent 配置（可选覆盖）。"""
-    if not path or not os.path.isfile(path):
+def _load_subagents_file(path: str) -> Optional[List[Dict[str, Any]]]:
+    """从 JSON/YAML 文件读取 SubAgent 配置（可选覆盖）。
+
+    健壮性（2026-08-21, S2 修复）：文件不存在 / 解析失败 / 内容为空 →
+    返回 None 并告警，调用方回退内置默认，不因坏配置崩启动。
+    条目校验：缺少 name 或 name 为空 → 跳过（避免注册无名子智能体）。
+    """
+    if not path:
         return None
-    import json
-
+    if not os.path.isfile(path):
+        logger.warning("[deepagents] DEEP_SUBAGENTS_FILE not found: %s (fallback to builtin)", path)
+        return None
     try:
-        import yaml  # type: ignore
+        import json
 
-        loader = yaml.safe_load
-    except ImportError:
-        loader = None
+        try:
+            import yaml  # type: ignore
 
-    text = open(path, encoding="utf-8").read()
-    data = None
-    if path.endswith((".yaml", ".yml")) and loader:
-        data = loader(text)
-    else:
-        data = json.loads(text)
-    if isinstance(data, dict):
-        data = data.get("subagents", [])
-    return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else None
+            loader = yaml.safe_load
+        except ImportError:
+            loader = None
+
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        data = None
+        if path.endswith((".yaml", ".yml")) and loader:
+            data = loader(text)
+        else:
+            data = json.loads(text)
+        if isinstance(data, dict):
+            data = data.get("subagents", [])
+        if not isinstance(data, list):
+            logger.warning(
+                "[deepagents] DEEP_SUBAGENTS_FILE %s has no subagents list (fallback to builtin)",
+                path,
+            )
+            return None
+        items = []
+        for d in data:
+            if not isinstance(d, dict):
+                continue
+            name = str(d.get("name", "") or "").strip()
+            if not name:
+                logger.warning("[deepagents] skip subagent entry without name in %s", path)
+                continue
+            items.append(d)
+        return items if items else None
+    except Exception as exc:
+        logger.warning(
+            "[deepagents] failed to load DEEP_SUBAGENTS_FILE %s: %s (fallback to builtin)",
+            path, exc,
+        )
+        return None
 
 
 def load_subagents() -> List[SubAgentConfig]:
     """加载 SubAgent 配置：外部文件（可选）→ 内置默认。"""
     cfg = get_settings()
-    override = _load_subagents_file(getattr(cfg, "DEEP_SUBAGENTS_FILE", None))
+    override = _load_subagents_file(cfg.DEEP_SUBAGENTS_FILE)
     if override:
         configs = []
         for item in override:
@@ -101,7 +133,9 @@ def load_subagents() -> List[SubAgentConfig]:
                     tools=tuple(str(t) for t in item.get("tools", [])),
                 )
             )
-        logger.info("[deepagents] loaded %d subagents from %s", len(configs), cfg.DEEP_SUBAGENTS_FILE)
+        logger.info(
+            "[deepagents] loaded %d subagents from %s", len(configs), cfg.DEEP_SUBAGENTS_FILE
+        )
         return configs
     return list(DEFAULT_SUBAGENTS)
 
@@ -177,13 +211,66 @@ def run_subagent(
         task_description: 委派的任务描述（含目标/上下文/期望输出）。
         model: 测试可注入 mock；None = 项目配置的真实模型。
         recursion_limit: langgraph recursion_limit。
+
+    2026-08-21（S3）：改为 ``agent.stream`` 循环执行。有请求级观察者
+    （``use_subagent_observers`` 设置）时，把子 Agent 的推理/工具调用/
+    工具返回步骤以 ``{subagent_name}/step`` 形式透传给 SSE 回调；无观察者
+    时行为与原来一致（跳过解析，开销不变）。
     """
+    from app.agents.deep.observe import get_subagent_observers
+
     agent = build_subagent(config, model=model)
-    result = agent.invoke(
+    on_step, on_artifact = get_subagent_observers() or (None, None)
+    final_state = None
+    for chunk in agent.stream(
         {"messages": [("user", task_description)]},
         config={"recursion_limit": recursion_limit},
-    )
-    messages = result.get("messages") or []
+        stream_mode="values",
+    ):
+        final_state = chunk
+        if on_step is None and on_artifact is None:
+            continue
+        msgs = chunk.get("messages") or []
+        if not msgs:
+            continue
+        last = msgs[-1]
+        mtype = getattr(last, "type", "")
+        tc = getattr(last, "tool_calls", None)
+        if tc:
+            tool_name = tc[0].get("name", "")
+            # act and reasoning：思考内容作为独立 reason 步骤透出
+            thought = str(getattr(last, "content", "") or "").strip()
+            _thought = " ".join(thought.split())[:200]
+            if len(thought) > 200:
+                _thought += "…"
+            if on_step:
+                if _thought:
+                    on_step(f"{config.name}/reason", _thought)
+                _args = tc[0].get("args") or {}
+                try:
+                    import json
+                    _args_text = json.dumps(_args, ensure_ascii=False)
+                except Exception:
+                    _args_text = str(_args)
+                _args_short = " ".join(_args_text.split())[:120]
+                if len(_args_text) > 120:
+                    _args_short += "…"
+                on_step(
+                    f"{config.name}/tool",
+                    f"调用 {tool_name} {_args_short}".rstrip(),
+                )
+            if on_artifact:
+                on_artifact(
+                    "thought", f"{config.name}/reason", "子智能体推理", _thought
+                )
+        elif mtype == "tool":
+            t_content = str(getattr(last, "content", "") or "")
+            if on_step:
+                on_step(f"{config.name}/tool_done", f"工具返回: {t_content[:120]}")
+        elif mtype == "ai" and getattr(last, "content", ""):
+            if on_step:
+                on_step(f"{config.name}/generate", "子智能体生成回答中...")
+    messages = (final_state or {}).get("messages") or []
     if not messages:
         return "（子智能体未返回任何内容）"
     last = messages[-1]

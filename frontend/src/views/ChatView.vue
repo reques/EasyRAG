@@ -40,20 +40,27 @@
           <div class="message-body">
             <!-- AI 消息时间分隔条: 首条消息 / 距上一条超过 10 分钟时, 居中显示在消息上方 -->
             <div v-if="msg.role === 'assistant' && msg.time && shouldShowTimeSeparator(i)" class="message-time-separator">{{ msg.time }}</div>
-            <!-- 思考过程：Codex 风格活动时间线，绑定在该条消息上，渲染在答案上方，
-                 按实际走的节点（意图/检索/工具/推理/生成）实时流转，不被下一轮覆盖 -->
+            <!-- 操作流（Cursor/Copilot 风格：图标+英文动词+对象），绑定在该条消息上，
+                 渲染在答案上方，按实际走的节点（意图/检索/工具/推理/生成）实时流转，
+                 不被下一轮覆盖 -->
             <AgentActivity
               v-if="msg.steps && msg.steps.length"
               :steps="msg.steps"
               :artifacts="msg.artifacts"
               :running="msg.stepsLoading"
               :error="msg.error || ''"
-              v-model:expanded="msg.stepsExpanded"
             />
-            <div v-if="msg.role === 'user' && msg.skills?.length" class="message-skill-strip">
+            <div v-if="msg.role === 'user' && (msg.skills?.length || msg.deepResearch)" class="message-skill-strip">
+              <span v-if="msg.deepResearch" class="deep-research-chip">
+                <Sparkles :size="11" /> 深度研究
+              </span>
               <span v-for="skill in msg.skills" :key="skill.id" class="message-skill-chip">
                 <WandSparkles :size="11" /> {{ skill.name }}
               </span>
+            </div>
+            <!-- 被终止的一轮：提示已停止且未保存（后端已删除该轮记录） -->
+            <div v-if="msg.stopped" class="message-stopped-note">
+              <Square :size="11" /> 已停止生成 · 本轮对话未保存
             </div>
             <div class="message-text" v-html="renderContent(msg.content)"></div>
             <!-- 知识库 / 检索引用块 -->
@@ -78,10 +85,11 @@
                 </li>
               </ol>
             </div>
-            <div v-if="msg.meta && (msg.meta.intent || msg.meta.elapsed || msg.meta.modelName || msg.meta.skillNames?.length)" class="message-meta">
+            <div v-if="msg.meta && (msg.meta.agentMode || msg.meta.intent || msg.meta.elapsed || msg.meta.modelName || msg.meta.skillNames?.length)" class="message-meta">
+              <span v-if="msg.meta.agentMode" class="message-mode-badge" :class="`mode-${msg.meta.agentMode}`">{{ modeLabel(msg.meta.agentMode) }}</span>
               <span v-if="msg.meta.modelName">模型: {{ msg.meta.modelName }}</span>
               <span v-if="msg.meta.skillNames?.length">Skill: {{ msg.meta.skillNames.join('、') }}</span>
-              <span v-if="msg.meta.intent">意图: {{ msg.meta.intent }}</span>
+              <span v-if="msg.meta.intent">意图: {{ intentLabel(msg.meta.intent) }}</span>
               <span v-if="msg.meta.elapsed">耗时: {{ msg.meta.elapsed }}s</span>
             </div>
           </div>
@@ -224,9 +232,27 @@
             </div>
           </div>
           </div>
-          <button @click="send" :disabled="!input.trim() || sending || !selectedModelId" class="btn-send" title="发送">
-            <ArrowUp :size="16" />
-          </button>
+          <!-- 右侧按钮组：深度研究（紧贴发送按钮左侧）+ 停止/发送 -->
+          <div class="composer-send-group">
+            <button
+              type="button"
+              class="deep-research-toggle"
+              :class="{ active: deepResearch }"
+              :disabled="sending"
+              @click="deepResearch = !deepResearch"
+              :title="deepResearch ? '关闭深度研究（恢复自动模式）' : '开启深度研究：由主 Agent 调度研究子智能体，多步检索与推理，回答更深入'"
+            >
+              <Sparkles :size="13" :class="{ 'is-on': deepResearch }" />
+              <span>深度研究</span>
+            </button>
+            <!-- 生成中显示"停止"按钮：终止当前对话轮（被终止的一轮不保存到记录） -->
+            <button v-if="sending" type="button" class="btn-send btn-stop" @click="stopGeneration" title="停止生成">
+              <Square :size="16" />
+            </button>
+            <button v-else @click="send" :disabled="!input.trim() || sending || !selectedModelId" class="btn-send" title="发送">
+              <ArrowUp :size="16" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -529,6 +555,8 @@ import {
   BookOpen,
   CheckCircle2,
   ChevronDown,
+  Square,
+  Sparkles,
   ChevronRight,
   Cloud,
   Copy,
@@ -561,6 +589,30 @@ function renderContent(text) {
   )
 }
 
+// 意图 → 中文展示名（与后端 intent_done 步骤文案保持一致）
+const INTENT_LABELS = {
+  knowledge_qa: '知识库问答',
+  tool_use: '联网/工具查询',
+  complex_task: '复杂任务',
+  direct: '直接回答',
+  chitchat: '闲聊',
+  multi_agent: '多智能体',
+  deepagents: '智能体',
+}
+function intentLabel(intent) {
+  return INTENT_LABELS[intent] || intent
+}
+
+// Agent 路径徽标：本轮实际走了哪条执行链路
+const MODE_LABELS = {
+  deepagents: 'DeepAgents',
+  multi: '多智能体',
+  single: '单 Agent',
+}
+function modeLabel(mode) {
+  return MODE_LABELS[mode] || mode || ''
+}
+
 const chatStore = useChatStore()
 const router = useRouter()
 const messages = ref([])
@@ -575,6 +627,10 @@ function goToSource(s) {
 
 const input = ref('')
 const sending = ref(false)
+// 当前轮请求的 AbortController（"停止生成"用；终止的轮次不保存到记录）
+let currentAbort = null
+// 深度研究开关：选中后本轮请求走 DeepAgents 工作流（deep_research=true）
+const deepResearch = ref(false)
 const conversationId = ref(null)
 const msgContainer = ref(null)
 const inputEl = ref(null)
@@ -1134,7 +1190,8 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         content: m.content,
         sources: m.meta?.sources || [],
         skills: m.meta?.skills || [],
-        meta: (m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.skills?.length) ? {
+        meta: (m.meta?.agent_mode || m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.skills?.length) ? {
+          agentMode: m.meta?.agent_mode || '',
           intent: m.meta?.intent || '',
           modelName: m.meta?.model_name || '',
           runId: m.meta?.run_id || '',
@@ -1184,12 +1241,15 @@ async function send() {
   input.value = ''
   resetInputHeight()
   sending.value = true
+  // 停止生成：终止当前对话轮（被终止的一轮后端不保存到记录）
+  currentAbort = new AbortController()
 
   const userTs = Date.now()
   messages.value.push({
     role: 'user',
     content: text,
     skills: requestSkills,
+    deepResearch: deepResearch.value,
     time: formatTime(new Date(userTs).toISOString()),
     ts: userTs,
     enter: true, // 新消息进入动画（历史加载不带动画）
@@ -1230,7 +1290,8 @@ async function send() {
       conversation_id: conversationId.value,
       model_id: selectedModelId.value,
       skill_ids: requestSkills.map(skill => skill.id),
-    }, (ev) => {
+      deep_research: deepResearch.value,
+    }, { signal: currentAbort.signal }, (ev) => {
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
         const m = messages.value[msgIndex]
@@ -1238,6 +1299,7 @@ async function send() {
           ...m,
           meta: {
             ...(m.meta || {}),
+            agentMode: ev.agent_mode || m.meta?.agentMode || '',
             runId: ev.run_id || m.meta?.runId || '',
             modelName: ev.model_name || m.meta?.modelName || '',
             skillNames: (ev.skills || requestSkills).map(skill => skill.name),
@@ -1335,6 +1397,7 @@ async function send() {
           sources: ev.sources || [],
           meta: {
             intent: ev.intent,
+            agentMode: ev.agent_mode || m.meta?.agentMode || '',
             elapsed: ev.elapsed_seconds,
             runId: ev.run_id || m.meta?.runId || '',
             modelName: ev.model_name || m.meta?.modelName || '',
@@ -1365,17 +1428,27 @@ async function send() {
     await chatStore.refreshAfterSend(conversationId.value)
   } catch (e) {
     const m = messages.value[msgIndex]
+    // 停止生成：AbortError 属正常终止（后端不保存本轮），非错误
+    const aborted = e && (e.name === 'AbortError' || /abort/i.test(String(e.message || '')))
     messages.value[msgIndex] = {
       ...m,
-      content: m.content || `❌ 请求失败: ${e.message}`,
+      content: aborted ? (m.content || '') : (m.content || `❌ 请求失败: ${e.message}`),
+      stopped: aborted || undefined,
       stepsLoading: false,
-      error: e.message,
+      error: aborted ? undefined : e.message,
     }
   } finally {
     sending.value = false
+    if (currentAbort) { currentAbort = null }
     scrollBottom()
     nextTick(() => inputEl.value?.focus())
   }
+}
+
+// 停止生成：终止当前对话轮。后端收到客户端断开后会删除该轮记录
+// （用户消息 + 新建空会话），前端本地消息标记 stopped 表示"已停止"。
+function stopGeneration() {
+  if (currentAbort) currentAbort.abort()
 }
 
 onActivated(() => {

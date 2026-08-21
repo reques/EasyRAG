@@ -36,6 +36,20 @@ async def create_knowledge_base(
     return kb
 
 
+async def update_knowledge_base(
+    session: AsyncSession,
+    kb: KnowledgeBase,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+) -> KnowledgeBase:
+    """更新知识库名称/描述 — 仅更新非 None 字段, 返回同一实例。"""
+    if name is not None:
+        kb.name = name
+    if description is not None:
+        kb.description = description
+    return kb
+
+
 async def add_file_record(
     session: AsyncSession,
     kb_id: uuid.UUID,

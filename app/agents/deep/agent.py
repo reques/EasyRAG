@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from app.agents.deep.subagents import subagents_prompt
 from app.agents.deep.task_tool import build_task_tool, task_system_prompt
 from app.agents.deep.tools import registry_to_langchain_tools
+from app.core.config import get_settings
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -40,13 +41,17 @@ MAIN_SYSTEM_PROMPT = """你是一名智能助理，运行在 EasyRAG 企业知�
 _main_agent_cache: Optional[Any] = None
 
 
-def build_main_agent(model=None, subagent_model=None, recursion_limit: int = 20):
+def build_main_agent(
+    model=None,
+    subagent_model=None,
+    recursion_limit: Optional[int] = None,
+):
     """构建主 Agent compiled graph。
 
     model: 测试可注入 mock；subagent_model: task 委派的子 Agent 模型
     （测试隔离用；None 回退到 model/项目配置）。注意：任务委派工具的
-    recursion_limit 在构建时绑定；主 Agent 自身 recursion_limit 由调用方
-    invoke 时传入。
+    recursion_limit 在构建时绑定（None = DEEP_SUBAGENT_RECURSION_LIMIT）；
+    主 Agent 自身 recursion_limit 由调用方 invoke 时传入。
     """
     from langgraph.prebuilt import create_react_agent
 
@@ -57,6 +62,8 @@ def build_main_agent(model=None, subagent_model=None, recursion_limit: int = 20)
         return _main_agent_cache
     if model is None:
         model = get_langchain_model()
+    if recursion_limit is None:
+        recursion_limit = get_settings().DEEP_SUBAGENT_RECURSION_LIMIT
     tools = registry_to_langchain_tools()  # 全量（技能白名单生效）
     tools.append(build_task_tool(model=subagent_model or model, recursion_limit=recursion_limit))
     prompt = MAIN_SYSTEM_PROMPT.format(subagents_section=task_system_prompt())

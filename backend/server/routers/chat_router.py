@@ -72,6 +72,9 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None  # None = 创建新会话
     model_id: Optional[str] = Field(default=None, max_length=64)
     skill_ids: list[str] = Field(default_factory=list, max_length=3)
+    # 2026-08-21：深度研究开关 — 用户显式选择时强制走 DeepAgents 工作流
+    # （主 Agent + SubAgent），不依赖全局 AGENT_MODE 配置
+    deep_research: bool = False
 
 
 class ChatResponse(BaseModel):
@@ -742,11 +745,19 @@ async def send_message_stream(
     # first event can expose a durable run_id to the client.
     from app.services.agent_service import AgentService
 
-    use_multi = cfg.AGENT_MODE == "multi" or (
-        cfg.AGENT_MODE == "auto"
-        and AgentService._should_use_multi(req.query, db_history)
+    # 深度研究开关（按请求选择）→ 强制 DeepAgents；全局 AGENT_MODE=deepagents 同样启用
+    use_deep = cfg.AGENT_MODE == "deepagents" or bool(req.deep_research)
+    # deep 优先：选了深度研究就不再走多智能体编排（避免创建多余的 multi run）
+    use_multi = (not use_deep) and (
+        cfg.AGENT_MODE == "multi"
+        or (
+            cfg.AGENT_MODE == "auto"
+            and AgentService._should_use_multi(req.query, db_history)
+        )
     )
-    use_deep = cfg.AGENT_MODE == "deepagents"
+    # 本轮实际执行的 Agent 路径（前端徽标/诊断用）：
+    # deepagents（主 Agent + SubAgent）| multi（多智能体编排）| single（单 Agent）
+    agent_mode = "deepagents" if use_deep else ("multi" if use_multi else "single")
     multi_run_id: Optional[uuid.UUID] = None
     if use_multi:
         from backend.services.agent_run_service import create_run
@@ -781,6 +792,7 @@ async def send_message_stream(
             "model_id": selected_model.id,
             "model_name": selected_model.name,
             "skills": skill_payload,
+            "agent_mode": agent_mode,
         })
 
         if use_deep:
@@ -863,6 +875,7 @@ async def send_message_stream(
                 async with get_session() as session:
                     meta = {
                         "intent": "deepagents",
+                        "agent_mode": agent_mode,
                         "steps": step_objs,
                         "artifacts": deep_artifacts,
                         "model_id": selected_model.id,
@@ -881,6 +894,7 @@ async def send_message_stream(
                 "content": answer,
                 "sources": [],
                 "intent": "deepagents",
+                "agent_mode": agent_mode,
                 "steps": step_objs,
                 "artifacts": deep_artifacts,
                 "elapsed_seconds": elapsed,
@@ -1144,7 +1158,10 @@ async def send_message_stream(
                                 )
                                 prompt_input = "\n\n".join(summaries)
 
+                            from app.graph.nodes import _format_history_for_prompt
                             prompt = (
+                                f"对话历史（最近，供理解指代与追问）:\n"
+                                f"{_format_history_for_prompt(payload.get('history') or [])}\n\n"
                                 f"用户原始查询：{payload['query']}\n\n"
                                 f"各子任务产出：\n{prompt_input}\n\n"
                                 f"汇总要求：{payload['final_inst'] or '综合各子任务结果，给出完整、连贯的回答。'}"
@@ -1192,6 +1209,7 @@ async def send_message_stream(
                         async with get_session() as session:
                             meta = json.dumps({
                                 "intent": result.get("intent", "multi_agent"),
+                                "agent_mode": agent_mode,
                                 "run_id": str(multi_run_id),
                                 "worker_outputs": worker_outputs,
                                 "sources": result.get("sources", []),
@@ -1228,6 +1246,7 @@ async def send_message_stream(
                         "run_id": str(multi_run_id),
                         "sources": result.get("sources", []),
                         "intent": result.get("intent", "multi_agent"),
+                        "agent_mode": agent_mode,
                         "steps": status_list,
                         "elapsed_seconds": elapsed,
                         "execution_mode": result.get("execution_mode", ""),
@@ -1435,6 +1454,7 @@ async def send_message_stream(
             async with get_session() as session:
                 meta = json.dumps({
                     "intent": ctx["intent"],
+                    "agent_mode": agent_mode,
                     "sources": ctx["sources"],
                     "steps": collected_steps,
                     "artifacts": collected_artifacts,
@@ -1451,6 +1471,7 @@ async def send_message_stream(
             "type": "done",
             "sources": ctx["sources"],
             "intent": ctx["intent"],
+            "agent_mode": agent_mode,
             "steps": collected_steps,
             "artifacts": collected_artifacts,
             "elapsed_seconds": elapsed,
@@ -1477,13 +1498,55 @@ async def send_message_stream(
             asyncio.get_event_loop().create_task(_gen_title())
 
     async def event_gen():
-        """Ensure an interrupted stream cannot leave a run permanently active."""
+        """Ensure an interrupted stream cannot leave a run permanently active,
+        and a terminated turn is NOT persisted to history.
+
+        2026-08-21：用户停止生成 / 客户端断开 → 本轮不入历史：
+        - assistant 消息在生成器内保存，流中断后不会执行（天然不落库）；
+        - 用户消息在开流前已保存（user_message_id），终止时删除；
+        - 若是本轮新建的会话（is_new），整会话删除，避免留下空壳。
+        """
         completed_normally = False
         try:
             async for chunk in _event_gen_inner():
                 yield chunk
             completed_normally = True
         finally:
+            if not completed_normally:
+                # 注意：此处处于任务取消状态（CancelledError 处理中），
+                # 直接 await 会立即再次抛出 CancelledError —— 必须用
+                # asyncio.shield 让清理协程在后台独立完成（与下方
+                # multi_run_id finalize 同款处理）。
+                async def _cleanup_terminated_turn():
+                    try:
+                        async with get_session() as session:
+                            from backend.services.chat_service import (
+                                delete_conversation,
+                                delete_message,
+                            )
+
+                            if is_new:
+                                await delete_conversation(
+                                    session, conv_id, current_user.id
+                                )
+                            else:
+                                await delete_message(session, user_message_id)
+                                await session.commit()
+                        logger.info(
+                            "[chat/stream] turn terminated, not persisted "
+                            "(conv=%s new=%s)", conv_id, is_new
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[chat/stream] terminated-turn cleanup failed: %s", exc
+                        )
+
+                cleanup_task = asyncio.create_task(_cleanup_terminated_turn())
+                try:
+                    await asyncio.shield(cleanup_task)
+                except asyncio.CancelledError:
+                    # shield keeps the cleanup coroutine alive on the app loop.
+                    pass
             if multi_run_id:
                 async def _close_unfinished_run():
                     from backend.services.agent_run_service import finalize_run_if_active

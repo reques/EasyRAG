@@ -19,6 +19,7 @@ from app.graph.router import (
     route_after_generation,
     route_after_validation,
     AGENT_REASONING,
+    QUERY_REWRITE,
     INTENT_RECOGNITION,
     TASK_PLANNING,
     KNOWLEDGE_RETRIEVAL,
@@ -36,6 +37,9 @@ def build_graph():
     """Construct and compile the LangGraph agent workflow.
 
     Graph topology:
+        query_rewrite  (Node 0: 追问指代消解，与 SSE 快速路径统一)
+            |
+            ▼
         intent_recognition
             |--(use_react: complex_task / 低置信度)--> agent_reasoning <─┐
             |                                              │  │          │
@@ -53,6 +57,7 @@ def build_graph():
     graph = StateGraph(AgentState)
 
     # ── Register nodes ────────────────────────────────────────────────────
+    graph.add_node(QUERY_REWRITE,       nodes.query_rewrite)
     graph.add_node(INTENT_RECOGNITION,  nodes.intent_recognition)
     graph.add_node(TASK_PLANNING,       nodes.task_planning)
     graph.add_node(KNOWLEDGE_RETRIEVAL, nodes.knowledge_retrieval)
@@ -64,7 +69,8 @@ def build_graph():
     graph.add_node(AGENT_REASONING,     nodes.agent_reasoning)
 
     # ── Entry point ───────────────────────────────────────────────────────
-    graph.set_entry_point(INTENT_RECOGNITION)
+    graph.set_entry_point(QUERY_REWRITE)
+    graph.add_edge(QUERY_REWRITE, INTENT_RECOGNITION)
 
     # ── Conditional edges ────────────────────────────────────────────────
     graph.add_conditional_edges(
@@ -130,6 +136,7 @@ def build_graph():
         {
             ANSWER_VALIDATION: ANSWER_VALIDATION,
             FALLBACK_HANDLER:  FALLBACK_HANDLER,
+            END:               END,   # direct（快速路径）跳过校验直接结束
         },
     )
 

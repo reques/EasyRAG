@@ -978,6 +978,19 @@ body.task-panel-resizing {
   gap: 5px;
   margin-bottom: 7px;
 }
+/* 用户消息上的"深度研究"标记（该轮走了 DeepAgents 工作流） */
+.deep-research-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(106, 92, 255, .35);
+  background: linear-gradient(135deg, rgba(106, 92, 255, .12), rgba(138, 99, 232, .12));
+  color: #6a5cff;
+  font-size: 11px;
+  font-weight: 600;
+}
 .message-skill-chip {
   display: inline-flex;
   align-items: center;
@@ -1126,6 +1139,35 @@ body.task-panel-resizing {
   color: var(--gray-500);
   display: flex;
   gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* Agent 路径徽标：本轮实际执行的链路（DeepAgents 突出显示） */
+.message-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  border: 1px solid transparent;
+}
+.message-mode-badge.mode-deepagents {
+  color: #fff;
+  background: linear-gradient(135deg, #6a5cff, #8a63e8);
+  border-color: rgba(106, 92, 255, .35);
+  box-shadow: 0 0 0 1px rgba(106, 92, 255, .25);
+}
+.message-mode-badge.mode-multi {
+  color: #c2407a;
+  background: var(--pink-50, #fdf2f8);
+  border-color: rgba(224, 85, 140, .35);
+}
+.message-mode-badge.mode-single {
+  color: var(--gray-600);
+  background: var(--gray-100);
+  border-color: var(--gray-200);
 }
 /* 消息时间分隔条: 居中显示在消息上方, 小字灰显 */
 .message-time-separator {
@@ -1167,135 +1209,31 @@ body.task-panel-resizing {
 }
 @keyframes blink { 0%, 80%, 100% { opacity: 0; } 40% { opacity: 1; } }
 
-/* ── 思考过程活动时间线（Codex 风格 AgentActivity）──────────────────── */
-.activity-panel {
+/* ── 操作流（AgentActivity，Cursor/Copilot 风格：图标+英文动词+对象）──── */
+.activity-stream {
   margin-bottom: 12px;
-  border: 1px solid var(--gray-150);
-  border-radius: var(--radius-md);
-  background: var(--gray-0);
-  overflow: hidden;
   animation: activity-panel-in .32s cubic-bezier(.22, .8, .24, 1) both;
 }
 @keyframes activity-panel-in {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.activity-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 12px;
-  border: none;
-  background: var(--gray-25);
-  font-size: 13px;
-  color: var(--gray-700);
-  cursor: pointer;
-  user-select: none;
-  transition: background .18s ease;
-}
-.activity-header:hover { background: var(--gray-50); }
-.activity-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.activity-headline {
-  font-weight: 600;
-  color: var(--gray-800);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* 运行中脉冲点：Codex 式呼吸指示 */
-.activity-live-dot {
-  position: relative;
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--main-500);
-  animation: live-dot-pulse 1.2s ease-out infinite;
-}
-.activity-live-dot::after {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 1.5px solid var(--main-400);
-  animation: live-dot-ring 1.2s ease-out infinite;
-}
-@keyframes live-dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .45; }
-}
-@keyframes live-dot-ring {
-  0% { transform: scale(.6); opacity: .9; }
-  100% { transform: scale(1.5); opacity: 0; }
-}
-.activity-done-icon { color: var(--gray-500); flex-shrink: 0; }
-.activity-error-icon { color: var(--color-error-500, #c0392b); flex-shrink: 0; }
-.activity-now-badge {
-  flex-shrink: 0;
-  padding: 1px 7px;
-  border-radius: var(--radius-full);
-  background: var(--main-100);
-  color: var(--main-700);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .02em;
-}
-.activity-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.activity-timer {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--gray-500);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.activity-chevron { color: var(--gray-400); flex-shrink: 0; }
-/* 运行中的细进度线（indeterminate shimmer） */
-.activity-progress {
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--main-400), transparent);
-  background-size: 200% 100%;
-  animation: activity-shimmer 1.4s linear infinite;
-}
-@keyframes activity-shimmer {
-  from { background-position: 200% 0; }
-  to { background-position: -200% 0; }
-}
 .activity-error-line {
   padding: 6px 12px;
   font-size: 12px;
   color: var(--color-error-700, #b3362b);
   background: var(--color-error-50, #fdf3f2);
-  border-top: 1px solid var(--gray-100);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
 }
-/* 折叠动画：grid-template-rows 过渡（不支持时直接展开） */
-.activity-collapse {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows .3s cubic-bezier(.22, .8, .24, 1);
-}
-.activity-collapse.open { grid-template-rows: 1fr; }
-.activity-collapse > .activity-steps { min-height: 0; }
-.activity-steps {
-  max-height: 240px;
+/* 操作流容器：可滚动，最多展示约 300px，其余滚动查看 */
+.activity-list {
+  max-height: 300px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
+  padding: 2px 0;
 }
-.activity-list { padding: 4px 8px 8px; }
 /* 行：图标徽章 + 名称/详情 + 状态/耗时 */
 .activity-row {
   display: flex;
@@ -1324,33 +1262,78 @@ body.task-panel-resizing {
   color: var(--gray-500);
   transition: background .2s ease, color .2s ease, transform .2s ease;
 }
+/* 动作类型配色（截图式）：Think 蓝 / Read·Search 绿 / Run 紫 / Write 橙 /
+   Check 青 / Delegate·Plan·Merge 粉 / Answer 绿 / Fallback 红 */
+.activity-badge.kind-reason { color: #4f8cff; background: rgba(79, 140, 255, .12); }
+.activity-badge.kind-retrieve { color: #22b573; background: rgba(34, 181, 115, .12); }
+.activity-badge.kind-tool { color: #8a63e8; background: rgba(138, 99, 232, .12); }
+.activity-badge.kind-generate { color: #e8973c; background: rgba(232, 151, 60, .12); }
+.activity-badge.kind-validate { color: #12a8b8; background: rgba(18, 168, 184, .12); }
+.activity-badge.kind-orchestrate { color: #e0558c; background: rgba(224, 85, 140, .12); }
+.activity-badge.kind-direct { color: #3b9f6e; background: rgba(59, 159, 110, .12); }
+.activity-badge.kind-rewrite,
+.activity-badge.kind-intent { color: #64748b; background: var(--gray-100); }
+.activity-badge.kind-fallback {
+  color: var(--color-error-500, #c0392b);
+  background: var(--color-error-50, #fdf3f2);
+}
 .activity-row.is-active .activity-badge {
   background: var(--main-100);
   color: var(--main-700);
   transform: scale(1.05);
 }
 .activity-row.is-fallback .activity-badge { color: var(--color-error-500, #c0392b); }
-.activity-copy { min-width: 0; flex: 1; display: flex; }
-.activity-row-name {
+.activity-copy {
+  min-width: 0;
+  flex: 1;
   display: flex;
   align-items: baseline;
   gap: 8px;
-  min-width: 0;
-  font-weight: 500;
-  color: var(--gray-700);
 }
-.activity-row.is-done .activity-row-name { font-weight: 400; }
-.activity-row.is-active .activity-row-name { color: var(--gray-900); font-weight: 600; }
-.activity-row-detail {
+/* 英文动词（等宽字体，动作感；截图式动作词） */
+.activity-verb {
+  flex-shrink: 0;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-800);
+}
+.activity-row.is-done .activity-verb { color: var(--gray-500); font-weight: 500; }
+.activity-row.is-active .activity-verb { color: var(--main-700); }
+/* 子 Agent 标签（research-agent 等） */
+.activity-subagent {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--gray-100);
+  color: var(--gray-600);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+/* 对象：工具名 / 文件名 / 资源（等宽，截断） */
+.activity-object {
   min-width: 0;
-  color: var(--gray-400);
-  font-weight: 400;
-  font-size: 11.5px;
+  color: var(--gray-500);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.activity-row.is-active .activity-row-detail { color: var(--gray-500); }
+.activity-row.is-active .activity-object { color: var(--gray-600); }
+/* 思考内容（reason）允许两行折行展示——act and reasoning：推理文本可见 */
+.activity-object.obj-reason {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-family: inherit;
+  color: var(--gray-600);
+  line-height: 1.5;
+}
+.activity-row.is-active .activity-object.obj-reason { color: var(--gray-700); }
 .activity-row-side {
   display: inline-flex;
   align-items: center;
@@ -1490,11 +1473,7 @@ body.task-panel-resizing {
   to { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .activity-panel,
-  .activity-live-dot,
-  .activity-live-dot::after,
-  .activity-progress,
-  .activity-collapse,
+  .activity-stream,
   .activity-list-enter-active,
   .activity-list-leave-active,
   .activity-list-move,
@@ -1568,6 +1547,13 @@ body.task-panel-resizing {
   display: flex;
   align-items: center;
   gap: 3px;
+}
+/* 右侧按钮组：深度研究 + 停止/发送（深度研究紧贴发送按钮左侧） */
+.composer-send-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 .selected-skill-row {
   display: flex;
@@ -1892,6 +1878,53 @@ body.task-panel-resizing {
 }
 .btn-send:hover { background: var(--main-600); }
 .btn-send:disabled { opacity: .3; cursor: not-allowed; }
+/* 深度研究开关：选中 = 本轮强制 DeepAgents 工作流（紫色，与徽标同色系） */
+.deep-research-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--gray-200);
+  background: var(--gray-50);
+  color: var(--gray-500);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.deep-research-toggle:hover:not(:disabled) {
+  border-color: rgba(106, 92, 255, .4);
+  color: var(--gray-700);
+  background: var(--gray-100);
+}
+.deep-research-toggle:disabled { opacity: .5; cursor: not-allowed; }
+.deep-research-toggle.active {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(135deg, #6a5cff, #8a63e8);
+  box-shadow: 0 1px 4px rgba(106, 92, 255, .35);
+}
+.deep-research-toggle.active .is-on { color: #fff; }
+/* 停止生成按钮（生成中替代发送按钮）：醒目红色停止态 */
+.btn-send.btn-stop { background: var(--color-error-500, #d64541); }
+.btn-send.btn-stop:hover { background: var(--color-error-600, #b3362b); }
+/* 被终止的一轮：提示未保存 */
+.message-stopped-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 2px 0 6px;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  background: var(--color-error-50, #fdf3f2);
+  color: var(--color-error-600, #b3362b);
+  font-size: 11px;
+  font-weight: 500;
+}
 
 /* ── Knowledge Base ────────────────────────────────────────────────────── */
 .knowledge-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
