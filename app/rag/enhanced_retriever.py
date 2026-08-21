@@ -87,7 +87,10 @@ class _DecompositionCache:
             self._store.clear()
 
 
-_decomp_cache = _DecompositionCache(max_size=128, ttl_seconds=300.0)
+_decomp_cache = _DecompositionCache(
+    max_size=128,
+    ttl_seconds=float(cfg.ENHANCED_DECOMPOSITION_CACHE_TTL),
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 数据类
@@ -264,12 +267,14 @@ _ANSWERABILITY_PROMPT = """你是一个检索证据验证器。给定用户查�
 判定标准（缺一不可，任一不满足 answerability 即为 0）：
 1. 适用前提匹配：候选片段的适用主体、对象、条件、类型必须与子问题的事实一致。仅关键词重叠而适用前提不匹配（主体不同、对象不同、类型不同、前提条件未满足）的候选，视为不适用。
 2. 排除性条件：若候选文本含「除…外」「不适用于」「不包含」「除外」等排除表述，且子问题的事实恰好落在被排除的范围内，则直接判定为不适用。
-3. 直接回答：候选片段必须能直接回答子问题，而非仅主题相关。
+3. 限定条件一致性：子问题中的限定性修饰（适用对象类别、物类、范围、主体类别等限定词）必须与候选的适用对象一致。候选针对的对象类别与子问题的限定条件互斥时（子问题限定为某一类对象，候选针对另一类），即使关键词高度重叠，answerability 也为 0。
+4. 直接回答：候选片段必须能直接回答子问题，而非仅主题相关。
 
 否定信号（出现任一即判 0，即使关键词高度重叠）：
 - 候选回答的是与子问题无关的另一件事（如子问题问「责任/处罚」，候选答「奖励/权限/程序性事项」）
 - 候选的适用主体或对象与子问题的主体或对象明显不同（主体是 A，候选却针对 B）
 - 候选适用的范畴与子问题事实的范畴不匹配（同一术语在不同范畴下含义不同，如「损失」在「人身」与「财产」两个范畴下是不同的规则）
+- 候选的适用对象类别与子问题的限定条件互斥（子问题限定对象为某一类，候选针对另一类对象，限定词明确相反时即使关键词高度重叠也判 0）
 
 子问题（编号从 1 开始）：
 {sub_questions}
@@ -348,6 +353,7 @@ class EnhancedRetriever:
         self._llm = None
         self._embedder = None
         self._bm25 = None
+        self._last_decomp_was_fallback = False  # 查询分解是否走了规则回退（回退结果不缓存）
         # 持久线程池：避免每次检索创建/销毁线程的开销
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=6, thread_name_prefix="enhanced_retr"
@@ -442,18 +448,27 @@ class EnhancedRetriever:
         ranked = self._apply_reranker(query, ranked)
 
         # ── 第 3.6 步：answerability 评估（「能回答」压过「主题像」）────
-        # 覆盖 final_top_k 个候选，确保所有进入最终 Top-K 的候选都经过验证，
-        # 避免第 top_k+1 起的伪相关（未被验证）保留原高分
-        ranked = self._apply_answerability(query, decomposition, ranked, top_k=self.final_top_k)
-
-        # ── 第 3.65 步：每子问题保底（每个子问题至少 top-3 进最终 Top-K）────
-        ranked = self._ensure_per_sub_question_minimum(ranked, decomposition, min_per_sub=3)
+        # 覆盖范围 = final_top_k + 子问题配额候选：确保所有可能进入最终 Top-K 的
+        # 候选（含弱子问题的保底候选）都经过验证，避免未验证的高分伪相关残留
+        n_sub = len(decomposition.sub_questions or [])
+        min_per_sub = max(1, self.final_top_k // max(1, n_sub)) if n_sub else 1
+        ans_top_k = min(len(ranked), self.final_top_k + max(1, n_sub) * min_per_sub)
+        ranked = self._apply_answerability(query, decomposition, ranked, top_k=ans_top_k)
 
         # ── 第 3.7 步：逐子问题覆盖检查（缺口子问题针对性补充）────
         ranked, covered_all = self._coverage_gate(query, decomposition, ranked, allowed_ids)
 
+        # ── 第 3.8 步：每子问题硬配额（弱子问题证据不被强子问题挤掉）────
+        # 每个子问题至少 min_per_sub 条进最终 Top-K，其余名额按融合分补满。
+        # 替代全局 [:final_top_k] 截断——全局截断会打破保底
+        # （min_per_sub × 子问题数 > final_top_k 时，弱子问题证据被截在窗外）
+        ranked = self._apply_per_sub_question_quota(
+            ranked, decomposition,
+            min_per_sub=min_per_sub, final_top_k=self.final_top_k,
+        )
+
         # ── 第 4 步：知识块聚类 ────────────────────────────────────────────
-        blocks = self._cluster_into_blocks(ranked[: self.final_top_k], decomposition, allowed_ids)
+        blocks = self._cluster_into_blocks(ranked, decomposition, allowed_ids)
 
         # ── 第 5 步：迭代缺口检测与补充 ────────────────────────────────────
         result = RetrievalResult(
@@ -491,7 +506,10 @@ class EnhancedRetriever:
             return cached
 
         result = self._decompose_query(query, history)
-        _decomp_cache.put(query, result)
+        # 规则回退结果不缓存：LLM 恢复后不应继续吃规则分解（规则只拆 1-2 个子问题，
+        # 与 LLM 分解差异巨大，缓存会让「同一问题」在 LLM 恢复后仍长时间结果不一致）
+        if not getattr(self, "_last_decomp_was_fallback", False):
+            _decomp_cache.put(query, result)
         return result
 
     @staticmethod
@@ -542,6 +560,7 @@ class EnhancedRetriever:
             }])
             logger.info("[enhanced] query decomposition: type=%s complexity=%s",
                         data.get("query_type"), data.get("complexity"))
+            self._last_decomp_was_fallback = False
             sub_questions = data.get("sub_questions") or [query]
             raw_keywords = data.get("sub_question_keywords") or []
             # 归一化：确保关键词列表与子问题一一对应，每个子问题最多 4 个关键词
@@ -562,6 +581,7 @@ class EnhancedRetriever:
             )
         except Exception as exc:
             logger.warning("[enhanced] LLM query decomposition failed: %s, fallback to rule-based", exc)
+            self._last_decomp_was_fallback = True
             return self._rule_based_decompose(query)
 
     def _rule_based_decompose(self, query: str) -> QueryDecomposition:
@@ -796,11 +816,14 @@ class EnhancedRetriever:
         docs: List[CandidateDoc] = []
 
         # 单查询语义检索（由 _parallel_retrieve 对每个子问题独立调用，实现逐子问题检索）
+        # score_threshold 过滤低相似度候选：每个子问题最多取 top_k_per_path 条，
+        # 且仅保留相似度 >= cfg.RAG_SCORE_THRESHOLD 的（宁缺毋滥，不凑数）
         try:
             raw_docs = retriever.retrieve(
                 query,
                 top_k=self.top_k_per_path,
                 knowledge_base_ids=knowledge_base_ids,
+                score_threshold=cfg.RAG_SCORE_THRESHOLD,
             )
         except Exception:
             return []
@@ -930,7 +953,14 @@ class EnhancedRetriever:
         query: str,
         knowledge_base_ids: Sequence[str],
     ) -> List[CandidateDoc]:
-        """Path D: BM25 稀疏检索 — 精确匹配数字、代码、专有名词。"""
+        """Path D: BM25 稀疏检索 — 精确匹配数字、代码、专有名词。
+
+        BM25 是词法召回：字面命中不等于语义相关（如泛化词「登记」「处分」）。
+        因此对每条 BM25 命中做向量相似度二次确认，把真实相似度写入
+        score / metadata.score——融合重排的 vector_sim 维度用真实相似度，
+        不再被 BM25 分数冒名顶替（否则字面噪音在融合时拿到虚高的向量分）。
+        RAG_SCORE_THRESHOLD > 0 时，相似度低于阈值的 BM25 命中直接剔除。
+        """
         try:
             results = self.bm25.search(
                 query,
@@ -940,16 +970,44 @@ class EnhancedRetriever:
         except Exception as exc:
             logger.debug("[enhanced] Path D BM25 failed: %s", exc)
             return []
+        if not results:
+            return []
 
-        return [
-            CandidateDoc(
+        # 向量二次确认（embedding 失败时回退 BM25 分，不阻塞）
+        sims = None
+        try:
+            import numpy as np
+            embedder = get_embedder()
+            q_vec = np.array(embedder.embed_query(query), dtype=float)
+            q_vec = q_vec / (np.linalg.norm(q_vec) + 1e-9)
+            d_vecs = embedder.embed_texts([r["content"] for r in results])
+            sims = []
+            for dv in d_vecs:
+                d_vec = np.array(dv, dtype=float)
+                sims.append(float(np.dot(q_vec, d_vec / (np.linalg.norm(d_vec) + 1e-9))))
+        except Exception:
+            sims = None
+
+        threshold = cfg.RAG_SCORE_THRESHOLD
+        docs: List[CandidateDoc] = []
+        for i, r in enumerate(results):
+            if sims is not None:
+                sim = sims[i]
+                if threshold > 0 and sim < threshold:
+                    continue  # 低相似度 BM25 命中剔除（宁缺毋滥）
+                score = sim
+                meta = dict(r.get("metadata") or {})
+                meta["score"] = round(sim, 4)
+            else:
+                score = r["score"] * 0.5  # 兜底：BM25 分数归一化
+                meta = r.get("metadata", {})
+            docs.append(CandidateDoc(
                 content=r["content"],
-                metadata=r.get("metadata", {}),
-                score=r["score"] * 0.5,  # BM25 分数归一化（大致映射到 [0,1] 区间）
+                metadata=meta,
+                score=score,
                 retrieval_path="bm25",
-            )
-            for r in results
-        ]
+            ))
+        return docs
 
     def _retrieve_bm25_multi_path(
         self,
@@ -1295,6 +1353,67 @@ class EnhancedRetriever:
 
         rest = [d for d in docs if id(d) not in seen]
         return guaranteed + rest
+
+    def _apply_per_sub_question_quota(
+        self,
+        docs: List[CandidateDoc],
+        decomposition: QueryDecomposition,
+        min_per_sub: int = 2,
+        final_top_k: int = 8,
+    ) -> List[CandidateDoc]:
+        """每子问题硬配额：弱子问题证据不被强子问题挤掉（替代全局截断）。
+
+        全局 `[:final_top_k]` 截断会让所有子问题共享一个排序列表竞争名额——
+        弱子问题（候选少、分数低）的证据被强子问题淹没，即使做了保底提升，
+        截断也会再次把保底候选切掉（min_per_sub × 子问题数 > final_top_k 时必然发生）。
+
+        配额逻辑：
+        1. 每个子问题选 top min_per_sub（按分数）
+        2. 无子问题标注的候选（原始查询级）选 top min_per_sub
+        3. 剩余名额按全局分数补满到 final_top_k
+        返回长度 ≤ final_top_k，且每个子问题至少 min_per_sub 条。
+        """
+        if not docs:
+            return docs
+        sub_questions = decomposition.sub_questions or []
+        if not sub_questions:
+            return docs[:final_top_k]
+
+        by_sub: Dict[str, List[CandidateDoc]] = {sq: [] for sq in sub_questions}
+        query_level: List[CandidateDoc] = []
+        for d in docs:
+            if d.sub_questions:
+                for sq in d.sub_questions:
+                    if sq in by_sub:
+                        by_sub[sq].append(d)
+            else:
+                query_level.append(d)
+
+        picked: List[CandidateDoc] = []
+        seen: Set[int] = set()
+
+        def _pick(d: CandidateDoc) -> bool:
+            if id(d) in seen:
+                return False
+            seen.add(id(d))
+            picked.append(d)
+            return True
+
+        # 1) 每子问题保底 min_per_sub 条
+        for sq in sub_questions:
+            top = sorted(by_sub[sq], key=lambda d: d.score, reverse=True)[:min_per_sub]
+            for d in top:
+                _pick(d)
+        # 2) 原始查询级保底
+        for d in sorted(query_level, key=lambda x: x.score, reverse=True)[:min_per_sub]:
+            _pick(d)
+        # 3) 剩余名额按全局分数补满
+        if len(picked) < final_top_k:
+            for d in sorted(docs, key=lambda x: x.score, reverse=True):
+                if len(picked) >= final_top_k:
+                    break
+                _pick(d)
+        return picked[:final_top_k]
 
     @staticmethod
     def _compute_freshness(doc: CandidateDoc) -> float:
@@ -1834,5 +1953,10 @@ _enhanced: Optional[EnhancedRetriever] = None
 def get_enhanced_retriever() -> EnhancedRetriever:
     global _enhanced
     if _enhanced is None:
-        _enhanced = EnhancedRetriever()
+        # 从配置读取每路径/最终 Top-K（ENHANCED_TOP_K_PER_PATH / ENHANCED_FINAL_TOP_K），
+        # 否则会落到 __init__ 的硬编码默认值（8/12），config 里配了也不生效
+        _enhanced = EnhancedRetriever(
+            top_k_per_path=cfg.ENHANCED_TOP_K_PER_PATH,
+            final_top_k=cfg.ENHANCED_FINAL_TOP_K,
+        )
     return _enhanced

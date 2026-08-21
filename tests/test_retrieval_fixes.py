@@ -58,7 +58,7 @@ def test_semantic_path_is_single_query():
     )
     queries = []
     fake = MagicMock()
-    fake.retrieve = lambda q, top_k=6, knowledge_base_ids=None: (queries.append(q) or [])
+    fake.retrieve = lambda q, top_k=6, knowledge_base_ids=None, score_threshold=0.0: (queries.append(q) or [])
     with patch("app.rag.retriever.get_retriever", return_value=fake):
         retr._retrieve_semantic_path("orig", decomp, [str(uuid.uuid4())])
     assert queries == ["orig"]
@@ -198,7 +198,7 @@ def test_graph_reverse_filters_structural_nodes():
     retr = er.EnhancedRetriever.__new__(er.EnhancedRetriever)
     retr.top_k_per_path = 6
     fake_retriever = MagicMock()
-    fake_retriever.retrieve = lambda q, top_k=6, knowledge_base_ids=None: [
+    fake_retriever.retrieve = lambda q, top_k=6, knowledge_base_ids=None, score_threshold=0.0: [
         {"content": "内容", "metadata": {"score": 0.8, "knowledge_base_id": "kb"}}
     ]
     fake_cache = MagicMock()
@@ -216,6 +216,79 @@ def test_graph_reverse_filters_structural_nodes():
     names = [d.graph_entities[0] for d in docs if "graph_reverse" in d.retrieval_path]
     assert "第28条" in names  # article 保留
     assert not any("第六章" in n for n in names)  # chapter 过滤
+
+
+def test_per_sub_question_quota_guarantees_weak_sub_question():
+    # 弱子问题候选分数低、数量少，全局截断会把它挤出 final_top_k；
+    # 每子问题硬配额必须保证它至少 min_per_sub 条进最终 Top-K
+    retr = er.EnhancedRetriever.__new__(er.EnhancedRetriever)
+    decomp = er.QueryDecomposition(
+        explicit_entities=[], themes=[],
+        sub_questions=["强子问题", "弱子问题"],
+        query_type="factual", complexity="high",
+    )
+    docs = []
+    # 强子问题 6 个高分候选
+    for i in range(6):
+        docs.append(er.CandidateDoc(
+            content=f"strong_{i}", score=0.95 - i * 0.01,
+            sub_questions=["强子问题"],
+        ))
+    # 弱子问题 2 个低分候选（0.40 / 0.35 —— 全局排名 7、8，在 final_top_k=6 之外）
+    docs.append(er.CandidateDoc(content="weak_0", score=0.40, sub_questions=["弱子问题"]))
+    docs.append(er.CandidateDoc(content="weak_1", score=0.35, sub_questions=["弱子问题"]))
+    # 原始查询级候选（无标注）
+    docs.append(er.CandidateDoc(content="query_level", score=0.90, sub_questions=[]))
+
+    out = retr._apply_per_sub_question_quota(
+        docs, decomp, min_per_sub=2, final_top_k=6,
+    )
+    assert len(out) <= 6
+    weak = [d for d in out if "弱子问题" in d.sub_questions]
+    strong = [d for d in out if "强子问题" in d.sub_questions]
+    assert len(weak) >= 2   # 弱子问题保底进 2 条
+    assert len(strong) >= 2
+    # 原始查询级也有保底
+    assert any(d.content == "query_level" for d in out)
+
+
+def test_bm25_path_uses_real_vector_similarity():
+    # BM25 是词法召回：融合时 vector_sim 维度必须用真实向量相似度，
+    # 不能拿 BM25 分数冒名顶替（否则字面噪音拿到虚高的向量分）
+    retr = er.EnhancedRetriever.__new__(er.EnhancedRetriever)
+    retr.top_k_per_path = 6
+    fake_bm25 = MagicMock()
+    fake_bm25.search.return_value = [
+        {"id": "1", "content": "字面命中但语义无关的内容", "metadata": {}, "score": 12.0},
+        {"id": "2", "content": "真正相关的语义内容", "metadata": {}, "score": 8.0},
+    ]
+    fake_embedder = MagicMock()
+    fake_embedder.embed_query.return_value = [1.0, 0.0]
+    # 已归一化：第一条与 query 余弦相似度 0.1（噪音），第二条 0.9（真相关）
+    fake_embedder.embed_texts.return_value = [[0.1, 0.995], [0.9, 0.436]]
+
+    decomp = er.QueryDecomposition(
+        explicit_entities=[], themes=[], sub_questions=[],
+        query_type="factual", complexity="low",
+    )
+    with patch("app.rag.enhanced_retriever.get_embedder", return_value=fake_embedder), \
+         patch.object(er, "cfg") as mock_cfg:
+        mock_cfg.RAG_SCORE_THRESHOLD = 0.0  # 阈值 0：不剔除，但分数必须真实
+        retr._bm25 = fake_bm25  # bm25 是只读 property，直接注入实例属性
+        docs = retr._retrieve_bm25_path("查询", ["kb"])
+    assert len(docs) == 2
+    # BM25 高分（12.0）≠ 真实相似度（0.1）：score 必须用真实相似度
+    assert abs(docs[0].score - 0.1) < 1e-4
+    assert abs(docs[1].score - 0.9) < 1e-4
+    assert abs(docs[0].metadata["score"] - 0.1) < 1e-4
+    # 阈值 > 0 时低相似度 BM25 命中被剔除
+    with patch("app.rag.enhanced_retriever.get_embedder", return_value=fake_embedder), \
+         patch.object(er, "cfg") as mock_cfg:
+        mock_cfg.RAG_SCORE_THRESHOLD = 0.5
+        retr._bm25 = fake_bm25
+        docs2 = retr._retrieve_bm25_path("查询", ["kb"])
+    assert len(docs2) == 1
+    assert abs(docs2[0].score - 0.9) < 1e-4
 
 
 def test_per_sub_question_minimum_keeps_weak_sub_questions():

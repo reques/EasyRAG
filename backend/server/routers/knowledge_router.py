@@ -523,6 +523,95 @@ async def get_kb_graph(
         )
 
 
+class GraphNeighborItem(BaseModel):
+    name: str                          # 邻居实体名
+    entity_type: str                   # 邻居实体类型
+    description: Optional[str] = None  # 邻居实体描述
+    relation_type: str                 # 与当前实体的关系类型
+    direction: str                     # "out" = 当前实体 → 邻居；"in" = 邻居 → 当前实体
+    relation_description: Optional[str] = None
+    weight: float = 1.0
+
+
+class GraphNeighborsResponse(BaseModel):
+    entity: str
+    total: int
+    neighbors: list[GraphNeighborItem]
+
+
+@router.get("/bases/{kb_id}/graph/neighbors", response_model=GraphNeighborsResponse)
+async def get_kb_graph_neighbors(
+    kb_id: str,
+    entity: str = Query(..., min_length=1, max_length=256),
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
+):
+    """返回指定实体的全部邻居关系（不受图可视化的 top-N 截断影响）。
+
+    点击图谱节点时前端调用此接口，在右侧栏罗列「与它有关系的实体 + 对应关系」。
+    direction: out = 当前实体 → 邻居；in = 邻居 → 当前实体。
+    同一邻居的多条同类型关系去重（保留 weight 最高的）。
+    """
+    from sqlalchemy import or_, select
+    from backend.storage.postgres.models_knowledge import KnowledgeEntity, KnowledgeRelation
+
+    kb = await _require_owned_kb(kb_id, current_user)
+
+    async with get_session() as session:
+        rels = (await session.execute(
+            select(KnowledgeRelation).where(
+                KnowledgeRelation.knowledge_base_id == kb.id,
+                or_(
+                    KnowledgeRelation.source_entity == entity,
+                    KnowledgeRelation.target_entity == entity,
+                ),
+            )
+        )).scalars().all()
+
+        neighbor_names = {
+            r.target_entity if r.source_entity == entity else r.source_entity
+            for r in rels
+        }
+        ent_rows: dict = {}
+        if neighbor_names:
+            ents = (await session.execute(
+                select(KnowledgeEntity).where(
+                    KnowledgeEntity.knowledge_base_id == kb.id,
+                    KnowledgeEntity.name.in_(neighbor_names),
+                )
+            )).scalars().all()
+            ent_rows = {e.name: e for e in ents}
+
+        items: list[GraphNeighborItem] = []
+        seen: set = set()
+        for r in rels:
+            if r.source_entity == entity:
+                nb_name, direction = r.target_entity, "out"
+            else:
+                nb_name, direction = r.source_entity, "in"
+            key = (nb_name, r.relation_type, direction)
+            if key in seen:
+                continue
+            seen.add(key)
+            ent = ent_rows.get(nb_name)
+            items.append(GraphNeighborItem(
+                name=nb_name,
+                entity_type=ent.entity_type if ent else "unknown",
+                description=ent.description if ent else None,
+                relation_type=r.relation_type,
+                direction=direction,
+                relation_description=r.description,
+                weight=r.weight or 1.0,
+            ))
+
+        items.sort(key=lambda x: (-x.weight, x.relation_type, x.name))
+        return GraphNeighborsResponse(
+            entity=entity,
+            total=len(items),
+            neighbors=items[:limit],
+        )
+
+
 # ── GraphRAG 阶段 5: Neo4j 图谱管理 ────────────────────────────────────────
 
 class GraphConfigResponse(BaseModel):
