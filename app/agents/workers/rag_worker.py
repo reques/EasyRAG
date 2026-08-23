@@ -64,6 +64,11 @@ class RagWorker(BaseWorker):
                     "role": "system",
                     "content": format_knowledge_catalog(brief.knowledge_catalog),
                 },
+            ]
+            history_msg = self._history_context_message(brief)
+            if history_msg:
+                messages.append(history_msg)
+            messages.append(
                 {
                     "role": "user",
                     "content": (
@@ -73,7 +78,7 @@ class RagWorker(BaseWorker):
                         f"请基于上下文完成上述任务目标。"
                     ),
                 },
-            ]
+            )
 
             # 4. LLM 生成
             answer = self._chat(messages, temperature=0.3, max_tokens=8192)

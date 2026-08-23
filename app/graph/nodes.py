@@ -70,11 +70,58 @@ def rewrite_query_with_history(query: str, history: List[Dict[str, str]]) -> str
     return query
 
 
+def query_rewrite(state):
+    """Node 0: 结合历史把追问改写为自包含问题。
+
+    2026-08-15（P1 统一两条路径）：此前指代消解只在 SSE 快速路径
+    （prepare_context）执行，graph 路径（/chat/send）不做——同一句
+    "那明天呢"两条路径理解不一致。下沉到 graph 入口后 /chat/send 与
+    /chat/stream 行为一致。改写失败/无历史时原样返回，零副作用；
+    非追问查询不触发 LLM（rewrite_query_with_history 内部短路）。
+    """
+    query = state["query"]
+    history = state.get("history") or []
+    resolved = rewrite_query_with_history(query, history)
+    if resolved != query:
+        logger.info("[query_rewrite] %r -> %r (graph entry)", query[:40], resolved[:60])
+    return {
+        "query": resolved,
+        "steps": _append_step(state, f"query_rewrite -> {resolved[:40]}"),
+    }
+
+
 def intent_recognition(state):
-    """Node 1: Classify user intent and set routing flags. 带历史上下文。"""
+    """Node 1: Classify user intent and set routing flags. 带历史上下文。
+
+    快速路径：简单常识/问候/计算/时间问题先用零成本规则预判（跳过 LLM
+    分类调用，避免简单问题被误判成 web_search 等工具路径），其余交回
+    LLM 分类器。用户显式启用 Skill 时不走快速路径（尊重 Skill 的工具约束）。
+    """
     query = state["query"]
     history = state.get("history") or []
     logger.info("[intent_recognition] query=%r history_turns=%d", query[:80], len(history) // 2)
+
+    # ── 规则快速路径（简单问题不经过 LLM 分类）─────────────────────────
+    if cfg.FAST_INTENT_ENABLED:
+        try:
+            from app.graph.fast_intent import fast_intent_detect
+            from app.skills.context import get_active_skill_context
+
+            if not get_active_skill_context().active:
+                fast = fast_intent_detect(query, history)
+                if fast is not None:
+                    intent = fast["intent"]
+                    logger.info(
+                        "[intent_recognition] fast path -> %s (conf=1.00)",
+                        intent,
+                    )
+                    return {
+                        **fast,
+                        "steps": _append_step(state, "intent_recognition -> " + intent + " [fast]"),
+                    }
+        except Exception as exc:
+            logger.warning("[intent_recognition] fast path skipped: %s", exc)
+
     client = get_llm_client(tier="fast")
     # 动态注入当前可用工具（含 MCP 工具）——prompt 里硬编码枚举会漏掉
     # 后注册的工具，导致 LLM 把未知工具名当参数传给别的工具（如 "echo" → text_tool）
@@ -183,10 +230,12 @@ def agent_reasoning(state):
         f"{i+1}. 思考: {o.get('thought','')} | 工具: {o.get('tool','')} | 结果: {str(o.get('result',''))[:200]}"
         for i, o in enumerate(observations)
     ) or "（暂无观察）"
+    history = state.get("history") or []
     prompt = REACT_REASONING.format(
         tools=registry.to_react_prompt(),
         observations=obs_text,
         query=query,
+        history=_format_history_for_prompt(history),
     )
     from app.skills.context import get_active_skill_prompt
 

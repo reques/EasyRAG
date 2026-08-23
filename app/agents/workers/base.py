@@ -29,6 +29,9 @@ class TaskBrief:
     worker_hint: str = ""  # rag / legal / code
     knowledge_base_ids: List[str] = field(default_factory=list)
     knowledge_catalog: List[Dict[str, Any]] = field(default_factory=list)
+    # 最近对话（含摘要 system 消息），供 Worker 理解指代/追问（P1 修复：
+    # 此前多智能体子任务完全看不到对话历史，"那第二个呢"这类追问无从解析）
+    history: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -174,3 +177,29 @@ class BaseWorker(ABC):
         if not skill_prompt:
             return messages
         return [{"role": "system", "content": skill_prompt}, *messages]
+
+    # ── 对话历史注入（P1）─────────────────────────────────────────────────
+    @staticmethod
+    def _history_context_message(
+        brief: TaskBrief, max_turns: int = 4, max_chars: int = 120
+    ) -> Optional[Dict[str, str]]:
+        """把 brief.history 的最近几轮格式化为 system 上下文消息。
+
+        返回 None 表示无历史（调用方应跳过注入）。长度有界：
+        max_turns 轮 × max_chars 字截断，避免把摘要/长历史灌进子任务。
+        """
+        if not brief.history:
+            return None
+        recent = brief.history[-(max_turns * 2):]
+        lines = []
+        for t in recent:
+            role = "用户" if t.get("role") == "user" else "助手"
+            content = (t.get("content") or "").strip().replace("\n", " ")[:max_chars]
+            if content:
+                lines.append(f"{role}: {content}")
+        if not lines:
+            return None
+        return {
+            "role": "system",
+            "content": "对话背景（最近的对话，供理解指代与追问）：\n" + "\n".join(lines),
+        }

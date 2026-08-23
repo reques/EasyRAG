@@ -40,6 +40,11 @@ class CodeWorker(BaseWorker):
 
             messages = [
                 {"role": "system", "content": self.persona},
+            ]
+            history_msg = self._history_context_message(brief)
+            if history_msg:
+                messages.append(history_msg)
+            messages.append(
                 {
                     "role": "user",
                     "content": (
@@ -50,7 +55,7 @@ class CodeWorker(BaseWorker):
                         f"请完成上述编程任务。"
                     ),
                 },
-            ]
+            )
 
             answer = self._chat(messages, temperature=0.3, max_tokens=8192)
             steps.append(f"LLM 生成完成，回答长度 {len(answer)} 字符")
