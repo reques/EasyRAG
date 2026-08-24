@@ -723,3 +723,447 @@ Qwen-3.6-Flash、GLM-5.2 接入后端环境配置；同一次请求中的单 Age
 **动效优化：** 状态栏改用 Vue Transition 抽屉过渡，展开和收起时在约 520ms 内同步改变
 宽度、右侧位移、透明度、内边距及边框，聊天主区域随之平滑伸缩；悬浮入口延迟淡入，避免与
 正在收起的面板重叠。拖拽改宽期间禁用过渡，并兼容系统“减少动态效果”设置。
+
+#### 2026-08-15 — 简单问题快速路径：不再"思考很久"也不误调 web_search
+
+**背景：** 用户反馈"我在一家餐馆吃坏肚子了，该怎么办"这类简单常识问题也被意图分类器判成
+"联网/工具查询（置信度 75%）"并实际调用 web_search——思考链路长（理解→识别→调工具→生成）、
+开销大且不合理。
+
+**方案（两层，互不依赖）：**
+
+1. **规则快速路径（新增 `app/graph/fast_intent.py`）** — 在 LLM 意图分类之前做零成本规则预判：
+   - 明确计算请求（"1+1"、"帮我计算 2+2"）→ `tool_use + calculator`（跳过 LLM 分类）
+   - 明确日期时间请求（"现在几点"、"今天几号"）→ `tool_use + datetime_tool`（跳过 LLM 分类）
+   - 问候闲聊（"你好"、"谢谢"）→ `chitchat`（跳过 LLM 分类）
+   - 简单自包含常识/生活/写作问题（"吃坏肚子怎么办"、"如何做红烧肉"）→ 新增 `direct` 意图，
+     直接回答：不检索知识库、不调工具、不经过 LLM 分类
+   - 其余（涉及实时数据/知识库关键词、依赖上文的追问、长问题、用户显式启用 Skill）→ 返回
+     `None`，交回原 LLM 分类器。设计原则：宁可漏（回退 LLM），不可错。
+2. **LLM 分类器 prompt 修正（`INTENT_RECOGNITION`）** — 新增 `direct` 意图定义与关键规则：
+   常识/生活建议/健康/科普/做法/写作类问题一律判 `direct`（requires_retrieval=false、
+   requires_tool=false），不要因为"可能查得到"就调 web_search；只有天气/新闻/股价/汇率/
+   当前时间等真正实时数据才走 web_search。即使绕过规则层，LLM 也不再误判。
+
+**配套改动：**
+- `intent_recognition` 节点接入快速路径；用户显式启用 Skill 时跳过快速路径（尊重 Skill 工具约束）。
+- `route_after_intent` 显式支持 `direct` → 直接生成；`route_after_generation` 对 `direct`
+  跳过校验环节（省一次 LLM 调用），workflow 条件边补充 END。
+- 意图中文标签与前端思考过程时间线新增 `direct`（直接回答）步骤（`AgentActivity.vue`）。
+- 新增配置 `FAST_INTENT_ENABLED=true`（默认开启，关闭即回退旧行为），`.env.template` 同步。
+
+**效果：** 简单问题从"4 步 + web_search 外部调用"降为"理解问题 → 识别意图（直接回答）→ 生成回答"，
+全程 1 次 LLM 调用、0 次外部工具。
+
+**验证：**
+- 新增 `tests/test_fast_intent.py` **24/24 通过**（常识→direct、计算/时间→工具、问候→chitchat、
+  天气/新闻/知识库/追问→安全回退、长问题/空串→回退）。
+- 完整测试集 `python -m pytest -q`：除既有的 2 个图谱构建用例（jieba/加速缓存，与本次无关）
+  外全部通过；`python -m compileall -q app backend tests` 通过。
+- 真实节点验证：`intent_recognition("吃坏肚子怎么办")` → direct（retrieval/tool 均 false）；
+  Skill 激活时走 LLM 分支且新 prompt 同样判 direct（此前为 web_search）；图编译通过。
+
+#### 2026-08-15 — 上下文管理 P0 修复：摘要不丢段 + 历史窗口显式化 + 事实提取后台化
+
+**背景（评审结论）：** 上下文管理存在三类高优先级问题：① 摘要折叠只看"最后 10 条"，
+某次 LLM 压缩失败后失败点之前的新消息从摘要里永久丢失，且 summary 长期为 None 时
+长会话会把上下文撑爆；② 历史查询隐式 `LIMIT 100` 且按 `created_at ASC` 取**最早** 100 条，
+超过 100 条消息的会话"最近 20 条"窗口实际是伪最近（真正的尾部被丢掉）；③ 语义记忆
+事实提取在主链路同步执行（agent 运行/SSE 开流**之前**），用主模型、无去重，
+"我的/以后"等过宽关键词高频误触发。
+
+**实现：**
+
+1. **摘要折叠改为断点式（不丢段）**：`conversations` 新增 `last_summarized_message_id`
+   列（模型 + `main.py` lifespan 幂等迁移 `ALTER TABLE ... IF NOT EXISTS`）。
+   `maybe_update_summary` 只折叠该断点之后的新消息（单次最多 20 条防超长 prompt），
+   **LLM 失败不推进断点，下次触发重试同一段**——中间段消息永不丢失。
+   压缩改走 fast tier，降成本与延迟。
+2. **历史窗口显式化 + 真实尾部**：`get_conversation_history` 支持显式 `limit/offset`；
+   `MessageRepository.list_by_conversation` 支持 offset；新增纯逻辑
+   `decide_history_window`（full / compressed / cap_tail 三态）——
+   有摘要超窗口 → 摘要 + **真实尾部** 20 条；无摘要超窗口 → 取最近
+   `HISTORY_CONTEXT_MAX_MESSAGES`（新配置，默认 100）条并记日志，
+   替代旧的"最早 100 条隐式截断 / 无界增长"。
+3. **事实提取后台化 + 去重 + 降级**：`add_message` 对含触发词的用户消息改为
+   `asyncio.create_task` 后台调度（独立 session，持有引用防 GC，失败不影响主链路），
+   不再阻塞 agent / SSE 开流；`extract_and_store_fact` 与 `add_user_fact` 走 fast tier，
+   `add_user_fact` 按 (user_id, fact) 内容去重（重复返回旧记录）；
+   触发词收紧（移除过宽的"以后"）。摘要更新保持同步（每 10 条消息触发，fast tier）。
+
+**验证：**
+- 新增 `tests/test_memory_context.py` **10/10 通过**：`decide_history_window` 三态
+  （compressed 取真实尾部、cap_tail 显式兜底）与触发词收紧。
+- 真实 PostgreSQL 临时数据验证（临时用户/会话，结束即清理）5/5：20 条消息后摘要生成
+  且断点推进；LLM 模拟失败时断点不动、摘要不变；恢复后一次性折叠失败段（含上次
+  失败的新消息）直达最后一条消息 id；事实去重同内容只存一条。
+- 完整测试集（排除 2 个既有失败）`python -m pytest -q` 全绿，`compileall` 通过。
+- `scripts/verify_memory_layers.py` 增加 3 项断言：新列存在、10 轮后断点推进、
+  追加轮次后断点到达最后一条消息（不丢段）+ 压缩尾窗为真实最近窗口。
+
+#### 2026-08-15 — 上下文管理 P1 修复：改写下沉 graph 入口 + 多智能体/ReAct 历史注入
+
+**背景（评审结论）：** 指代消解只在 SSE 快速路径（prepare_context）执行，graph
+路径（/chat/send）不执行——同一句"那明天呢"两条路径理解不一致；多智能体
+（orchestrator）与 ReAct 循环的 prompt 完全不带对话历史，子任务/推理循环里
+"那第二个呢"这类追问无从解析。（问题 12 摘要/事实切 fast tier 已在 P0 一并完成。）
+
+**实现：**
+
+1. **rewrite 下沉 graph 入口（两条路径统一）**：新增 `query_rewrite` 节点
+   （Node 0），workflow 入口从 `intent_recognition` 改为 `query_rewrite` →
+   `intent_recognition`。非追问查询零成本（`rewrite_query_with_history` 内部
+   短路，不调 LLM）；改写失败/无历史原样返回。deepagents 路径本就有完整历史
+   注入（`messages.extend(history)`），无需改动。
+2. **ReAct 注入历史**：`REACT_REASONING` 模板新增 `{history}` 占位符，
+   `agent_reasoning` 节点用 `_format_history_for_prompt` 注入最近 4 轮，
+   ReAct 循环内可解析指代。
+3. **多智能体注入历史**：`TaskBrief` 新增 `history` 字段（orchestrator.run
+   统一赋值）；三个 Worker（rag/legal/code）经 `BaseWorker._history_context_message`
+   注入"对话背景" system 消息（最近 4 轮 × 120 字截断，长度有界）；
+   `_decompose` 拆解 prompt 注入历史并新增规则 6（追问必须结合历史理解、
+   子任务必须自包含）；`_synthesize` 与 SSE 流式汇总 prompt（chat_router）
+   同样注入历史。
+
+**验证：**
+- 新增 `tests/test_context_injection.py` **9/9 通过**：query_rewrite 节点改写/
+  保原样、图编译含新入口、REACT_REASONING 模板带历史、TaskBrief.history 默认
+  空、`_history_context_message` 有/无历史两种形态、RagWorker 消息注入与跳过、
+  `_decompose` prompt 含历史。
+- 真实 LLM 冒烟（临时会话）："那明天呢"（带无锡天气历史）→ query_rewrite 改写
+  为自包含问题 → intent=tool_use → web_search 真实返回 → 回答校验通过，
+  图入口改动端到端无回归。
+- 完整测试集（排除 2 个既有失败）+ compileall 全绿。
+
+#### 2026-08-15 — 多智能体触发规则 1 修订：领域字典 ≥2 领域命中
+
+**背景：** 原规则 1 用 `domain_pairs` 手工列举关键词组合，但组合几乎全部围绕
+法律领域（法律×代码、法律×法律比较、检索×写作），后续上传知识库类型多样
+（金融/医疗/教育/生活…）时大量真正的跨领域查询（如"分析股票走势并整理成
+报告"）不会触发多智能体。
+
+**实现（`app/services/agent_service.py`）：**
+- 新增 `_DOMAIN_KEYWORDS` 领域字典（12 个领域：法律/代码/写作/检索/分析/
+  金融/医疗/科技/职场/生活/教育/历史），每个领域一行关键词；
+- 规则 1 改为"查询命中 ≥2 个**不同领域**关键词 → multi"——任意跨领域组合
+  天然命中，新增领域只需加一行，不再依赖手工 pair 枚举；
+- 顺带修正注释（阈值 80 字符，旧注释误写 100）；
+- 规则 2（长查询 + 连词）与 degenerate 兜底不变——规则 1 宁可放宽（误触发
+  会被 LLM 拆解器打回单 Agent），不可漏掉真跨领域。
+
+**行为变化：** "帮我写一个python脚本"（代码+写作）从 single 变为 multi；
+原"法律×法律跨法条比较"（安全生产法 vs 民法典）不再因关键词 pair 触发，
+由拆解器自行判断（单 Agent 知识库检索同样能处理）。
+
+**验证：** 新增 `tests/test_multi_agent_routing.py` **17/17 通过**——旧跨域组合
+保留触发、新增金融/医疗/教育/生活等多样性组合、单领域/无关查询不触发、
+长查询+连词触发、领域字典覆盖 ≥8 领域且任意两领域组合命中。完整测试集
+（排除 2 个既有失败）+ compileall 全绿。
+
+#### 2026-08-21 — DeepAgents 成熟化 S1：知识库检索接入（消除幻觉风险）
+
+**背景（见 `docs/plans/2026-08-21-deepagents-maturation-plan.md`，缺口 S1）：**
+`_run_deep` 此前从不执行知识库向量检索，系统提示却声称"检索结果会作为上下文
+提供"——DeepAgents 模式下知识库问答退化成纯 LLM 生成；且工具注册表没有任何
+kb 检索工具，主/子 Agent 均无法检索知识库。
+
+**实现：**
+1. **请求级知识库授权上下文**（`app/services/knowledge_context.py`，仿
+   `skills/context.py` 的 ContextVar 模式）：`use_authorised_kb_ids(ids)` /
+   `get_authorised_kb_ids()`，跨线程需 `with` 设置，避免越权。
+2. **`kb_search` 注册表工具**（`app/tools/kb_search.py`，自动发现即注册）：
+   从请求级授权范围读取 kb_ids（无授权拒绝并提示），调增强检索，知识块/平铺
+   格式化输出（含来源）。主 Agent 全量可见，research-agent 白名单已加并
+   system prompt 引导"企业内部资料优先 kb_search"。
+3. **`_run_deep` 前置检索注入**：组装 messages 时（有授权 kb_ids 时）执行增强
+   检索，命中则注入 system 上下文（"回答时优先采用，并标注来源"），记录
+   retrieve step/artifact，收集 `result.sources` 到返回结构；检索失败不阻塞。
+   主 Agent 执行包在 `use_authorised_kb_ids` 作用域内，task 委派的 SubAgent
+   调 kb_search 也能读到授权范围。
+
+**验证：**
+- 新增 `tests/test_deepagents_kb.py` **7/7 通过**：kb_search 已注册、无授权拒绝、
+  有授权返回格式化结果、授权上下文设置/恢复、`_run_deep` 注入检索 system 消息
+  且 sources 收集、无 kb 时跳过检索、research-agent 白名单含 kb_search；
+  `tests/test_deep_agents.py` 11 项回归不破坏。
+- 完整测试集（排除 2 个既有失败）+ compileall 全绿。
+- **真实环境冒烟**（dev 库"法律"知识库 + 真实 LLM）：
+  - 多轮路径：前置检索命中 12 条 ✓，主 Agent 推理中**自主调用 kb_search** 并
+    拿到消费者权益法检索结果 ✓；
+  - 单轮路径完整闭环：检索 → 注入 → 基于知识库回答（食品安全法召回规定）→
+    sources 返回真实来源（食品安全法.pdf / 消权法.pdf）✓；
+  - **暴露既有缺陷（S8 范畴，非本次引入）**：DeepSeek 思考模式下多轮工具调用
+    报 `reasoning_content must be passed back to the API`（400）——ChatOpenAI
+    适配层未处理思考内容回传，DeepAgents 多轮工具路径的真实可用性受影响，
+    建议作为下一步修复项。
+
+#### 2026-08-21 — DeepAgents 成熟化 S2：配置与入口补全（可达性）
+
+**背景（见规划文档，缺口 S2）：** `AGENT_MODE` 类型定义缺 "deepagents"（代码
+判断了该值但 Literal 没有，IDE/配置校验层面不认可）；`DEEP_SUBAGENTS_FILE`
+未在 config 声明（pydantic-settings 未声明字段读不到 env → 外部 SubAgent
+覆盖**实际失效**）；`.env.template` 无 AGENT_MODE/DEEP_* 文档；无启动日志。
+
+**实现：**
+1. `config.py`：`AGENT_MODE: Literal["auto","single","multi","deepagents"]` +
+   注释；声明 `DEEP_SUBAGENTS_FILE: str = ""`、`DEEP_MAIN_RECURSION_LIMIT: int = 20`、
+   `DEEP_SUBAGENT_RECURSION_LIMIT: int = 20`
+2. `subagents.py` 修复外部覆盖失效：`load_subagents` 直接读 `cfg.DEEP_SUBAGENTS_FILE`
+   （去掉失效的 getattr 兜底）；`_load_subagents_file` 健壮化——文件不存在/
+   解析失败/无 subagents 列表 → 回退内置并告警（不因坏配置崩启动）；
+   无 name 条目跳过
+3. recursion_limit 接入配置：`build_main_agent` / `build_task_tool` 默认读
+   `DEEP_SUBAGENT_RECURSION_LIMIT`（显式传参优先）；`_run_deep` 主 Agent 用
+   `DEEP_MAIN_RECURSION_LIMIT`
+4. `.env.template`：文档化 AGENT_MODE 四种取值与 DEEP_*（含外部 SubAgent
+   文件 JSON/YAML 格式示例）
+5. `main.py` lifespan：启动日志打印 AGENT_MODE；deepagents 模式额外打印
+   SubAgent 名册（可发现性）
+
+**验证：**
+- 新增 `tests/test_deepagents_config.py` **11/11 通过**：AGENT_MODE Literal 接受
+  deepagents、DEEP_* 字段声明且 env 可覆盖、外部文件加载（有效/缺失/坏 JSON/
+  无 name 条目跳过/未配置回退内置）、recursion_limit 默认读配置且显式传参优先。
+- 完整测试集（排除 2 个既有失败）+ compileall 全绿；真实 env 读取验证
+  （AGENT_MODE=auto，DEEP_* 默认值正常）。
+
+#### 2026-08-21 — DeepAgents 成熟化 S8：DeepSeek 思考模式多轮回传修复
+
+**背景（S1 真实冒烟暴露的既有缺陷）：** DeepSeek reasoning 模型在响应中返回
+`reasoning_content`（思考内容），OpenAI 兼容协议要求多轮对话把上一轮
+assistant 消息的 `reasoning_content` 原样回传，否则 400
+`The reasoning_content in the thinking mode must be passed back to the API`。
+langchain-openai 1.4.1 的 `_convert_dict_to_message`（响应侧）与
+`_convert_message_to_dict`（请求侧）都会丢弃该字段 → DeepAgents 主 Agent
+多轮工具调用（调用 kb_search/web_search 之后）必然失败，只能单轮回答。
+
+**实现（`app/agents/deep/llm.py`）：** 新增 `DeepSeekChatOpenAI(ChatOpenAI)`：
+- 响应侧 override `_create_chat_result`：从响应（dict 或 openai.BaseModel）
+  提取 `reasoning_content` 存入 `AIMessage.additional_kwargs`；
+- 请求侧 override `_get_request_payload`：复刻 BaseChatOpenAI 实现，对
+  assistant 消息从 `additional_kwargs` 补回 `reasoning_content` 字段
+  （含带 tool_calls 的工具调用轮）；responses API 路径原样走基类；
+- `get_langchain_model` 改用它；对非 reasoning 模型行为与 ChatOpenAI 完全一致。
+
+**验证：**
+- 新增 `tests/test_deepagents_reasoning.py` **8/8 通过**：请求侧回传（含
+  tool_calls 轮）、响应侧保存（dict 与 openai.BaseModel）、无 reasoning_content
+  时行为不变、`get_langchain_model` 返回适配类。
+- 完整测试集（排除 2 个既有失败）+ compileall 全绿。
+- **真实环境冒烟**（dev 库"法律"知识库 + 真实 DeepSeek）：多轮路径完整闭环
+  —— 前置检索命中 12 条 → 主 Agent 推理 → **调用 kb_search** → 基于检索结果
+  生成 1491 字回答（消权法消费者权利表，标注来源），此前该路径在工具调用后
+  报 400 无法产出最终回答。
+
+#### 2026-08-21 — DeepAgents 成熟化 S3：子 Agent 步骤透传（委派过程可见）
+
+**背景（见规划文档，缺口 S3）：** task 委派的 SubAgent 执行过程是黑盒——
+`_run_deep` 的 on_step/on_artifact 只覆盖主 Agent 的 stream，`run_subagent`
+内部用 `agent.invoke` 一次性拿结果，前端 SSE 只能看到 "调用 task(...)" 与
+一条"工具返回"，看不到子 Agent 的推理/工具调用。
+
+**实现：**
+1. **请求级观察者**（`app/agents/deep/observe.py`，ContextVar 模式）：
+   `use_task_observers`（`_run_deep` 设置，包住主 Agent 执行）→ task 工具
+   读取；`use_subagent_observers`（task 工具转发）→ `run_subagent` 读取。
+   两层隔离避免子 Agent 步骤与主 Agent 步骤混淆。
+2. **`run_subagent` 改 `agent.invoke` → `agent.stream(stream_mode="values")`**：
+   有观察者时把子 Agent 的推理（thought artifact）/工具调用/工具返回/生成
+   步骤以 `{subagent_name}/step` 形式透传；无观察者时跳过解析（行为不变）。
+3. **`task_tool._task`**：读 task 观察者，存在时 `with use_subagent_observers`
+   包住 `run_subagent`（SSE 回调同线程同步可见）。
+4. **`_run_deep`**：主 Agent 执行作用域与 `use_authorised_kb_ids` 并列设置
+   `use_task_observers(_step, _artifact)` —— 子 Agent 步骤直接进现有
+   SSE artifact 通道，**前端无需改动**。
+
+**验证：**
+- 新增 `tests/test_deepagents_observe.py` **6/6 通过**：观察者设置/恢复、
+  run_subagent 透传（tool/tool_done/generate 步骤 + thought artifact 带
+  前缀）、无观察者行为不变、task 工具转发链路（有/无观察者）、`_run_deep`
+  端到端委派步骤可见。
+- 完整测试集（排除 2 个既有失败）+ compileall 全绿。
+- **真实环境冒烟**（dev 库 + 真实 LLM）：主 Agent 委派 research-agent 后，
+  步骤流完整呈现子 Agent 内部过程——`research-agent/tool: 调用 kb_search(...)`
+  （2 次，知识库无命中）→ `research-agent/tool: 调用 web_search(...)`（2 次）
+  → `research-agent/generate: 子智能体生成回答中...` → 子 Agent 输出研究
+  报告（食品安全法消费者权益保护总结）返回主 Agent → 主 Agent 生成最终
+  1109 字回答。前端 SSE 可完整看到委派过程。
+
+#### 2026-08-21 — DeepAgents 输出模式改版：操作流（Cursor/Copilot 风格）
+
+**背景（用户提供参考截图——AI agent 工作界面，Think/Read/Write/Edit 操作流）：**
+要求 DeepAgents 的执行过程以"和你对话"的截图式操作流展示。用户确认：
+操作流铺开（去折叠面板）+ 英文动词式 + 仅过程展示（最终回答保持 markdown）。
+
+**实现（前端）：**
+1. `AgentActivity.vue` 重写：去掉可折叠面板/头部，操作条目直接铺开在答案
+   上方；步骤映射为**英文动词**——Rewrite（查询改写）/ Classify（意图）/
+   Think（推理思考）/ **Read**（检索知识库）/ **Run**（调用工具，kb/web
+   搜索动态变 **Search**）/ **Write**（生成回答）/ Answer / Check /
+   Plan / Delegate / Merge / Fallback；等宽字体动作词 + 对象（工具名/
+   内容摘要）截断 + 子 Agent 标签（research-agent 等，S3 透传的
+   `subagent/step` 前缀自动解析）
+2. 动作类型配色（截图式）：Think 蓝 / Read·Search 绿 / Run 紫 / Write 橙 /
+   Check 青 / Delegate·Plan·Merge 粉 / Fallback 红
+3. `style.css`：移除面板/折叠/头部样式，新增操作流样式（容器滚动、动词/
+   对象/子 Agent 标签、kind 配色）
+4. `ChatView.vue`：移除不再需要的 `v-model:expanded` 绑定
+
+**验证：**
+- `npm run build` 通过（修复步骤配对 bug：X_done 需把同 key 的 running
+  步骤置 done，避免 tool/tool_done 重复行）
+- 逻辑仿真（Node）：DeepAgents + 子 Agent 真实步骤流 → Read → Think →
+  Run(task) → Search[kb_search] → Search[web_search] → Write[子 Agent] →
+  Write 全部正确配对并带子 Agent 标签
+- 视觉效果：需 EasyRAG 前端 dev server 刷新查看（HMR 生效则自动更新）
+
+#### 2026-08-21 — DeepAgents 输出模式改版二期：act and reasoning（内容透出）
+
+**背景（用户再次反馈"想的是 act and reasoning 这种感觉"，参考截图每条
+`Think · <实际思考内容>` / `Tool call · <工具名> · <参数>` 内容可见）：**
+一期只改了前端壳（英文动词+对象），后端步骤 detail 仍是固定短语
+（"推理思考..."），思考内容被丢进下方折叠的 artifact 卡片，看不到"在想
+什么、在做什么"。
+
+**实现：**
+1. `_run_deep`（agent_service.py）：`agent_reasoning` 步骤 detail 改为
+   **实际思考内容**（400 字符截断摘要）；`tool` 步骤 detail 带**工具参数**
+   （160 字符截断），如 `调用 kb_search {"query": "消费者权利 消权法"}`
+2. `run_subagent`（subagents.py）：子 Agent 思考内容作为**独立 reason 步骤**
+   透出（`research-agent/reason`）；工具步骤同样带参数
+3. 前端：ACTION_MAP 加 `reason → Think`；Think 内容允许**两行折行**展示
+   （obj-reason）；tool 配对**保留调用信息**（不被"工具返回: ..."覆盖，
+   返回内容由 artifact 卡片承载）
+
+**验证：**
+- 全量测试（排除 2 个既有失败）+ compileall 全绿（observe 测试断言更新：
+  reason 步骤 + 工具参数格式）
+- 逻辑仿真：`Think · 知识库里有消费法律，先检索确认消费者权利再回答` →
+  `Search · kb_search {"query": "消费者权利 消权法"}` → `Think [research-agent] ·
+  先查企业知识库确认消权法内容` → ... —— 每条动作带实际推理/参数
+- **真实冒烟**（dev 库 + 真实 LLM）：步骤流含 `agent_reasoning: 知识库中没有
+  检索到相关内容，让我联网核实一下相关法律条款。`（真实推理文本）、
+  `tool: 调用 web_search {"query": "食品安全法 消费者权利 知情权 赔偿..."}`
+
+#### 2026-08-21 — 对话终止：停止生成 + 被终止的一轮不保存记录
+
+**背景（用户需求）：** 添加终止对话的逻辑；当前这轮对话被终止时，
+不被保存到记录（历史里不留"悬空"的用户提问）。
+
+**实现：**
+1. **前端**：
+   - `api/index.js`：`streamChat` 支持 `options.signal`（AbortController）
+   - `ChatView.vue`：生成中发送按钮变为红色**停止按钮**（Square 图标）→
+     `stopGeneration()` abort 当前请求；AbortError 非错误（消息标记
+     `stopped`，显示"已停止生成 · 本轮对话未保存"），失败路径不变；
+   - `style.css`：`.btn-stop`（红色停止态）、`.message-stopped-note`
+2. **后端**（chat_router.py `event_gen` + chat_service）：
+   - `chat_service.delete_message()`：按 id 删除单条消息
+   - `event_gen` 扩展：客户端断开（Starlette 以 `CancelledError` 取消
+     生成器）→ `completed_normally=False` → 清理该轮：
+     - 新建会话（is_new）→ 整会话删除（级联消息），不留空壳
+     - 已有会话 → 删除该轮用户消息（assistant 在生成器内保存，流中断
+       天然不落库）
+   - run 终态处理（multi）原有 shield 逻辑保持不变
+
+**关键坑：** 任务处于取消状态时，finally 里直接 `await` 会立即再次抛
+`CancelledError`——清理必须用 `asyncio.create_task` + `asyncio.shield`
+（与既有 run finalize 同款处理）。首次实现未 shield 导致清理静默失败，
+真实冒烟（conversations 6→7 残留）暴露后修复。
+
+**验证：**
+- 真实服务冒烟（uvicorn + 真实 LLM + dev 库）：
+  - 新会话发起流 → 3 个事件后强制断开 → 会话列表数量不变
+    （terminated 新会话已删）
+  - 已有会话发起流 → 断开 → DB `messages` 中无该轮记录
+  - 修复前残留脏数据已清理（count 归 0）
+- 全量测试（排除 2 个既有失败）+ compileall 全绿；`npm run build` 通过
+- 最小复现实验确认：uvicorn 0.51（ASGI 2.3）下客户端断开 → 生成器收到
+  `CancelledError` → finally 可执行（前提：DB 操作走 shield）
+
+#### 2026-08-21 — Agent 路径可观测：DeepAgents 徽标（agent_mode 透出）
+
+**背景（用户提问"如何知道当前是否调用了 deepagents 的能力"）：**
+现状只有 done 事件的 intent="deepagents"（前端显示为模糊的"意图: 智能体"），
+流式过程中完全看不到走了哪条链路；且 **.env 未配置 AGENT_MODE 时（默认 auto）
+DeepAgents 永远不会被调用**（use_deep 仅 `== "deepagents"`），用户无法感知。
+
+**实现：**
+1. **后端**（chat_router.py）：计算 `agent_mode`（deepagents | multi | single），
+   随 `conversation_id` 事件（流一开始就送达）与 `done` 事件下发，并写入
+   落库 metadata（历史回放可见）
+2. **前端**（ChatView.vue + style.css）：消息 meta 区新增**路径徽标**——
+   DeepAgents（紫色渐变、醒目）/ 多智能体（粉色）/ 单 Agent（灰色），
+   流一开始即显示（无需等 done）；历史消息从 metadata 读出同样显示
+
+**验证（真实服务冒烟）：**
+- AGENT_MODE=auto + "你好" → `agent_mode=single`（intent=chitchat）
+- AGENT_MODE=auto + 跨领域问题 → `agent_mode=multi`（intent=multi_agent）
+- AGENT_MODE=deepagents（环境变量覆盖）→ `agent_mode=deepagents`，
+  完整跑通（1123 字回答）
+- 全量测试 + compileall + `npm run build` 全绿
+
+**启用 DeepAgents 的方法：** `.env` 设 `AGENT_MODE=deepagents`（或环境变量）
+→ 每轮都走主 Agent + SubAgent 链路，消息上显示紫色 DeepAgents 徽标。
+
+#### 2026-08-21 — 深度研究开关（按请求选择 DeepAgents，前后端打通）
+
+**背景（用户需求）：** 前端添加"深度研究"按钮；选中时走 deepagents 工作流，
+不选走原逻辑——不再依赖全局 AGENT_MODE 配置。
+
+**实现：**
+1. **后端**（chat_router.py）：
+   - `ChatRequest` 新增 `deep_research: bool = False`
+   - `use_deep = cfg.AGENT_MODE == "deepagents" or req.deep_research`；
+     `use_multi = (not use_deep) and (...)` —— 深度研究优先，避免创建多余
+     multi run
+2. **前端**（ChatView.vue + style.css）：
+   - 输入区新增**深度研究 toggle**（Sparkles 图标；选中紫色渐变，生成中禁用，
+     title 说明用途），与发送按钮同组**紧贴发送按钮左侧**（`.composer-send-group`
+     右侧按钮组；`space-between` 下左右分组各居一端，避免按钮悬在中间）
+   - 请求体带 `deep_research`；用户消息显示紫色"深度研究"标记
+   - 路径徽标（上一项）自动显示 DeepAgents
+
+**验证（真实服务冒烟，默认配置 auto）：**
+- 未选 + "你好" → `single`（chitchat）
+- 未选 + 跨领域 → 原逻辑（本次未触发 multi，属正常）
+- **选中 + 简单问题 → `deepagents`**（941 字，steps 含
+  retrieve/tool/agent_reasoning）
+- **选中 + 跨领域 → `deepagents`**（1297 字；深度研究优先于 multi）
+- 全量测试 + compileall + `npm run build` 全绿
+
+#### 2026-08-21 — Milvus 连接故障修复（HTTP_PROXY 环境变量干扰 gRPC）
+
+**背景（用户贴日志）：** `[enhanced] BM25 sync failed / Path semantic failed /
+gap query failed: MilvusException (Fail connecting to server on localhost:19530)`，
+检索全面失效（含 eager build、多路召回、gap 查询）。
+
+**排查过程：**
+1. docker port/TCP 均通（127.0.0.1:19530 可达），容器 healthz OK
+2. 容器间（easyrag-minio → milvus-standalone:19530）HTTP 响应正常
+3. Windows → 19530 发 HTTP/1.1 请求有响应（REST 网关），发 HTTP/2 前奏
+   收到 SETTINGS 帧——**网络层完全正常**，问题在 gRPC 客户端
+4. grpcio 调试日志（GRPC_TRACE=tcp,handshaker）发现：
+   `grpc.internal.endpoint_peer_address=ipv4:127.0.0.1:7897` —— **grpcio 把
+   连接导向了 127.0.0.1:7897（本地代理）**！
+5. 确认：环境变量 `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7897` +
+   Windows 系统代理 ProxyServer=127.0.0.1:7897（Clash 类）——grpcio 自动
+   经代理 CONNECT 连 Milvus，代理对 localhost gRPC 处理异常 → 握手超时。
+   附带发现：`requests` 同样受代理影响（冒烟时曾出现 502，需 trust_env=False）
+6. 期间还发现 pymilvus 被意外升级到 3.0.1（requirements 锁定 2.5.11，
+   3.x 与 Milvus 2.5.14 服务器不兼容）→ 降回 2.5.11
+
+**修复：**
+- **`app/core/config.py`**：模块加载时自动把 `127.0.0.1, localhost, ::1`
+  加入 `no_proxy` 环境变量——本地服务（Milvus/Postgres/Redis）gRPC 直连，
+  外部 API 请求仍按需走 HTTP_PROXY（科学上网不受影响）
+- 环境：`pymilvus==2.5.11`（匹配 requirements）、`grpcio==1.67.1`（匹配
+  pymilvus 依赖约束）
+- 清理：回滚了排查期间尝试的 Docker settings-store.json networkMode 改动
+  （NAT 默认恢复）
+
+**验证：**
+- `no_proxy` 自动设置生效（无手动环境变量时 gRPC 连接成功）
+- `utility.has_collection("rag_docs")` = True
+- 真实检索冒烟：MilvusRetriever 6 hits（食品安全法条款内容正常返回）
+- 全量测试 + compileall 全绿

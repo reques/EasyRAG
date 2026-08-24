@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.graph.workflow import get_graph
@@ -58,35 +58,50 @@ class AgentService:
         self._sessions = SessionStore(ttl=cfg.SESSION_TTL)
 
     # ── 智能路由：auto 模式下判断是否走多智能体 ──────────────────────────────
+    # 领域 → 关键词（2026-08-15 修订：从"围绕法律手工列举的组合"改为领域字典，
+    # 保证知识库类型多样时跨领域查询仍能触发多智能体。新增领域只需加一行）。
+    _DOMAIN_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+        "法律": ("法律", "法条", "合同", "劳动", "赔偿", "安全生产", "民法典",
+                 "刑法", "行政处罚", "诉讼", "合规", "仲裁", "条款"),
+        "代码/计算": ("代码", "脚本", "python", "计算", "程序", "算法", "开发",
+                     "调试", "接口", "部署", "实现"),
+        "写作/整理": ("写", "生成", "创作", "编写", "撰写", "起草", "整理",
+                     "总结", "报告", "摘要"),
+        "检索/查询": ("查询", "检索", "搜索", "查一下", "查找", "了解", "调研"),
+        "分析/解读": ("分析", "解读", "解释", "说明", "比较", "对比", "评估", "研究"),
+        "金融/财经": ("股票", "基金", "投资", "理财", "汇率", "利率", "税务",
+                     "保险", "贷款", "财务"),
+        "医疗/健康": ("医院", "医生", "药品", "症状", "诊断", "治疗", "健康",
+                     "饮食", "营养", "运动"),
+        "科技/互联网": ("人工智能", "机器学习", "大模型", "芯片", "互联网",
+                       "软件", "硬件", "数据"),
+        "职场/人力": ("简历", "面试", "职场", "加班", "裁员", "晋升", "绩效", "沟通"),
+        "生活/消费": ("菜谱", "做饭", "装修", "旅游", "机票", "酒店", "攻略", "购物"),
+        "教育/学术": ("考试", "学习", "课程", "论文", "考研", "留学", "培训", "教材"),
+        "历史/人文": ("历史", "文化", "朝代", "文物", "哲学", "名著", "人物"),
+    }
+
     @staticmethod
     def _should_use_multi(query: str, history: Optional[List[Dict[str, str]]] = None) -> bool:
         """auto 模式下按查询特征判断是否走 Orchestrator-Worker 多智能体。
 
         规则（轻量，不调用 LLM）：
-        1. 查询含多领域关键词组合（法律+代码、检索+计算、查询+生成等）→ multi
-        2. 查询长度 > 100 字符且含「然后」「再」「并且」「同时」等连词 → multi
+        1. 查询命中 ≥2 个**不同领域**的关键词 → multi
+           （领域来自 _DOMAIN_KEYWORDS 字典，法律/代码/金融/医疗/教育/生活…
+           任意跨领域组合都命中，不再围绕单一领域列举 pair）
+        2. 查询长度 > 80 字符且含「然后」「再」「并且」「同时」等连词 → multi
         3. 其余 → single（快速路径）
+        即便规则触发，LLM 拆解器仍可判定单一意图并退化为单 Agent（degenerate），
+        所以规则 1 宁可放宽（误触发会被拆解器打回），不可漏掉真跨领域。
         """
         q = query.lower()
-
-        # 多领域关键词组合（覆盖更全面的跨域场景）
-        domain_pairs = [
-            # 法律 + 代码/计算
-            (("法律", "法条", "合同", "劳动", "赔偿", "安全生产", "民法典", "刑法", "行政处罚", "诉讼"),
-             ("代码", "脚本", "python", "计算", "程序", "算法", "开发")),
-            # 检索/查询 + 生成/写作
-            (("查询", "检索", "搜索", "查一下", "查找", "了解"),
-             ("写", "生成", "创作", "编写", "撰写", "起草", "整理")),
-            # 分析/解读 + 代码/实现
-            (("分析", "解读", "解释", "说明", "比较", "对比"),
-             ("代码", "脚本", "程序", "算法", "实现", "开发")),
-            # 法律 + 法律（跨法域比较，如安全生产法 vs 民法典）
-            (("安全生产", "刑法", "行政处罚", "民法", "合同", "劳动"),
-             ("民法典", "赔偿", "责任", "适用", "关系", "区别")),
-        ]
-        for domain_a, domain_b in domain_pairs:
-            if any(k in q for k in domain_a) and any(k in q for k in domain_b):
-                return True
+        hit_domains = {
+            name
+            for name, keywords in AgentService._DOMAIN_KEYWORDS.items()
+            if any(k in q for k in keywords)
+        }
+        if len(hit_domains) >= 2:
+            return True
 
         # 长查询 + 连词
         connectors = ("然后", "接着", "再", "并且", "同时", "以及", "之后")
@@ -255,86 +270,150 @@ class AgentService:
                     })
             except Exception as exc:
                 logger.warning("[run_deep] user facts inject failed: %s", exc)
+
+        # ── 知识库前置检索（2026-08-21, S1：此前 DeepAgents 从不检索知识库，
+        #    系统提示却声称"检索结果会作为上下文提供"——知识库问答退化成纯 LLM
+        #    生成。此处与 prepare_context 对齐：生成前检索并注入上下文）────
+        sources: List[Dict[str, str]] = []
+        if knowledge_base_ids:
+            try:
+                from app.rag.enhanced_retriever import (
+                    format_blocks_for_prompt,
+                    format_flat_for_prompt,
+                    get_enhanced_retriever,
+                )
+
+                _kb_result = get_enhanced_retriever().retrieve(
+                    query,
+                    history=history,
+                    knowledge_base_ids=list(knowledge_base_ids),
+                )
+                _kb_context = ""
+                if _kb_result.knowledge_blocks:
+                    _kb_context = format_blocks_for_prompt(_kb_result.knowledge_blocks)
+                elif _kb_result.raw_docs:
+                    _kb_context = format_flat_for_prompt(_kb_result.raw_docs)
+                if _kb_context:
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "以下是知识库检索到的相关内容（回答时优先采用，并标注来源）：\n"
+                            + _kb_context
+                        ),
+                    })
+                    _step("retrieve", f"知识库命中 {len(_kb_result.raw_docs)} 条")
+                    for _doc in _kb_result.raw_docs[:4]:
+                        _src = (_doc.metadata or {}).get("source") or "知识片段"
+                        _doc_text = str(_doc.content or "").strip()
+                        if _doc_text:
+                            _snippet = " ".join(_doc_text.split())[:90]
+                            _artifact(
+                                "retrieve", "retrieve", _src,
+                                _snippet + ("…" if len(_doc_text) > 90 else ""),
+                            )
+                else:
+                    _step("retrieve_done", "知识库无相关内容")
+                for _s in _kb_result.sources:
+                    if _s not in sources:
+                        sources.append(_s)
+            except Exception as exc:
+                logger.warning("[run_deep] kb retrieval failed: %s", exc)
+                _step("retrieve_done", f"检索失败: {str(exc)[:50]}")
+
         messages.extend(history)
         messages.append({"role": "user", "content": query})
 
         _step("understand", "DeepAgents 主 Agent 开始处理...")
-        agent = get_main_agent()
-        tool_called: Optional[str] = None
-        final_state: Optional[Dict[str, Any]] = None
-        try:
-            # stream_mode="values"：每个 chunk 是全量 state，最后一个即最终状态
-            for chunk in agent.stream(
-                {"messages": messages},
-                config={"recursion_limit": cfg.AGENT_MAX_ITERATIONS},
-                stream_mode="values",
-            ):
-                final_state = chunk
-                msgs = chunk.get("messages") or []
-                if not msgs:
-                    continue
-                last = msgs[-1]
-                mtype = getattr(last, "type", "")
-                tc = getattr(last, "tool_calls", None)
-                if tc:
-                    # ReAct 一步：AI 消息正文 = 这一步的推理思考，tool_calls = 动作
-                    tool_called = tc[0].get("name", "")
-                    _ai_thought = str(getattr(last, "content", "") or "").strip()
-                    if _ai_thought:
-                        _step("agent_reasoning", "推理思考...")
-                        # 思考过长时截断，避免刷屏（主对话框只展示思考要点）
-                        _thought_snippet = " ".join(_ai_thought.split())[:400]
-                        if len(_ai_thought) > 400:
-                            _thought_snippet += "…"
-                        _artifact("thought", "reason", "推理", _thought_snippet)
-                    _args = tc[0].get("args") or {}
-                    try:
-                        _args_text = json.dumps(_args, ensure_ascii=False)[:800]
-                    except Exception:
-                        _args_text = str(_args)[:800]
-                    _step("tool", f"调用 {tool_called}(...)")
-                    _artifact(
-                        "delegate" if tool_called == "task" else "tool",
-                        "tool",
-                        f"调用 {tool_called}",
-                        _args_text,
-                    )
-                elif mtype == "tool":
-                    _t_content = str(getattr(last, "content", "") or "")
-                    _step("tool_done", f"工具返回: {_t_content[:120]}")
-                    # 工具返回 → 总结性截断（全文只在需要时可用，不进入主对话框）
-                    _tool_flat = " ".join(_t_content.split())
-                    _artifact(
-                        "tool_result", "tool", "工具返回",
-                        _tool_flat[:300] + ("…" if len(_tool_flat) > 300 else ""),
-                    )
-                    _step("agent_reasoning_done", "推理完成")
-                elif mtype == "ai" and getattr(last, "content", ""):
-                    # 无 tool_calls 的 AI 消息 = 最终回答（循环末尾），不是中间思考
-                    _step("generate", "主 Agent 生成回答中...")
-        except Exception as exc:
-            logger.error("[run_deep] deep agent error: %s", exc)
-            steps.append(f"deep agent error: {exc}")
-            return {
-                "query": query,
-                "session_id": session_id,
-                "final_answer": f"处理请求时发生错误: {exc}",
-                "intent": "deepagents",
-                "intent_confidence": 0.0,
-                "retrieval_triggered": False,
-                "retrieved_docs_count": 0,
-                "tool_triggered": False,
-                "tool_name": None,
-                "tool_result": None,
-                "tool_error": str(exc),
-                "sub_tasks": [],
-                "steps": steps,
-                "artifacts": artifacts,
-                "sources": [],
-                "is_fallback": True,
-                "error_message": str(exc),
-                "elapsed_seconds": round(time.perf_counter() - start, 3),
-            }
+        # 请求级知识库授权：作用域内 kb_search 工具（含 task 委派的 SubAgent）
+        # 都能读取当前用户授权范围，避免越权；contextvars 对同线程同步调用链可见
+        from app.services.knowledge_context import use_authorised_kb_ids
+        # S3 步骤透传：task 工具读取该观察者，把子 Agent 中间步骤透传 SSE
+        from app.agents.deep.observe import use_task_observers
+
+        with (
+            use_authorised_kb_ids(knowledge_base_ids),
+            use_task_observers(_step, _artifact),
+        ):
+            agent = get_main_agent()
+            tool_called: Optional[str] = None
+            final_state: Optional[Dict[str, Any]] = None
+            try:
+                # stream_mode="values"：每个 chunk 是全量 state，最后一个即最终状态
+                for chunk in agent.stream(
+                    {"messages": messages},
+                    config={"recursion_limit": cfg.DEEP_MAIN_RECURSION_LIMIT},
+                    stream_mode="values",
+                ):
+                    final_state = chunk
+                    msgs = chunk.get("messages") or []
+                    if not msgs:
+                        continue
+                    last = msgs[-1]
+                    mtype = getattr(last, "type", "")
+                    tc = getattr(last, "tool_calls", None)
+                    if tc:
+                        # ReAct 一步：AI 消息正文 = 这一步的推理思考，tool_calls = 动作
+                        # （act and reasoning：思考内容直接透出到步骤流，而非固定短语）
+                        tool_called = tc[0].get("name", "")
+                        _ai_thought = str(getattr(last, "content", "") or "").strip()
+                        if _ai_thought:
+                            # 思考过长时截断，避免刷屏（主对话框只展示思考要点）
+                            _thought_snippet = " ".join(_ai_thought.split())[:400]
+                            if len(_ai_thought) > 400:
+                                _thought_snippet += "…"
+                            _step("agent_reasoning", _thought_snippet)
+                            _artifact("thought", "reason", "推理", _thought_snippet)
+                        _args = tc[0].get("args") or {}
+                        try:
+                            _args_text = json.dumps(_args, ensure_ascii=False)[:800]
+                        except Exception:
+                            _args_text = str(_args)[:800]
+                        _args_short = " ".join(_args_text.split())[:160]
+                        if len(_args_text) > 160:
+                            _args_short += "…"
+                        _step("tool", f"调用 {tool_called} {_args_short}".rstrip())
+                        _artifact(
+                            "delegate" if tool_called == "task" else "tool",
+                            "tool",
+                            f"调用 {tool_called}",
+                            _args_text,
+                        )
+                    elif mtype == "tool":
+                        _t_content = str(getattr(last, "content", "") or "")
+                        _step("tool_done", f"工具返回: {_t_content[:120]}")
+                        # 工具返回 → 总结性截断（全文只在需要时可用，不进入主对话框）
+                        _tool_flat = " ".join(_t_content.split())
+                        _artifact(
+                            "tool_result", "tool", "工具返回",
+                            _tool_flat[:300] + ("…" if len(_tool_flat) > 300 else ""),
+                        )
+                        _step("agent_reasoning_done", "推理完成")
+                    elif mtype == "ai" and getattr(last, "content", ""):
+                        # 无 tool_calls 的 AI 消息 = 最终回答（循环末尾），不是中间思考
+                        _step("generate", "主 Agent 生成回答中...")
+            except Exception as exc:
+                logger.error("[run_deep] deep agent error: %s", exc)
+                steps.append(f"deep agent error: {exc}")
+                return {
+                    "query": query,
+                    "session_id": session_id,
+                    "final_answer": f"处理请求时发生错误: {exc}",
+                    "intent": "deepagents",
+                    "intent_confidence": 0.0,
+                    "retrieval_triggered": False,
+                    "retrieved_docs_count": 0,
+                    "tool_triggered": False,
+                    "tool_name": None,
+                    "tool_result": None,
+                    "tool_error": str(exc),
+                    "sub_tasks": [],
+                    "steps": steps,
+                    "artifacts": artifacts,
+                    "sources": sources,
+                    "is_fallback": True,
+                    "error_message": str(exc),
+                    "elapsed_seconds": round(time.perf_counter() - start, 3),
+                }
 
         msgs = (final_state or {}).get("messages") or []
         answer = ""
@@ -362,7 +441,7 @@ class AgentService:
             "sub_tasks": [],
             "steps": steps,
             "artifacts": artifacts,
-            "sources": [],
+            "sources": sources,
             "is_fallback": False,
             "elapsed_seconds": round(time.perf_counter() - start, 3),
         }
@@ -463,7 +542,7 @@ class AgentService:
         intent = state.get("intent", "knowledge_qa")
         intent_label = {
             "knowledge_qa": "知识库问答", "tool_use": "联网/工具查询",
-            "complex_task": "复杂任务", "chitchat": "闲聊",
+            "complex_task": "复杂任务", "chitchat": "闲聊", "direct": "直接回答",
         }.get(intent, intent)
         _step("intent_done", f"{intent_label}（置信度 {state.get('intent_confidence', 0):.0%}）")
         logger.info("[prepare_context] intent=%s conf=%.2f", intent, state.get("intent_confidence", 0))

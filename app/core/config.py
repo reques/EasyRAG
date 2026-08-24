@@ -5,11 +5,24 @@ Call `get_settings()` everywhere you need config (returns a cached singleton).
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 2026-08-21 修复：本地直连不走代理。
+# 用户环境设置了 HTTP_PROXY/HTTPS_PROXY（如 Clash 127.0.0.1:7897），grpcio
+# 会经代理连 Milvus（localhost:19530）导致连接失败（TCP 通但 gRPC 握手超时）。
+# 这里把本机回环地址加入 no_proxy：Milvus/Postgres/Redis 等本地服务直连，
+# 外部 API 请求仍按需走 HTTP_PROXY（科学上网不受影响）。
+_NO_PROXY_HOSTS = ("127.0.0.1", "localhost", "::1")
+_no_proxy_cur = os.environ.get("no_proxy") or os.environ.get("NO_PROXY") or ""
+if not any(h in _no_proxy_cur for h in _NO_PROXY_HOSTS):
+    os.environ["no_proxy"] = ",".join(
+        x for x in (_no_proxy_cur, *_NO_PROXY_HOSTS) if x
+    )
 
 
 class Settings(BaseSettings):
@@ -170,11 +183,33 @@ class Settings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 20   # LangGraph recursion_limit
     MAX_PLAN_STEPS: int = 5          # max sub-tasks per plan
     SESSION_TTL: int = 3600          # seconds to keep session state
-    AGENT_MODE: Literal["auto", "single", "multi", "deepagents"] = "auto"  # 多智能体开关: auto=智能路由; deepagents=DeepAgents 风格主Agent+SubAgent
+    # 执行路径: auto=智能路由(单 Agent/多智能体按规则分流) | single=仅单 Agent |
+    # multi=无条件多智能体(Orchestrator-Worker) | deepagents=DeepAgents 主 Agent+SubAgent
+    AGENT_MODE: Literal["auto", "single", "multi", "deepagents"] = "auto"
+
+    # ── DeepAgents (AGENT_MODE=deepagents) ────────────────────────────────
+    # 外部 SubAgent 配置文件（JSON/YAML，见 subagents.load_subagents 的格式；
+    # 为空使用内置默认 research-agent / coding-agent）
+    DEEP_SUBAGENTS_FILE: str = ""
+    # 主 Agent 与 task 委派 SubAgent 的 LangGraph recursion_limit
+    DEEP_MAIN_RECURSION_LIMIT: int = 20
+    DEEP_SUBAGENT_RECURSION_LIMIT: int = 20
 
     # ── Answer quality ───────────────────────────────────────────────────
     ANSWER_VALIDATION_ENABLED: bool = True
     ANSWER_MIN_LENGTH: int = 20      # chars below which answer is "too short"
+
+    # ── 快速路径（简单问题零成本分流）──────────────────────────────────
+    # 简单常识/问候/计算/时间问题先用规则预判直接回答，跳过 LLM 意图分类、
+    # 检索与工具调用（避免"吃坏肚子怎么办"这类问题被误判成联网搜索）。
+    # 关闭后回退到旧的纯 LLM 意图分类行为。
+    FAST_INTENT_ENABLED: bool = True
+
+    # ── 上下文管理 ──────────────────────────────────────────────────────
+    # 会话摘要长期生成失败（LLM 不可用）时，注入 LLM 的原始消息上限：
+    # 超出部分取真实尾部并记日志，避免长会话把上下文窗口撑爆。
+    # 正常路径（有摘要）不受此限制：摘要承载远期上下文 + 最近 20 条。
+    HISTORY_CONTEXT_MAX_MESSAGES: int = 100
 
     # ── PostgreSQL (阶段 1) ──────────────────────────────────────────────
     POSTGRES_HOST: str = "localhost"

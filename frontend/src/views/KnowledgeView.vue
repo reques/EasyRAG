@@ -112,7 +112,7 @@
           <button class="kbw-secondary-button" @click="copyKbId">
             <Copy :size="14" /> 复制 ID
           </button>
-          <button class="kbw-primary-button" @click="frontendOnly('知识库编辑')">
+          <button class="kbw-primary-button" @click="openEditKb">
             <Pencil :size="14" /> 编辑
           </button>
         </div>
@@ -709,6 +709,31 @@
       </div>
     </div>
 
+    <div v-if="showEdit" class="modal-overlay" @click.self="showEdit = false">
+      <div class="modal kbw-modal">
+        <div class="kbw-modal-heading">
+          <div><span><Pencil :size="18" /></span><div><h3>编辑知识库</h3><p>修改「{{ activeKb?.name }}」的名称与描述。</p></div></div>
+          <button @click="showEdit = false"><X :size="17" /></button>
+        </div>
+        <label class="kbw-field">
+          <span>名称</span>
+          <input v-model="editForm.name" type="text" maxlength="80" placeholder="例如：产品技术文档" @keyup.enter="saveKb" />
+        </label>
+        <label class="kbw-field">
+          <span>描述（可选）</span>
+          <textarea v-model="editForm.description" rows="3" maxlength="300" placeholder="说明这个知识库收录什么内容"></textarea>
+        </label>
+        <p v-if="editError" class="kbw-form-error">{{ editError }}</p>
+        <div class="modal-actions">
+          <button class="kbw-secondary-button" @click="showEdit = false">取消</button>
+          <button class="kbw-primary-button" :disabled="saving || !editForm.name.trim()" @click="saveKb">
+            <LoaderCircle v-if="saving" :size="14" class="spin" />
+            <CheckCircle2 v-else :size="14" /> {{ saving ? '保存中' : '保存修改' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showUpload" class="modal-overlay" @click.self="closeUpload">
       <div class="modal kbw-modal">
         <div class="kbw-modal-heading">
@@ -1150,6 +1175,11 @@ const newKb = reactive({ name: '', description: '' })
 const creating = ref(false)
 const createError = ref('')
 
+const showEdit = ref(false)
+const editForm = reactive({ name: '', description: '' })
+const saving = ref(false)
+const editError = ref('')
+
 const showUpload = ref(false)
 const uploadFile = ref(null)
 const uploading = ref(false)
@@ -1412,6 +1442,41 @@ function notify(message) {
   moduleNotice.value = message
   if (noticeTimer) clearTimeout(noticeTimer)
   noticeTimer = setTimeout(() => { moduleNotice.value = '' }, 3600)
+}
+
+function openEditKb() {
+  editForm.name = activeKb.value?.name || ''
+  editForm.description = activeKb.value?.description || ''
+  editError.value = ''
+  showEdit.value = true
+}
+
+async function saveKb() {
+  editError.value = ''
+  if (!editForm.name.trim()) {
+    editError.value = '请输入知识库名称。'
+    return
+  }
+  saving.value = true
+  try {
+    const updated = await api.patch(`/knowledge/bases/${activeKb.value.id}`, {
+      name: editForm.name.trim(),
+      description: editForm.description.trim(),
+    })
+    // 同步详情页标题与列表页条目
+    if (activeKb.value) {
+      activeKb.value.name = updated.name
+      activeKb.value.description = updated.description
+    }
+    const idx = kbList.value.findIndex((kb) => kb.id === updated.id)
+    if (idx !== -1) kbList.value[idx] = { ...kbList.value[idx], ...updated }
+    showEdit.value = false
+    notify('知识库信息已更新。')
+  } catch (error) {
+    editError.value = error.response?.data?.detail || '保存失败，请稍后重试。'
+  } finally {
+    saving.value = false
+  }
 }
 
 function frontendOnly(action) {

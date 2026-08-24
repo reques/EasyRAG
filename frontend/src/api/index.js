@@ -31,6 +31,7 @@ export default {
   get: (url, params) => http.get(url, { params }).then((r) => r.data),
   post: (url, data) => http.post(url, data).then((r) => r.data),
   put: (url, data) => http.put(url, data).then((r) => r.data),
+  patch: (url, data) => http.patch(url, data).then((r) => r.data),
   delete: (url) => http.delete(url).then((r) => r.data),
   upload: (url, formData, onUploadProgress) =>
     http.post(url, formData, {
@@ -47,7 +48,8 @@ export default {
   // SSE 流式对话：fetch + ReadableStream 逐事件回调。
   // axios 不支持流式响应, 这里用原生 fetch 读 text/event-stream。
   // onEvent(payload) 每个 SSE data 事件回调一次, payload 为解析后的 JSON。
-  async streamChat(url, body, onEvent) {
+  // options.signal: AbortController.signal，用于"停止生成"（终止当前对话轮）。
+  async streamChat(url, body, onEvent, options = {}) {
     const token = localStorage.getItem('token')
     const resp = await fetch(`/api/v1${url}`, {
       method: 'POST',
@@ -56,6 +58,7 @@ export default {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(body),
+      signal: options.signal || undefined,
     })
     if (resp.status === 401) {
       localStorage.removeItem('token')

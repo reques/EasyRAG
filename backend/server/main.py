@@ -52,6 +52,11 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 await conn.execute(text(
                     f"ALTER TABLE knowledge_files ADD COLUMN IF NOT EXISTS {column}"
                 ))
+            # 情景记忆可靠性：conversations.last_summarized_message_id（摘要折叠断点）
+            await conn.execute(text(
+                "ALTER TABLE conversations "
+                "ADD COLUMN IF NOT EXISTS last_summarized_message_id INTEGER"
+            ))
         logger.info("[lifespan] incremental migrations applied")
     except Exception as exc:
         logger.warning("[lifespan] database init skipped: %s", exc)
@@ -81,6 +86,16 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         logger.info("[lifespan] MCP servers started: %s", mcp_results)
     except Exception as exc:
         logger.warning("[lifespan] MCP init skipped: %s", exc)
+
+    # DeepAgents 可发现性（2026-08-21, S2）：启动时打印执行路径与 SubAgent 名册
+    logger.info("[lifespan] AGENT_MODE=%s (auto=智能路由 | single | multi | deepagents)", cfg.AGENT_MODE)
+    if cfg.AGENT_MODE == "deepagents":
+        try:
+            from app.agents.deep.subagents import get_subagents
+            roster = ", ".join(s.name for s in get_subagents())
+            logger.info("[lifespan] deepagents subagents: %s", roster)
+        except Exception as exc:
+            logger.warning("[lifespan] deepagents roster unavailable: %s", exc)
 
     yield
 

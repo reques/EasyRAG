@@ -43,13 +43,22 @@ class MessageRepository(BaseRepository[Message]):
     model = Message
 
     async def list_by_conversation(
-        self, conversation_id: uuid.UUID, limit: int = 100
+        self,
+        conversation_id: uuid.UUID,
+        limit: int = 100,
+        offset: int = 0,
     ) -> Sequence[Message]:
+        """按时间正序取消息，支持显式 limit/offset 窗口。
+
+        offset 用于取真实尾部（上下文注入场景），避免"limit 100 截到最早
+        100 条"导致最近对话反而丢失。
+        """
         stmt = (
             select(Message)
             .where(Message.conversation_id == conversation_id)
             .order_by(Message.created_at.asc())
             .limit(limit)
+            .offset(offset)
         )
         result = await self.session.execute(stmt)
         return result.scalars().all()

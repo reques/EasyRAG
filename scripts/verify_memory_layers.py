@@ -34,6 +34,9 @@ check("user_facts table exists",
       "user_facts" in db("SELECT tablename FROM pg_tables WHERE schemaname='public';"))
 check("conversations.summary column exists",
       "summary" in db("SELECT column_name FROM information_schema.columns WHERE table_name='conversations';"))
+check("conversations.last_summarized_message_id column exists",
+      "last_summarized_message_id" in db(
+          "SELECT column_name FROM information_schema.columns WHERE table_name='conversations';"))
 
 
 async def main():
@@ -78,6 +81,9 @@ async def main():
         await s.refresh(conv)
         check("summary generated after 10 rounds", bool(conv.summary),
               (conv.summary or "")[:40] if conv.summary else "empty")
+        check("summary pointer advanced after 10 rounds (no-loss fold)",
+              bool(conv.last_summarized_message_id),
+              f"ptr={conv.last_summarized_message_id}")
 
         # 摘要压缩只在长会话生效：10 轮（20条）刚好在窗口内时 compressed==full
         # 再造 5 轮（共 15 轮 30 条）超出窗口，验证真正压缩
@@ -94,6 +100,21 @@ async def main():
               f"compressed={len(compressed)} full={len(full)}")
         check("compressed keeps recent 10 turns (20 msgs) + 1 system",
               len(compressed) == 21, f"{len(compressed)}")
+        # 压缩尾窗必须是真实最近窗口：最后一条是第 30 条（追加回答14），
+        # 而不是"最早 100 条内"的伪最近窗口
+        check("compressed tail is the TRUE recent window (ends at msg 30)",
+              compressed[-1]["content"].startswith("追加回答14"),
+              f"tail last={compressed[-1]['content'][:24]}")
+        # 断点应推进到最后一条消息：追加的 5 轮（10 条）也被折叠进摘要，无消息丢失
+        from backend.storage.postgres.models_conversation import Message as MsgModel
+        last_msg = (await s.execute(
+            select(MsgModel).where(MsgModel.conversation_id == cid)
+            .order_by(MsgModel.id.desc()).limit(1)
+        )).scalar_one()
+        await s.refresh(conv)
+        check("summary pointer advanced to last message (no message loss)",
+              conv.last_summarized_message_id == last_msg.id,
+              f"ptr={conv.last_summarized_message_id} last_id={last_msg.id}")
 
         # 清理测试会话
         from backend.storage.postgres.models_conversation import Conversation
