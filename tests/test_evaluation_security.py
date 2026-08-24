@@ -141,7 +141,7 @@ async def test_create_run_validates_owner_and_passes_kb_scope(monkeypatch):
     )
     calls = []
 
-    def fake_run(cases, top_k, *, knowledge_base_id):
+    def fake_run(cases, top_k, *, knowledge_base_id, ragas_metrics=None):
         calls.append((cases, top_k, knowledge_base_id))
         return {
             "hit_rate": 1.0,
@@ -150,7 +150,7 @@ async def test_create_run_validates_owner_and_passes_kb_scope(monkeypatch):
             "details": [{"query": "query", "hit_rank": 1}],
         }
 
-    async def fake_save(_session, name, metrics, top_k, kb_id):
+    async def fake_save(_session, name, metrics, top_k, kb_id, dataset_id=None):
         return SimpleNamespace(
             id=uuid.uuid4(),
             name=name,

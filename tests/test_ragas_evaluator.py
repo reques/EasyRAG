@@ -158,7 +158,7 @@ def test_ragas_failure_never_discards_local_metrics(monkeypatch):
     monkeypatch.setattr(
         evaluation_service,
         "get_ragas_evaluator",
-        lambda _settings: FailedRagasEvaluator(),
+        lambda _settings, _metrics=None: FailedRagasEvaluator(),
     )
 
     metrics = evaluation_service.run_evaluation(

@@ -246,6 +246,10 @@ class EvaluationRun(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    dataset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('evaluation_datasets.id', ondelete='SET NULL'),
+        nullable=True, index=True
+    )
     knowledge_base_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="SET NULL"),
         nullable=True, index=True
@@ -259,4 +263,34 @@ class EvaluationRun(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class EvaluationDataset(Base):
+    # 规范化评测数据集（Golden Set）- 可复用、可导入导出、可版本化。
+    # cases_json 结构（与 evaluation_service.EvaluationCase 一一对应）:
+    #   [{question: ..., expected_file_id: ..., expected_chunk_ids: [...],
+    #    reference_answer: ..., expect_miss: false}]
+    __tablename__ = 'evaluation_datasets'
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    knowledge_base_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('knowledge_bases.id', ondelete='SET NULL'),
+        nullable=True, index=True
+    )
+    description: Mapped[str] = mapped_column(String(512), default='', nullable=False)
+    cases_json: Mapped[str] = mapped_column(Text, default='[]', nullable=False)
+    case_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
     )

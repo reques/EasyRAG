@@ -127,7 +127,7 @@
         >
           <component :is="tab.icon" :size="16" />
           <span>{{ tab.label }}</span>
-          <em v-if="tab.id !== 'files'">前端</em>
+          <em v-if="frontendOnlyTabs.has(tab.id)">前端</em>
         </button>
       </nav>
 
@@ -587,52 +587,7 @@
         </section>
 
         <section v-else-if="activeTab === 'evaluation'" class="kbw-workspace-section">
-          <div class="kbw-workspace-heading">
-            <div>
-              <span class="kbw-eyebrow">RAG EVALUATION</span>
-              <h2>RAG 评估</h2>
-              <p>评估检索召回和回答质量；当前先完成页面、状态与配置流程。</p>
-            </div>
-            <button class="kbw-primary-button" @click="openEvaluationSetup">
-              <Play :size="14" /> 开始评估
-            </button>
-          </div>
-
-          <article class="kbw-evaluation-card">
-            <div class="kbw-evaluation-main">
-              <div class="kbw-score-ring"><strong>—</strong><span>暂无评分</span></div>
-              <div>
-                <span class="kbw-module-status"><CircleDashed :size="14" /> 等待配置</span>
-                <h3>还没有评估运行记录</h3>
-                <p>选择评估基准和指标后即可创建首次运行；提交动作将在后端接口接入后启用。</p>
-                <div class="kbw-readiness-row">
-                  <span><CheckCircle2 :size="13" /> {{ completedFiles.length }} 个可评估文件</span>
-                  <span><ListChecks :size="13" /> 0 个评估基准</span>
-                </div>
-              </div>
-            </div>
-            <div class="kbw-evaluation-metrics">
-              <div><span>Recall@10</span><strong>—</strong><small>召回率</small></div>
-              <div><span>耗时</span><strong>—</strong><small>运行耗时</small></div>
-              <div><span>数据量</span><strong>0</strong><small>评估问题</small></div>
-              <div><span>完成率</span><strong>—</strong><small>执行进度</small></div>
-            </div>
-          </article>
-
-          <article class="kbw-panel-card kbw-history-card">
-            <div class="kbw-panel-title">
-              <div><History :size="17" /><strong>历史评估记录</strong></div>
-              <button class="kbw-text-button" @click="frontendOnly('评估记录刷新')"><RefreshCw :size="13" /> 刷新</button>
-            </div>
-            <div class="kbw-history-table-head">
-              <span>评估名称</span><span>评估基准</span><span>数据量</span><span>耗时</span><span>Recall@10</span><span>综合评分</span><span>状态</span>
-            </div>
-            <div class="kbw-result-empty is-compact">
-              <BarChart3 :size="25" />
-              <strong>暂无历史评估</strong>
-              <span>运行结果会按时间保留在这里。</span>
-            </div>
-          </article>
+          <EvaluationView :kb-id="activeKb.id" :kb-name="activeKb.name" />
         </section>
 
         <section v-else class="kbw-workspace-section">
@@ -857,33 +812,6 @@
         </div>
       </div>
     </div>
-
-    <div v-if="showEvaluationSetup" class="modal-overlay" @click.self="showEvaluationSetup = false">
-      <div class="modal kbw-modal kbw-eval-modal">
-        <div class="kbw-modal-heading">
-          <div><span><BarChart3 :size="18" /></span><div><h3>配置 RAG 评估</h3><p>前端配置预览，暂不提交运行。</p></div></div>
-          <button @click="showEvaluationSetup = false"><X :size="17" /></button>
-        </div>
-        <label class="kbw-field">
-          <span>评估基准</span>
-          <select disabled><option>暂无基准，请先在“评估基准”页创建</option></select>
-        </label>
-        <div class="kbw-eval-checks">
-          <span>评估指标</span>
-          <label v-for="criterion in enabledCriteria" :key="criterion.id">
-            <input type="checkbox" checked />
-            <span><strong>{{ criterion.name }}</strong><small>{{ criterion.group }}</small></span>
-          </label>
-        </div>
-        <div class="kbw-inline-notice"><Info :size="14" /> 后端接入后，此处将创建评估运行并实时更新进度。</div>
-        <div class="modal-actions">
-          <button class="kbw-secondary-button" @click="showEvaluationSetup = false">取消</button>
-          <button class="kbw-primary-button" @click="frontendOnly('RAG 评估运行'); showEvaluationSetup = false">
-            <Play :size="14" /> 保存前端配置
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -893,13 +821,14 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, BarChart3, Binary, Blocks, Braces, CalendarDays, CheckCircle2,
   ChevronRight, CircleAlert, CircleDashed, ClipboardCheck, Copy, Database,
-  FileQuestion, FileStack, FileText, FileUp, GitBranch, History, Info,
-  Layers3, ListChecks, ListFilter, LoaderCircle, Network, PanelRight, Pencil,
+  FileQuestion, FileStack, FileText, FileUp, GitBranch, Info,
+  Layers3, ListFilter, LoaderCircle, Network, PanelRight, Pencil,
   Play, Plus, RefreshCw, ScanSearch, Search, SearchX, Sparkles, Trash2, Upload,
   UploadCloud, Waypoints, X,
 } from 'lucide-vue-next'
 import api from '../api'
 import * as echarts from 'echarts'
+import EvaluationView from './EvaluationView.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -913,6 +842,7 @@ const tabItems = [
   { id: 'benchmarks', label: '评估基准', icon: ClipboardCheck },
 ]
 const validTabs = new Set(tabItems.map((tab) => tab.id))
+const frontendOnlyTabs = new Set(['map', 'benchmarks'])
 
 const kbList = ref([])
 const activeKb = ref(null)
@@ -1225,7 +1155,6 @@ const retrievalRun = ref(null)
 const retrievalError = ref('')
 const selectedSubQuestion = ref(-1)  // -1 = 全部，0/1/2... = 对应子问题
 let retrievalRequestRevision = 0
-const showEvaluationSetup = ref(false)
 const moduleNotice = ref('')
 let noticeTimer = null
 
@@ -1270,7 +1199,6 @@ const recentlyCreatedCount = computed(() => {
 const completedFiles = computed(() => fileList.value.filter((file) => file.status === 'completed'))
 const totalChunks = computed(() => fileList.value.reduce((sum, file) => sum + Number(file.chunk_count || 0), 0))
 const totalCharacters = computed(() => fileList.value.reduce((sum, file) => sum + Number(file.char_count || 0), 0))
-const enabledCriteria = computed(() => criteria.filter((criterion) => criterion.enabled))
 
 const displayProgress = computed(() => {
   if (uploadPhase.value === 'transferring') return transferProgress.value
@@ -1646,14 +1574,6 @@ async function runRetrievalPreview() {
 function toggleCriterion(criterion) {
   criterion.enabled = !criterion.enabled
   notify(`已在前端${criterion.enabled ? '启用' : '停用'}「${criterion.name}」，尚未保存到后端。`)
-}
-
-function openEvaluationSetup() {
-  if (!completedFiles.value.length) {
-    notify('至少需要一个已完成索引的文件才能准备评估。')
-    return
-  }
-  showEvaluationSetup.value = true
 }
 
 function fileExtension(file) {
