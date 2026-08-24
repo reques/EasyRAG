@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.core.logger import get_logger
@@ -47,6 +48,33 @@ class Base(DeclarativeBase):
     pass
 
 
+async def _migrate_legacy_evaluation_runs(conn) -> None:
+    """存量库兼容：evaluation_runs.dataset_id 是后加的列。
+
+    create_all 只创建缺失的表，不会给已存在的表补列；
+    这里对新旧库都做幂等检查，只有列缺失时才执行 ALTER。
+    """
+    row = await conn.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'evaluation_runs' "
+        "AND column_name = 'dataset_id'"
+    ))
+    if row.scalar():
+        return
+    await conn.execute(text(
+        "ALTER TABLE evaluation_runs ADD COLUMN dataset_id UUID"
+    ))
+    await conn.execute(text(
+        "CREATE INDEX ix_evaluation_runs_dataset_id "
+        "ON evaluation_runs (dataset_id)"
+    ))
+    await conn.execute(text(
+        "ALTER TABLE evaluation_runs ADD CONSTRAINT fk_evaluation_runs_dataset_id "
+        "FOREIGN KEY (dataset_id) REFERENCES evaluation_datasets(id) ON DELETE SET NULL"
+    ))
+    logger.info("[postgres] migrated evaluation_runs.dataset_id")
+
+
 async def init_db() -> None:
     """创建所有表（开发/测试用；生产应使用 Alembic 迁移）。"""
     from backend.storage.postgres.models_user import User, Department  # noqa: F401
@@ -59,6 +87,7 @@ async def init_db() -> None:
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_legacy_evaluation_runs(conn)
     logger.info("[postgres] tables created")
 
 

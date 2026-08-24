@@ -1167,3 +1167,122 @@ gap query failed: MilvusException (Fail connecting to server on localhost:19530)
 - `utility.has_collection("rag_docs")` = True
 - 真实检索冒烟：MilvusRetriever 6 hits（食品安全法条款内容正常返回）
 - 全量测试 + compileall 全绿
+
+
+#### 2026-08-24 — RAGAs 检索评估产品化 + 配置规范化 + 检索质量诊断
+
+**背景（用户反馈）：**
+- 检索“民法典第10条”结果不相关，怀疑是数据预处理（清洗）缺失
+- 疑问：RAGAs 相关检索测试是否接入
+
+**检索质量诊断（结论：不是预处理问题）：**
+- 法律知识库（2d0fbee1）只入库了两份文档：`食品安全法.pdf`（182 chunks）、
+  `消权法.pdf`（66 chunks）——**民法典从未入库**，检索“民法典第10条”必然
+  返回低相似度的近似结果（实测 top 分数仅 ~0.52–0.56）
+- 存量 chunk 质量良好：MinerU(pipeline) 解析 + `legal` 按条切分，中位长度
+  138 字，带 `[章节]` 前缀；扫描无图片残留/页码/乱码/空块
+- 实测对照：库内存在的查询精准命中——“消费者享有公平交易的权利”→
+  `消权法第十条`（0.776），“食品安全法第八十条”→ 原文（0.79）
+- **建议**：把民法典等目标法律文档上传入库即可，解析管线会自动检测法律条文
+  并按「第X条」切分（`chunk_parsed_document` 内 `_looks_like_legal` 自动检测；
+  配置 `CHUNK_STRATEGY` 注释说明该选项，未全局开启以保留结构化分块）
+
+**RAGAs 评估产品化（阶段 4 前端先行）：**
+- 新增前端页 `frontend/src/views/EvaluationView.vue` + 路由 `/evaluation` +
+  侧边栏「检索评估」入口（Yuxi 单色系风格）：知识库/文件选择、用例编辑
+  （问题+期望文件+可选参考答案）、运行评估、指标卡（HitRate/MRR/Recall/
+  Precision/nDCG + RAGAs 状态）、历史列表与详情弹层
+- 后端配套：`EvalCaseIn.expected_chunk_id/reference_answer` 改为可选 →
+  文件级评估自动展开整文件 chunk 作为相关集（`_file_chunk_ids` +
+  retriever 三后端新增 `list_chunks_by_source`）；`EvalRunSummary` 增加
+  `ragas_status`；`RAGAS_PYTHON_EXECUTABLE` 显式配置优先，留空自动探测
+  `.venv-ragas`/`venv-ragas`/`ragas-env`
+- 端到端验证：HTTP 冒烟（登录→知识库→文件→POST /evaluation/runs→GET 历史）
+  真实落库一条 run，本地指标 HitRate=1.0/MRR=0.5，RAGAs 子进程 completed
+  （0.4.3，id_context_precision=0.625）
+- 修复：`evaluation_router` 缺 `Optional` 导入导致 pydantic 解析失败；环境
+  补装 `pytest-asyncio`（测试依赖）
+
+**配置规范化：**
+- `.env` 因混编码损坏（UTF-8/GBK 混杂、注释与键合并）→ 按 `.env.template`
+  以纯 UTF-8 重建，键集与模板完全对齐（115 键，仅真实值与占位符差异）
+- `.env.template` 去重 Ragas 注释头、补齐 `GRAPH_EXTRACT_REASONING_EFFORT`、
+  `CHUNK_STRATEGY` 说明注释；RAGAS_LLM_* 键同步
+- 测试：评估/RAGAs/检索相关 61 例全绿；`npm run build` 通过
+
+**补充修正（用户反馈）：评估页位置归位**
+- 独立侧边栏「检索评估」+ `/evaluation` 路由已移除（LayoutView/router）
+- 评估功能嵌入知识库详情页的「RAG 评估」标签：KnowledgeView 用
+  `<EvaluationView :kb-id :kb-name>` 替换原占位区块（原为 frontendOnly 假页面）
+- EvaluationView 增加 `kbId/kbName` props：嵌入时隐藏页头与知识库选择器、
+  历史按当前知识库过滤、隐藏冗余「知识库」列；`ev-embedded` 去内边距
+- 清理：移除 `showEvaluationSetup` 弹窗/`openEvaluationSetup`/`enabledCriteria`
+  及失效图标导入；tab「前端」角标改为仅标记 `map`/`benchmarks`
+- `npm run build` 通过
+
+
+#### 2026-08-24 — 规范化 RAG 评测体系（数据/指标/执行/报告四层）
+
+**背景：** 用户要求把检索评估升级为「规范化 RAG 评测体系」，而不是临时测试脚本，
+能够在面试中讲清楚检索测试的编排方法。基于上一轮对 RAGAs 官方口径的核对结论实施。
+
+**核心修正（reference 口径对齐 RAGAs 官方语义）：**
+- `EvaluationCase` 新增 `expected_chunk_ids`（question-specific 相关 chunk 集）与
+  `expect_miss`（负样本）；reference 解析优先级：负样本 > chunk_ids > 单 chunk >
+  整文件兜底，并在逐条明细里记录 `reference_mode` 便于解释指标
+- 修复「整份文件当相关集导致 Recall 被压扁 / Precision 虚高」的系统性偏差
+- 负样本单独走误报检测（`false_positive`），不计入常规 missed 统计
+
+**新增：**
+- 评测数据集（Golden Set）持久化：`evaluation_datasets` 表 + 同名保存递增 version，
+  `backend/services/evaluation_datasets.py` 提供序列化/导入导出/CRUD；
+  运行表增加 `dataset_id` 关联，同一数据集可反复跑不同配置做 A/B
+- 运行环境快照 `run_metadata`（embedding 类型/模型、chunk 策略、score 阈值、
+  enhanced/graph 开关），保证结果可复现
+- 失败分析 `analysis`：自动归类 missed / low_recall / false_positive 三类问题
+- Markdown 报告导出：`GET /evaluation/runs/{id}/report`（环境快照 + 聚合指标 +
+  RAGAs 指标 + 逐条明细 + 失败分析），`backend/services/evaluation_report.py`
+- Golden set 标注辅助：`POST /evaluation/chunk-candidates` 返回目标文件内的候选
+  chunk（片段+分数），前端勾选后写入 expected_chunk_ids
+- 前端 EvaluationView：评测集保存/加载、负样本勾选、候选 chunk 标注面板、
+  报告下载、明细表新增「参考类型」列
+- 指标集按运行覆盖：`POST /evaluation/runs` 支持 `ragas_metrics` 覆盖全局
+  `RAGAS_METRICS`；`get_ragas_evaluator(settings, metrics=None)` 支持按运行指定
+
+**文档：** 新增 `docs/RAG_EVALUATION.md` —— 四层体系方法论、Golden Set 构造、
+指标分类与取舍、A/B 实验流程、失败分析解读、面试讲解话术。
+
+**验证：** 评测/检索/RAGAs 相关 60+ 测试全绿（含新增 reference 语义测试、
+数据集序列化测试、报告生成测试）；`npm run build` 通过。
+
+
+#### 2026-08-24 — 修复存量库 evaluation_runs.dataset_id 缺失（500）
+
+**现象：** `GET /api/v1/evaluation/runs` 返回 500，
+`asyncpg.UndefinedColumnError: column evaluation_runs.dataset_id does not exist`。
+
+**根因：** 新增 `EvaluationRun.dataset_id` 列后，`create_all` 只创建缺失的表、
+不会给已存在的 `evaluation_runs` 表补列，存量库缺列导致 ORM 查询失败。
+
+**修复：** `backend/storage/postgres/manager.py` 增加幂等迁移
+`_migrate_legacy_evaluation_runs`：先查 `information_schema.columns`，
+仅在列缺失时执行 `ALTER TABLE ADD COLUMN` + 索引 + 外键；
+`init_db()` 在 `create_all` 后调用。新旧库均安全（新库由 create_all 建列后跳过）。
+
+**验证：** 对线上库执行 `init_db()` 迁移成功；`list_runs` 查询正常；
+HTTP 冒烟 `GET /evaluation/runs` 200、`POST/GET /evaluation/datasets` 正常、
+`GET /evaluation/runs/{id}/report` 输出 Markdown 报告；评测相关测试全绿。
+
+#### 2026-08-24 — 安装 @liustack/modlens 视觉桥插件（Codex 读图）
+**背景：** 用户发检索测试截图时模型显示 `[Unsupported Image]`，纯文本模型需补视觉能力。
+**安装：**
+- 全局安装 CLI：`npm i -g @liustack/modlens@3.24.1`（bin: modlens，node 24 满足 22.19+ 要求）
+- skill 复制到 `C:\Users\Administrator\.codex\skills\modlens\`（`modlens doctor` 已识别 `codex: pins 3.24.1`）
+**配置（~/.modlens/config.json，默认 provider=openai）：**
+- `openai.baseUrl = https://coding.dashscope.aliyuncs.com/v1`
+- `openai.apiKey = sk-sp-…789f`（用户提供，仅存用户目录，不进仓库）
+- `openai.model = qwen3.7-plus`
+**验证：**
+- `modlens doctor`：openai ok，故障切换链 `openai -> claude-cli`，guard 放行
+- 真实读图 `frontend/smoke-chat.png`：OCR/布局/语义完整（Edge「未找到文件」错误页），model=qwen3.7-plus，30.9s
+**注意：** skill 列表在会话启动时加载，当前会话看不到 modlens skill；新会话即可直接粘贴图片/拖入文件路径触发。
