@@ -798,20 +798,19 @@ async def send_message_stream(
         if use_deep:
             # ── DeepAgents 路径：主 Agent + task → SubAgent（同步 + 状态透传）─
             import queue as _q
+            from app.agents.deep.progress import DeepResearchProgressProjector
 
             status_queue: "_q.Queue" = _q.Queue()
-            deep_artifacts: list[dict] = []  # 中间产出，供落库/历史回放
+            deep_progress_summaries: list[dict] = []
+            progress_projector = DeepResearchProgressProjector()
 
             def _deep_status(step: str, detail: str = ""):
                 try:
-                    status_queue.put({"step": step, "detail": detail})
-                except Exception:
-                    pass
-
-            def _deep_artifact(ev):
-                try:
-                    deep_artifacts.append(dict(ev))
-                    status_queue.put({"type": "artifact", **ev})
+                    progress = progress_projector.feed(step, detail)
+                    if progress:
+                        progress["created_at"] = time.time()
+                        deep_progress_summaries.append(dict(progress))
+                        status_queue.put({"type": "progress_summary", **progress})
                 except Exception:
                     pass
 
@@ -825,7 +824,10 @@ async def send_message_stream(
                         knowledge_base_ids=knowledge_base_ids,
                         knowledge_catalog=knowledge_catalog,
                         on_step=_deep_status,
-                        on_artifact=_deep_artifact,
+                        # Deep research exposes only projected progress notes;
+                        # raw thoughts, tool arguments, and result bodies stay
+                        # inside the server-side execution context.
+                        on_artifact=None,
                     )
 
             # 注意：此处不能用 `start` 命名 —— _event_gen_inner 内任何赋值都会
@@ -842,32 +844,26 @@ async def send_message_stream(
                     if deep_future.done():
                         break
                     continue
-                if isinstance(ev, dict) and ev.get("type") == "artifact":
-                    yield _sse(
-                        {"type": "artifact", **{k: v for k, v in ev.items() if k != "type"}}
-                    )
-                else:
-                    yield _sse(
-                        {"type": "status", "step": ev["step"], "detail": ev["detail"]}
-                    )
+                if isinstance(ev, dict) and ev.get("type") == "progress_summary":
+                    yield _sse(ev)
             try:
                 deep_result = deep_future.result()
             except Exception as exc:
                 logger.error("[chat/stream] deepagents error: %s", exc)
+                warning_progress = progress_projector.feed("fallback", str(exc))
+                if warning_progress:
+                    warning_progress["created_at"] = time.time()
+                    deep_progress_summaries.append(dict(warning_progress))
+                    yield _sse({"type": "progress_summary", **warning_progress})
                 deep_result = {
                     "final_answer": f"处理请求时发生错误: {exc}",
                     "steps": [],
                     "is_fallback": True,
                 }
             answer = deep_result.get("final_answer", "") or ""
-            # 状态步骤转 {step, detail} 对象数组（前端 steps 渲染约定）
-            step_objs = []
-            for s in deep_result.get("steps") or []:
-                if ":" in s:
-                    step, _, detail = s.partition(": ")
-                    step_objs.append({"step": step, "detail": detail})
-                else:
-                    step_objs.append({"step": "info", "detail": s})
+            # DeepAgents 的详细 steps 可能含模型推理、工具参数和结果片段；
+            # 客户端只保存 progress_summaries，不再下发原始执行轨迹。
+            step_objs: list[dict] = []
             elapsed = round(time.perf_counter() - deep_start, 3)
 
             # 落库（与单 Agent 分支一致的 metadata 结构）
@@ -877,7 +873,8 @@ async def send_message_stream(
                         "intent": "deepagents",
                         "agent_mode": agent_mode,
                         "steps": step_objs,
-                        "artifacts": deep_artifacts,
+                        "artifacts": [],
+                        "progress_summaries": deep_progress_summaries,
                         "model_id": selected_model.id,
                         "model_name": selected_model.name,
                         "skills": skill_payload,
@@ -896,7 +893,8 @@ async def send_message_stream(
                 "intent": "deepagents",
                 "agent_mode": agent_mode,
                 "steps": step_objs,
-                "artifacts": deep_artifacts,
+                "artifacts": [],
+                "progress_summaries": deep_progress_summaries,
                 "elapsed_seconds": elapsed,
                 "model_id": selected_model.id,
                 "model_name": selected_model.name,

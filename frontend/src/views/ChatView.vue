@@ -22,17 +22,27 @@
         </button>
       </div>
       <div class="chat-column">
-        <!-- 空状态：Yuxi greeting — 轻量大标题 + 说明 -->
+        <!-- 空状态 -->
         <div v-if="messages.length === 0 && !sending" class="chat-empty">
-          <h3>有什么可以帮你？</h3>
-          <p>基于知识库与联网搜索，为你解答</p>
+          <div class="chat-empty-mark"><Sparkles :size="22" /></div>
+          <span class="chat-empty-eyebrow"><i></i> KNOWLEDGE ASSISTANT</span>
+          <h3>从一个好问题开始</h3>
+          <p>连接知识库、联网搜索与多智能体，为你梳理复杂信息。</p>
+          <div class="chat-starter-grid" aria-label="推荐问题">
+            <button v-for="starter in chatStarters" :key="starter.prompt" type="button" @click="useStarter(starter.prompt)">
+              <span><component :is="starter.icon" :size="16" /></span>
+              <strong>{{ starter.title }}</strong>
+              <small>{{ starter.description }}</small>
+              <ArrowUpRight :size="14" />
+            </button>
+          </div>
         </div>
 
         <template v-for="(msg, i) in messages" :key="msg.ts || i">
           <!-- 等待首 token 时的空 assistant 占位不渲染，由下方「思考中」气泡代替，
                避免空灰条 + 思考中两个框同时出现 -->
           <div
-            v-if="!(sending && msg.role === 'assistant' && !msg.content && !msg.steps?.length && i === messages.length - 1)"
+            v-if="!(sending && msg.role === 'assistant' && !msg.content && !msg.steps?.length && !msg.progressSummaries?.length && i === messages.length - 1)"
             :class="['message', msg.role, { 'msg-enter': msg.enter }]"
           >
           <!-- 用户消息时间: 显示在气泡外上方, 左对齐时间标签, 不放进气泡里 -->
@@ -43,8 +53,15 @@
             <!-- 操作流（Cursor/Copilot 风格：图标+英文动词+对象），绑定在该条消息上，
                  渲染在答案上方，按实际走的节点（意图/检索/工具/推理/生成）实时流转，
                  不被下一轮覆盖 -->
+            <ProgressJournal
+              v-if="msg.progressSummaries && msg.progressSummaries.length"
+              :items="msg.progressSummaries"
+              :running="msg.stepsLoading"
+              :error="msg.error || ''"
+              :stopped="!!msg.stopped"
+            />
             <AgentActivity
-              v-if="msg.steps && msg.steps.length"
+              v-else-if="msg.steps && msg.steps.length"
               :steps="msg.steps"
               :artifacts="msg.artifacts"
               :running="msg.stepsLoading"
@@ -109,7 +126,7 @@
         </template>
 
         <!-- 思考中占位：还没有任何状态步骤时的等待气泡（有步骤后由消息内面板接管） -->
-        <div v-if="sending && statusSteps.length === 0 && !lastAssistantHasContent" class="message assistant">
+        <div v-if="sending && statusSteps.length === 0 && !lastAssistantHasContent && !lastAssistantHasProgress" class="message assistant">
           <div class="message-body">
             <div class="message-text typing">思考中<span>.</span><span>.</span><span>.</span></div>
           </div>
@@ -551,6 +568,7 @@ import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
 import {
   ArrowUp,
+  ArrowUpRight,
   Bot,
   BookOpen,
   CheckCircle2,
@@ -561,6 +579,9 @@ import {
   Cloud,
   Copy,
   HardDrive,
+  FileSearch2,
+  Globe2,
+  ListTree,
   ListChecks,
   Loader2,
   Pencil,
@@ -574,6 +595,7 @@ import {
 } from 'lucide-vue-next'
 import api from '../api'
 import AgentActivity from '../components/AgentActivity.vue'
+import ProgressJournal from '../components/ProgressJournal.vue'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
 // and rel=noopener so external sources open safely in a new tab.
@@ -627,6 +649,16 @@ function goToSource(s) {
 
 const input = ref('')
 const sending = ref(false)
+const chatStarters = [
+  { icon: FileSearch2, title: '检索资料', description: '从知识库定位依据', prompt: '请帮我从知识库中查找并总结最相关的资料。' },
+  { icon: ListTree, title: '梳理脉络', description: '把复杂内容变清晰', prompt: '请帮我梳理这个主题的关键概念、关系与结论。' },
+  { icon: Globe2, title: '深度研究', description: '结合网络交叉验证', prompt: '请围绕这个主题进行深度研究，并给出有来源的结论。' },
+]
+
+function useStarter(prompt) {
+  input.value = prompt
+  nextTick(() => inputEl.value?.focus())
+}
 // 当前轮请求的 AbortController（"停止生成"用；终止的轮次不保存到记录）
 let currentAbort = null
 // 深度研究开关：选中后本轮请求走 DeepAgents 工作流（deep_research=true）
@@ -1130,6 +1162,11 @@ const lastAssistantHasContent = computed(() => {
   return !!(last && last.role === 'assistant' && last.content)
 })
 
+const lastAssistantHasProgress = computed(() => {
+  const last = messages.value[messages.value.length - 1]
+  return !!(last && last.role === 'assistant' && last.progressSummaries?.length)
+})
+
 function scrollBottom() {
   nextTick(() => {
     if (msgContainer.value) {
@@ -1200,6 +1237,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         steps: m.meta?.steps || [],
         stepsExpanded: false,
         stepsLoading: false,
+        progressSummaries: m.meta?.progress_summaries || [],
         // 中间产出（检索片段/工具结果/思维链）+ 多智能体子任务产出总结，历史回放
         artifacts: (m.meta?.artifacts || []).concat(
           (m.meta?.worker_outputs || []).map((wo, wi) => ({
@@ -1272,6 +1310,7 @@ async function send() {
     stepsLoading: true,
     error: '',
     artifacts: [],
+    progressSummaries: [],
     time: formatTime(new Date(asstTs).toISOString()),
     ts: asstTs,
     enter: true,
@@ -1291,7 +1330,7 @@ async function send() {
       model_id: selectedModelId.value,
       skill_ids: requestSkills.map(skill => skill.id),
       deep_research: deepResearch.value,
-    }, { signal: currentAbort.signal }, (ev) => {
+    }, (ev) => {
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
         const m = messages.value[msgIndex]
@@ -1328,6 +1367,21 @@ async function send() {
       } else if (ev.type === 'tool_call') {
         const task = findTask(ev.task_id)
         if (task) task.tools.push(ev.detail)
+      } else if (ev.type === 'progress_summary') {
+        const pm = messages.value[msgIndex]
+        const list = [...(pm.progressSummaries || [])]
+        if (!ev.id || !list.some(item => item.id === ev.id)) {
+          list.push({
+            id: ev.id || `progress-${Date.now()}-${list.length}`,
+            sequence: ev.sequence || list.length + 1,
+            phase: ev.phase || 'info',
+            status: ev.status || 'running',
+            text: ev.text || '',
+            created_at: ev.created_at || Date.now(),
+          })
+          messages.value[msgIndex] = { ...pm, progressSummaries: list }
+          scrollBottom()
+        }
       } else if (ev.type === 'status') {
         // 状态事件：落到当前 assistant 消息的 steps（随消息保留）
         // _ts 记录到达时刻，AgentActivity 用它计算每步耗时与总耗时
@@ -1407,6 +1461,9 @@ async function send() {
           // done 携带的完整 steps 仅在流式中断时兜底补齐
           steps: (m.steps && m.steps.length) ? m.steps : (ev.steps || []),
           artifacts: (m.artifacts && m.artifacts.length) ? m.artifacts : (ev.artifacts || []),
+          progressSummaries: (m.progressSummaries && m.progressSummaries.length)
+            ? m.progressSummaries
+            : (ev.progress_summaries || []),
           stepsLoading: false,
         }
         taskPanel.value.status = taskPanel.value.tasks.some(t => t.status === 'error')
@@ -1418,7 +1475,7 @@ async function send() {
         messages.value[msgIndex] = { ...em, error: gotError, stepsLoading: false }
         if (taskPanel.value.tasks.length) taskPanel.value.status = 'failed'
       }
-    })
+    }, { signal: currentAbort.signal })
 
     if (gotError) {
       const m = messages.value[msgIndex]

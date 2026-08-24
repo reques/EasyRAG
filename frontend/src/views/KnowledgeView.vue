@@ -15,16 +15,19 @@
 
         <section class="kbw-overview-grid" aria-label="知识库概览">
           <article>
+            <i class="kbw-overview-icon"><Database :size="16" /></i>
             <span>知识库总数</span>
             <strong>{{ kbList.length }}</strong>
             <small>当前账号可访问</small>
           </article>
           <article>
+            <i class="kbw-overview-icon"><CalendarDays :size="16" /></i>
             <span>最近创建</span>
             <strong>{{ recentlyCreatedCount }}</strong>
             <small>近 30 天</small>
           </article>
           <article>
+            <i class="kbw-overview-icon"><FileStack :size="16" /></i>
             <span>支持格式</span>
             <strong>9</strong>
             <small>文档与常见图片</small>

@@ -271,6 +271,10 @@ class AgentService:
             except Exception as exc:
                 logger.warning("[run_deep] user facts inject failed: %s", exc)
 
+        # 先向流式客户端报告研究规划，再进入可能较慢的知识库检索，避免
+        # 深度研究启动后长时间没有任何高层进度反馈。
+        _step("understand", "DeepAgents 主 Agent 开始处理...")
+
         # ── 知识库前置检索（2026-08-21, S1：此前 DeepAgents 从不检索知识库，
         #    系统提示却声称"检索结果会作为上下文提供"——知识库问答退化成纯 LLM
         #    生成。此处与 prepare_context 对齐：生成前检索并注入上下文）────
@@ -323,7 +327,6 @@ class AgentService:
         messages.extend(history)
         messages.append({"role": "user", "content": query})
 
-        _step("understand", "DeepAgents 主 Agent 开始处理...")
         # 请求级知识库授权：作用域内 kb_search 工具（含 task 委派的 SubAgent）
         # 都能读取当前用户授权范围，避免越权；contextvars 对同线程同步调用链可见
         from app.services.knowledge_context import use_authorised_kb_ids
@@ -394,6 +397,7 @@ class AgentService:
             except Exception as exc:
                 logger.error("[run_deep] deep agent error: %s", exc)
                 steps.append(f"deep agent error: {exc}")
+                _step("fallback", "深度研究执行失败，准备返回可用结果")
                 return {
                     "query": query,
                     "session_id": session_id,

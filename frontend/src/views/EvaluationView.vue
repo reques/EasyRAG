@@ -728,4 +728,55 @@ onMounted(async () => {
 .ev-cand-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 520px; }
 .spin { animation: ev-spin 0.9s linear infinite; }
 @keyframes ev-spin { to { transform: rotate(360deg); } }
+
+/* 2026 visual refresh */
+.ev-shell { max-width: 1180px; padding: 34px 34px 56px; gap: 16px; }
+.ev-header { padding: 4px 2px 10px; }
+.ev-header h1 { margin-top: 5px; color: var(--gray-950); font-size: 30px; font-weight: 730; letter-spacing: -.04em; }
+.ev-eyebrow { color: var(--main-600); font-size: 10px; font-weight: 750; letter-spacing: .16em; }
+.ev-header p { max-width: 760px; color: var(--gray-500); line-height: 1.7; }
+.ev-card { border-color: var(--gray-150); border-radius: 15px; padding: 20px 22px; box-shadow: 0 1px 2px rgba(29,53,47,.025); }
+.ev-card-head h2 { color: var(--gray-950); font-size: 16px; letter-spacing: -.015em; }
+.ev-field > span { color: var(--gray-700); font-weight: 650; }
+.ev-field input,
+.ev-field select { min-height: 40px; border-color: var(--gray-150); border-radius: 9px; background: var(--gray-10); }
+.ev-field input:hover,
+.ev-field select:hover { border-color: var(--gray-300); }
+.ev-field input:focus,
+.ev-field select:focus { border-color: var(--main-400); background: #fff; box-shadow: 0 0 0 3px var(--main-50); }
+.ev-case-row { border-color: var(--gray-150); border-radius: 12px; background: var(--gray-10); }
+.ev-case-index { background: var(--main-50); color: var(--main-700); }
+.ev-btn-primary { min-height: 38px; padding-inline: 17px; border-radius: 9px; background: var(--main-700); box-shadow: 0 5px 14px rgba(17,81,72,.14); }
+.ev-btn-primary:hover:not(:disabled) { background: var(--main-600); }
+.ev-btn-ghost { min-height: 34px; border-color: var(--gray-150); border-radius: 9px; background: #fff; }
+.ev-btn-ghost:hover { border-color: var(--main-200); background: var(--main-30); color: var(--main-700); }
+.ev-metric { border-color: var(--gray-150); border-radius: 11px; background: linear-gradient(145deg, #fff, var(--gray-25)); }
+.ev-metric strong { color: var(--gray-950); font-size: 22px; letter-spacing: -.03em; }
+.ev-badge.is-completed { background: var(--main-700); }
+.ev-table-wrap { border-color: var(--gray-150); border-radius: 11px; }
+.ev-table th { background: var(--gray-50); color: var(--gray-600); }
+.ev-table tbody tr:hover { background: var(--main-20); }
+.ev-modal { border: 1px solid var(--gray-150); border-radius: 18px; }
+
+@media (max-width: 980px) {
+  .ev-config-grid { grid-template-columns: minmax(180px, 1fr) 130px; }
+  .ev-field-wide { grid-column: 1 / -1; }
+  .ev-case-row { display: grid; grid-template-columns: 28px minmax(180px, 1fr) minmax(160px, .7fr); align-items: end; }
+  .ev-case-index { grid-row: 1 / 3; align-self: start; margin: 23px 0 0; }
+}
+
+@media (max-width: 680px) {
+  .ev-shell { padding: 24px 14px 42px; }
+  .ev-header h1 { font-size: 26px; }
+  .ev-card { padding: 16px; }
+  .ev-card-head { align-items: flex-start; gap: 10px; }
+  .ev-card-head .ev-hint { display: none; }
+  .ev-config-grid,
+  .ev-case-row { grid-template-columns: 1fr; }
+  .ev-field-wide { grid-column: auto; }
+  .ev-case-index { grid-row: auto; margin: 0; }
+  .ev-case-row .ev-field { min-width: 0; }
+  .ev-dataset-bar { align-items: stretch; flex-direction: column; }
+  .ev-dataset-bar .ev-btn-ghost { justify-content: center; }
+}
 </style>

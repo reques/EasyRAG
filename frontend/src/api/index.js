@@ -50,6 +50,9 @@ export default {
   // onEvent(payload) 每个 SSE data 事件回调一次, payload 为解析后的 JSON。
   // options.signal: AbortController.signal，用于"停止生成"（终止当前对话轮）。
   async streamChat(url, body, onEvent, options = {}) {
+    if (typeof onEvent !== 'function') {
+      throw new TypeError('streamChat onEvent must be a function')
+    }
     const token = localStorage.getItem('token')
     const resp = await fetch(`/api/v1${url}`, {
       method: 'POST',
@@ -90,9 +93,11 @@ export default {
           if (line.startsWith('data:')) {
             const data = line.slice(5).trim()
             if (!data) continue
+            let payload
             try {
-              onEvent(JSON.parse(data))
+              payload = JSON.parse(data)
             } catch { /* 忽略非 JSON 行 */ }
+            if (payload !== undefined) onEvent(payload)
           }
         }
       }
