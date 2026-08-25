@@ -1,10 +1,20 @@
 <template>
   <div class="auth-page">
+    <aside class="auth-intro">
+      <div class="auth-intro-brand"><span><Waypoints :size="20" /></span> EasyRAG</div>
+      <div class="auth-intro-copy">
+        <span class="auth-kicker">BUILD A KNOWLEDGE HOME</span>
+        <h2>一个更聪明的<br />团队知识入口。</h2>
+        <p>上传资料、构建索引，让每一次提问都能回到可信来源。</p>
+      </div>
+      <div class="auth-intro-foot"><span><Sparkles :size="15" /></span> 从第一个知识库开始，几分钟即可使用</div>
+    </aside>
     <div class="auth-card">
       <div class="auth-header">
-        <span class="auth-logo"><Brain :size="24" /></span>
+        <span class="auth-logo"><Waypoints :size="23" /></span>
+        <span class="auth-eyebrow">GET STARTED</span>
         <h1>创建账户</h1>
-        <p>加入 EasyRAG 知识库平台</p>
+        <p>建立属于你的知识工作空间</p>
       </div>
       <form @submit.prevent="handleRegister" class="auth-form">
         <label>
@@ -26,7 +36,7 @@
         <p v-if="error" class="auth-error">{{ error }}</p>
         <p v-if="success" class="auth-success">{{ success }}</p>
         <button type="submit" :disabled="loading" class="btn-primary">
-          {{ loading ? '注册中…' : '注 册' }}
+          {{ loading ? '注册中…' : '创建账户' }}
         </button>
       </form>
       <p class="auth-footer">
@@ -38,7 +48,7 @@
 
 <script setup>
 import { ref, reactive } from 'vue'
-import { Brain } from 'lucide-vue-next'
+import { Sparkles, Waypoints } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
