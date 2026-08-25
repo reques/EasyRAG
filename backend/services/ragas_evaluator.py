@@ -134,16 +134,47 @@ class RagasEvaluator:
         raise RuntimeError("Ragas worker did not return a JSON result")
 
 
-def get_ragas_evaluator(settings) -> RagasEvaluator:
-    metrics = [
+def _discover_ragas_python() -> Optional[str]:
+    """Locate a dedicated Ragas virtual environment.
+
+    Search order (Windows first, POSIX second): project-local venvs named
+    ``.venv-ragas`` / ``venv-ragas`` / ``ragas-env``, then fall back to the
+    current interpreter (the worker reports ``unavailable`` if Ragas is absent).
+    An explicit ``RAGAS_PYTHON_EXECUTABLE`` always wins over auto-detection.
+    """
+    root = Path(__file__).resolve().parents[2]
+    if sys.platform == "win32":
+        candidates = [
+            root / ".venv-ragas" / "Scripts" / "python.exe",
+            root / "venv-ragas" / "Scripts" / "python.exe",
+            root / "ragas-env" / "Scripts" / "python.exe",
+            root / ".venv-ragas" / "bin" / "python",
+        ]
+    else:
+        candidates = [
+            root / ".venv-ragas" / "bin" / "python",
+            root / "venv-ragas" / "bin" / "python",
+            root / "ragas-env" / "bin" / "python",
+        ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def get_ragas_evaluator(settings, metrics=None) -> RagasEvaluator:
+    # Per-run metric overrides take precedence over the global
+    # RAGAS_METRICS setting, which keeps experiments reproducible.
+    selected = metrics if metrics else [
         value.strip()
         for value in settings.RAGAS_METRICS.split(",")
         if value.strip()
     ]
+    explicit = (settings.RAGAS_PYTHON_EXECUTABLE or "").strip()
     return RagasEvaluator(
         execution_mode=settings.RAGAS_EXECUTION_MODE,
-        python_executable=settings.RAGAS_PYTHON_EXECUTABLE or None,
-        metrics=metrics,
+        python_executable=explicit or _discover_ragas_python(),
+        metrics=selected,
         timeout_seconds=settings.RAGAS_TIMEOUT,
         llm_model=settings.RAGAS_LLM_MODEL or settings.LLM_MODEL,
         llm_api_key=settings.RAGAS_LLM_API_KEY or settings.LLM_API_KEY,

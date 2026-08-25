@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,10 +34,93 @@ class EvaluationCase:
 
     question: str
     expected_file_id: str
-    expected_chunk_id: str
-    reference_answer: str
+    expected_chunk_id: Optional[str] = None
+    expected_chunk_ids: Tuple[str, ...] = ()
+    reference_answer: str = ""
     # Internal lookup value used for legacy stores that do not persist file_id.
     expected_source: str = ""
+    # 负样本：为 True 时该用例期望「不命中」该文件，用于评估误报率。
+    expect_miss: bool = False
+
+
+def _file_chunk_ids(
+    retriever,
+    knowledge_base_id: str,
+    file_id: str,
+    source: str,
+) -> List[str]:
+    """Expand a file into its stable chunk IDs for file-level evaluation.
+
+    Falls back to an empty relevance set when the store cannot list chunks by
+    source (e.g. test doubles) so metrics degrade gracefully instead of raising.
+    """
+    from app.rag.retriever import get_document_chunk_id
+
+    try:
+        contents = retriever.list_chunks_by_source(knowledge_base_id, source)
+    except (AttributeError, NotImplementedError):
+        contents = []
+    return [
+        get_document_chunk_id(knowledge_base_id, content, {"source": source})
+        for content in (contents or [])
+    ]
+
+
+def build_run_metadata(k: int) -> Dict[str, Any]:
+    """运行环境快照 - 保证实验结果可复现、可横向对比。
+
+    记录 embedding / 分块策略 / 检索参数，便于识别指标变化来自哪个环节。
+    """
+    return {
+        "k": k,
+        "embedding_type": getattr(cfg, "EMBEDDING_TYPE", ""),
+        "embedding_model": (
+            getattr(cfg, "EMBEDDING_MODEL_NAME", "")
+            or getattr(cfg, "EMBEDDING_MODEL_PATH", "")
+        ),
+        "chunk_strategy": getattr(cfg, "CHUNK_STRATEGY", ""),
+        "score_threshold": getattr(cfg, "RAG_SCORE_THRESHOLD", 0.0),
+        "enhanced_retrieval": bool(getattr(cfg, "ENHANCED_RETRIEVAL_ENABLED", False)),
+        "graph_enabled": bool(getattr(cfg, "GRAPH_ENABLED", False)),
+    }
+
+
+def build_failure_analysis(details: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """把逐条结果归类为三类失败模式，便于定位检索瓶颈。
+
+    - missed: 完全未命中（相关上下文一条都没召回）
+    - low_recall: 命中但召回不足（相关上下文召回 < 50%）
+    - false_positive: 负样本被误召回（本不该命中的文件命中了）
+    """
+    missed = [
+        {"question": d["question"], "top_score": d.get("top_score")}
+        for d in details
+        if not d.get("expect_miss")
+        and d.get("chunk_hit_rank") is None
+        and d.get("file_hit_rank") is None
+    ]
+    low_recall = [
+        {
+            "question": d["question"],
+            "recall_at_k": d.get("chunk_metrics", {}).get("recall_at_k", 0.0),
+        }
+        for d in details
+        if not d.get("expect_miss")
+        and 0.0 < d.get("chunk_metrics", {}).get("recall_at_k", 0.0) < 0.5
+    ]
+    false_positives = [
+        {"question": d["question"], "top_score": d.get("top_score")}
+        for d in details
+        if d.get("expect_miss") and d.get("false_positive")
+    ]
+    return {
+        "missed_count": len(missed),
+        "low_recall_count": len(low_recall),
+        "false_positive_count": len(false_positives),
+        "missed": missed[:20],
+        "low_recall": low_recall[:20],
+        "false_positives": false_positives[:20],
+    }
 
 
 def run_evaluation(
@@ -45,6 +128,7 @@ def run_evaluation(
     top_k: Optional[int] = None,
     *,
     knowledge_base_id: uuid.UUID | str,
+    ragas_metrics: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """对评估集逐条检索并计算指标（同步，直接调 retriever 单例）。
 
@@ -61,6 +145,7 @@ def run_evaluation(
     ragas_samples: List[RagasEvaluationSample] = []
     chunk_metric_rows = []
     file_metric_rows = []
+    file_chunk_ids: Dict[str, List[str]] = {}
     score_sum = 0.0
     scored = 0
 
@@ -107,9 +192,36 @@ def run_evaluation(
             retrieved_file_ids.append(returned_file_id or f"source:{source}")
             retrieved_chunk_ids.append(returned_chunk_id)
 
+        if case.expect_miss:
+            chunk_relevant: List[str] = []
+            reference_mode = "negative"
+            expected_chunk_count = 0
+            false_positive = 1 if case.expected_file_id in retrieved_file_ids else 0
+        elif case.expected_chunk_ids:
+            chunk_relevant = list(case.expected_chunk_ids)
+            reference_mode = "chunk_ids"
+            expected_chunk_count = len(chunk_relevant)
+            false_positive = 0
+        elif case.expected_chunk_id:
+            chunk_relevant = [case.expected_chunk_id]
+            reference_mode = "chunk"
+            expected_chunk_count = 1
+            false_positive = 0
+        else:
+            chunk_relevant = file_chunk_ids.get(case.expected_file_id)
+            if chunk_relevant is None:
+                chunk_relevant = _file_chunk_ids(
+                    retriever, scoped_kb_id,
+                    case.expected_file_id, case.expected_source,
+                )
+                file_chunk_ids[case.expected_file_id] = chunk_relevant
+            reference_mode = "file"
+            expected_chunk_count = len(chunk_relevant)
+            false_positive = 0
+
         chunk_metrics = calculate_ranking_metrics(
             retrieved_chunk_ids,
-            [case.expected_chunk_id],
+            chunk_relevant,
             k,
         )
         file_metrics = calculate_ranking_metrics(
@@ -122,7 +234,7 @@ def run_evaluation(
         ragas_samples.append(RagasEvaluationSample(
             question=case.question,
             retrieved_context_ids=retrieved_chunk_ids,
-            reference_context_ids=[case.expected_chunk_id],
+            reference_context_ids=chunk_relevant,
             retrieved_contexts=[
                 str(doc.get("content") or "")
                 for doc in docs
@@ -137,6 +249,10 @@ def run_evaluation(
             "question": case.question,
             "expected_file_id": case.expected_file_id,
             "expected_chunk_id": case.expected_chunk_id,
+            "expected_chunk_count": expected_chunk_count,
+            "reference_mode": reference_mode,
+            "expect_miss": case.expect_miss,
+            "false_positive": false_positive,
             "reference_answer": case.reference_answer,
             "file_hit_rank": file_metrics.first_relevant_rank,
             "chunk_hit_rank": chunk_metrics.first_relevant_rank,
@@ -158,8 +274,10 @@ def run_evaluation(
     file_hit_rate_at_k = mean(file_metric_rows, "hit_rate_at_k")
     file_mrr_at_k = mean(file_metric_rows, "reciprocal_rank_at_k")
     result = {
-        "metrics_version": "local-v1",
+        "metrics_version": "local-v2",
         "k": k,
+        "run_metadata": build_run_metadata(k),
+        "analysis": build_failure_analysis(details),
         "hit_rate_at_k": hit_rate_at_k,
         "mrr_at_k": mrr_at_k,
         "recall_at_k": mean(chunk_metric_rows, "recall_at_k"),
@@ -179,7 +297,7 @@ def run_evaluation(
         "details": details,
     }
     if cfg.RAGAS_ENABLED:
-        result["ragas"] = get_ragas_evaluator(cfg).evaluate(ragas_samples)
+        result["ragas"] = get_ragas_evaluator(cfg, ragas_metrics).evaluate(ragas_samples)
     else:
         result["ragas"] = {
             "status": "disabled",
@@ -195,11 +313,13 @@ async def save_run(
     metrics: Dict[str, Any],
     top_k: int,
     kb_id: Optional[uuid.UUID] = None,
+    dataset_id: Optional[uuid.UUID] = None,
 ) -> EvaluationRun:
     """把一次评估结果落库为命名运行。"""
     run = EvaluationRun(
         name=name,
         knowledge_base_id=kb_id,
+        dataset_id=dataset_id,
         top_k=top_k,
         query_count=len(metrics.get("details", [])),
         hit_rate=metrics["hit_rate"],

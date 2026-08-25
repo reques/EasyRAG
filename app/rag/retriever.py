@@ -124,6 +124,17 @@ class BaseRetriever:
         """Delete all chunks belonging to a source file. Returns count deleted."""
         raise NotImplementedError
 
+    def list_chunks_by_source(
+        self,
+        knowledge_base_id: str,
+        source: str,
+    ) -> List[str]:
+        """Return all chunk contents for one source file in a knowledge base.
+
+        Used by file-level evaluation to expand a file into its chunk IDs.
+        """
+        raise NotImplementedError
+
     def list_documents(self) -> List[FileInfo]:
         """Return per-file statistics: [{source, chunk_count, char_count}]."""
         raise NotImplementedError
@@ -212,6 +223,18 @@ class MemoryRetriever(BaseRetriever):
         if deleted:
             logger.info("[MemoryRetriever] deleted %d docs for source '%s'", deleted, source)
         return deleted
+
+    def list_chunks_by_source(
+        self,
+        knowledge_base_id: str,
+        source: str,
+    ) -> List[str]:
+        return [
+            text
+            for text, meta in zip(self._texts, self._metas)
+            if str(meta.get("knowledge_base_id", "")) == str(knowledge_base_id)
+            and str(meta.get("source", "")) == str(source)
+        ]
 
     def list_documents(self) -> List["FileInfo"]:
         from collections import defaultdict
@@ -378,6 +401,19 @@ class MilvusRetriever(BaseRetriever):
         logger.info("[MilvusRetriever] deleted %d docs for source '%s'", count, source)
         return count
 
+    def list_chunks_by_source(
+        self,
+        knowledge_base_id: str,
+        source: str,
+    ) -> List[str]:
+        if not self._col:
+            return []
+        kb_safe = str(knowledge_base_id).replace("'", "''")
+        src_safe = str(source).replace("'", "''")
+        expr = f"knowledge_base_id == '{kb_safe}' and source == '{src_safe}'"
+        rows = self._col.query(expr=expr, output_fields=["content"])
+        return [row.get("content") or "" for row in rows]
+
     def list_documents(self) -> List["FileInfo"]:
         """Return per-file statistics by scanning all stored entities."""
         from collections import defaultdict
@@ -500,6 +536,22 @@ class ChromaRetriever(BaseRetriever):
         self._col.delete(ids=ids)
         logger.info("[ChromaRetriever] deleted %d docs for source '%s'", len(ids), source)
         return len(ids)
+
+    def list_chunks_by_source(
+        self,
+        knowledge_base_id: str,
+        source: str,
+    ) -> List[str]:
+        res = self._col.get(
+            where={
+                "$and": [
+                    {"knowledge_base_id": str(knowledge_base_id)},
+                    {"source": str(source)},
+                ]
+            },
+            include=["documents"],
+        )
+        return list(res.get("documents") or [])
 
 
 # ── Singleton factory ─────────────────────────────────────────────────────────

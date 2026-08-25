@@ -1,30 +1,35 @@
 <template>
   <div class="layout">
-    <!-- 侧边栏: Yuxi 式纵向文字导航 -->
+    <!-- 侧边栏 -->
     <aside class="sidebar">
-      <div class="sidebar-brand" @click="$router.push('/')">
-        <span class="brand-logo"><Brain :size="16" /></span>
-        <span class="brand-name">EasyRAG</span>
+      <div class="sidebar-brand" title="EasyRAG 首页" @click="$router.push('/')">
+        <span class="brand-logo"><Waypoints :size="17" /></span>
+        <span class="brand-copy">
+          <span class="brand-name">EasyRAG</span>
+          <small>KNOWLEDGE OS</small>
+        </span>
       </div>
 
       <nav class="sidebar-nav">
-        <button class="nav-item primary-action" @click="newChat">
-          <MessageCirclePlus :size="16" class="nav-icon" />
+        <span class="sidebar-section-label">工作区</span>
+        <button class="nav-item primary-action" title="新建对话" @click="newChat">
+          <Plus :size="17" class="nav-icon" />
           <span class="nav-text">新建对话</span>
+          <span class="nav-shortcut">⌘ N</span>
         </button>
-        <router-link to="/" class="nav-item" exact-active-class="active">
-          <MessageSquare :size="16" class="nav-icon" />
+        <router-link to="/" class="nav-item" title="智能对话" exact-active-class="active">
+          <MessagesSquare :size="17" class="nav-icon" />
           <span class="nav-text">对话</span>
         </router-link>
-        <router-link to="/knowledge" class="nav-item" active-class="active">
-          <LibraryBig :size="16" class="nav-icon" />
+        <router-link to="/knowledge" class="nav-item" title="知识空间" active-class="active">
+          <LibraryBig :size="17" class="nav-icon" />
           <span class="nav-text">知识库</span>
         </router-link>
       </nav>
 
       <!-- 最近对话列表 -->
       <div class="sidebar-conversations">
-        <div class="conv-header"><span>最近</span></div>
+        <div class="conv-header"><Clock3 :size="13" /><span>最近对话</span></div>
         <div class="conv-list" v-if="chatStore.conversations.length">
           <div
             v-for="conv in chatStore.conversations"
@@ -47,7 +52,7 @@
 
       <div class="sidebar-footer">
         <span class="user-avatar">{{ avatarLetter }}</span>
-        <span class="user-badge">{{ auth.username }}</span>
+        <span class="user-badge"><strong>{{ auth.username }}</strong><small>已登录</small></span>
         <button @click="auth.logout(); $router.push('/login')" class="btn-logout" title="退出登录">
           <LogOut :size="15" />
         </button>
@@ -57,8 +62,14 @@
     <!-- 主区域 -->
     <main class="main">
       <header class="app-topbar">
-        <span class="app-topbar-name">EasyRAG</span>
-        <span class="app-version-badge">版本 {{ appVersion }}</span>
+        <div class="app-topbar-copy">
+          <span class="app-topbar-name">{{ pageTitle }}</span>
+          <span class="app-topbar-description">{{ pageDescription }}</span>
+        </div>
+        <div class="app-topbar-meta">
+          <span class="system-status"><i></i> 服务正常</span>
+          <span class="app-version-badge">{{ appVersion }}</span>
+        </div>
       </header>
       <div class="main-content">
         <router-view v-slot="{ Component }">
@@ -112,7 +123,7 @@
 <script setup>
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Brain, MessageCirclePlus, MessageSquare, LibraryBig, MoreHorizontal, Sparkles, Trash2, LogOut } from 'lucide-vue-next'
+import { Clock3, LibraryBig, LogOut, MessagesSquare, MoreHorizontal, Plus, Sparkles, Trash2, Waypoints } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
 import api from '../api'
@@ -122,6 +133,11 @@ const chatStore = useChatStore()
 const router = useRouter()
 const route = useRoute()
 const appVersion = ref('v0.3.1')
+
+const pageTitle = computed(() => route.path === '/knowledge' ? '知识空间' : '智能对话')
+const pageDescription = computed(() => route.path === '/knowledge'
+  ? '组织资料、检索与评估'
+  : '从你的知识与工具中获得答案')
 
 const avatarLetter = computed(() => (auth.username || '?').slice(0, 1).toUpperCase())
 
