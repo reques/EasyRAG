@@ -100,6 +100,10 @@ class LLMClient:
     @staticmethod
     def _parse_json(text: str) -> Any:
         """Extract JSON from LLM output that may contain markdown fences or prose."""
+        # 空响应明确报错
+        if not text or not text.strip():
+            raise LLMOutputParseError("LLM returned empty response (0 characters)")
+
         # Try direct parse first
         try:
             return json.loads(text.strip())
@@ -155,7 +159,12 @@ class LLMClient:
                     logger.warning("LLM returned empty, retrying after 1.5s backoff")
                     _time.sleep(1.5)
                     continue
-                return text  # 两次都空，返回空字符串
+                # 两次都空：记录详细错误信息
+                logger.error(
+                    "LLM returned empty after 2 attempts | model=%s | prompt_len=%d",
+                    self.model, len(str(messages))
+                )
+                return text  # 返回空字符串
             except APITimeoutError as exc:
                 raise LLMTimeoutError("LLM request timed out") from exc
             except (RateLimitError, APIConnectionError) as exc:
@@ -167,9 +176,20 @@ class LLMClient:
         messages: List[Dict[str, str]],
         **extra,
     ) -> Any:
-        """Synchronous chat + JSON parse."""
+        """Synchronous chat + JSON parse.
+
+        Retries once when the model returns non-JSON output, mirroring the
+        async ``chat_json`` behavior to reduce orchestration fallbacks.
+        """
         text = self.chat_sync(messages, **extra)
-        return self._parse_json(text)
+        try:
+            return self._parse_json(text)
+        except LLMOutputParseError:
+            logger.warning(
+                "[llm] JSON parse failed, retrying once (head: %s)", text[:80]
+            )
+            text = self.chat_sync(messages, **extra)
+            return self._parse_json(text)
 
     # ── async interface ───────────────────────────────────────────────────
 

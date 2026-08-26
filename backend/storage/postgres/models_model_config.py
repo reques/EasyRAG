@@ -37,6 +37,8 @@ class CustomModelConfig(Base):
     api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     requires_api_key: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     temperature: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # 是否支持图片（多模态）输入；由用户在添加/编辑模型时勾选，默认 False
+    supports_vision: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

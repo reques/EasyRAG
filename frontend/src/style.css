@@ -3029,3 +3029,77 @@ select:focus-visible {
   .chat-starter-grid > button,
   .chat-starter-grid > button > svg { transition: none; }
 }
+
+/* ── 图片输入（粘贴/上传） ─────────────────────────────────────────────── */
+.hidden-file-input {
+  display: none;
+}
+
+.image-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--surface, #fff);
+  color: var(--muted-foreground, #6b7280);
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.image-attach-btn:hover { background: var(--accent-soft, #f3f4f6); }
+.image-attach-btn.active {
+  color: var(--accent, #2563eb);
+  border-color: var(--accent, #2563eb);
+  background: var(--accent-soft, #eff6ff);
+}
+.image-attach-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.image-attach-preview {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 8px;
+  max-width: 180px;
+}
+.image-attach-preview img {
+  display: block;
+  max-width: 180px;
+  max-height: 140px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  object-fit: cover;
+}
+.image-attach-remove {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: var(--foreground, #111827);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,.2);
+}
+.image-attach-error {
+  color: #dc2626;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+/* 消息内图片（用户上传） */
+.message-image {
+  margin-top: 6px;
+}
+.message-image img {
+  max-width: 280px;
+  max-height: 240px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  object-fit: contain;
+}
