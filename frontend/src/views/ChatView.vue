@@ -24,7 +24,7 @@
       <div class="chat-column">
         <!-- 空状态 -->
         <div v-if="messages.length === 0 && !sending" class="chat-empty">
-          <div class="chat-empty-mark"><Sparkles :size="22" /></div>
+          <div class="chat-empty-mark"><Asterisk :size="26" :stroke-width="1.9" /></div>
           <span class="chat-empty-eyebrow"><i></i> KNOWLEDGE ASSISTANT</span>
           <h3>从一个好问题开始</h3>
           <p>连接知识库、联网搜索与多智能体，为你梳理复杂信息。</p>
@@ -161,6 +161,7 @@
           v-model="input"
           @keydown.enter.exact.prevent="send"
           @paste="onPaste"
+          placeholder="和 EasyRAG 一起思考…"
           rows="1"
           ref="inputEl"
           @input="autoResize"
@@ -602,6 +603,7 @@ import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
 import {
+  Asterisk,
   ArrowUp,
   ArrowUpRight,
   Bot,
