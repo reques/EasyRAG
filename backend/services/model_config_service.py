@@ -107,4 +107,5 @@ def profile_from_custom_model(record: CustomModelConfig) -> ChatModelProfile:
         model=record.model_name,
         temperature=record.temperature,
         requires_api_key=record.requires_api_key,
+        supports_vision=bool(record.supports_vision),
     )

@@ -61,7 +61,7 @@
               :stopped="!!msg.stopped"
             />
             <AgentActivity
-              v-else-if="msg.steps && msg.steps.length"
+              v-if="msg.steps && msg.steps.length"
               :steps="msg.steps"
               :artifacts="msg.artifacts"
               :running="msg.stepsLoading"
@@ -80,6 +80,9 @@
               <Square :size="11" /> 已停止生成 · 本轮对话未保存
             </div>
             <div class="message-text" v-html="renderContent(msg.content)"></div>
+            <div v-if="msg.role === 'user' && msg.image" class="message-image">
+              <img :src="msg.image" alt="用户上传图片" />
+            </div>
             <!-- 知识库 / 检索引用块 -->
             <div v-if="msg.sources && msg.sources.length" class="message-sources">
               <div class="sources-title">
@@ -146,14 +149,29 @@
             </button>
           </span>
         </div>
+        <!-- 待发送图片预览 -->
+        <div v-if="attachedImage" class="image-attach-preview">
+          <img :src="attachedImage" alt="待发送图片" />
+          <button type="button" class="image-attach-remove" title="移除图片" @click="removeImage">
+            <X :size="14" />
+          </button>
+        </div>
+        <div v-if="imageError" class="image-attach-error">{{ imageError }}</div>
         <textarea
           v-model="input"
           @keydown.enter.exact.prevent="send"
-          placeholder="输入你的问题，Enter 发送…"
+          @paste="onPaste"
           rows="1"
           ref="inputEl"
           @input="autoResize"
         ></textarea>
+        <input
+          ref="fileInput"
+          type="file"
+          accept="image/*"
+          class="hidden-file-input"
+          @change="onFilePicked"
+        />
         <div class="chat-input-actions">
           <div class="composer-control-group">
           <div ref="modelPickerEl" class="model-picker-shell">
@@ -249,8 +267,18 @@
             </div>
           </div>
           </div>
-          <!-- 右侧按钮组：深度研究（紧贴发送按钮左侧）+ 停止/发送 -->
+          <!-- 右侧按钮组：图片 + 深度研究（紧贴发送按钮左侧）+ 停止/发送 -->
           <div class="composer-send-group">
+            <button
+              type="button"
+              class="image-attach-btn"
+              :class="{ active: attachedImage }"
+              :disabled="sending"
+              @click="fileInput?.click()"
+              :title="attachedImage ? '已添加图片，点击可替换' : '粘贴或上传图片（模型支持时直接理解，否则自动 OCR 识别文字）'"
+            >
+              <ImageIcon :size="15" />
+            </button>
             <button
               type="button"
               class="deep-research-toggle"
@@ -436,6 +464,10 @@
               <input v-model="customModelForm.requires_api_key" type="checkbox" />
               <span>此接口需要 API Key</span>
             </label>
+            <label class="model-key-toggle">
+              <input v-model="customModelForm.supports_vision" type="checkbox" />
+              <span>支持图片输入（多模态）</span>
+            </label>
             <label v-if="customModelForm.requires_api_key">
               <span>API Key</span>
               <input v-model="customModelForm.api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="仅加密保存到后端" required />
@@ -581,6 +613,7 @@ import {
   HardDrive,
   FileSearch2,
   Globe2,
+  Image as ImageIcon,
   ListTree,
   ListChecks,
   Loader2,
@@ -669,6 +702,52 @@ const inputEl = ref(null)
 const copiedMessageIndex = ref(null)
 let copyFeedbackTimer = null
 
+// ── 图片输入：粘贴 / 上传，随对话请求以 data URL 发出 ──
+const attachedImage = ref(null)        // 当前待发送图片的 data URL
+const imageError = ref('')
+const fileInput = ref(null)
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024  // 8MB 上限，避免请求体过大
+
+function _readImageFile(file) {
+  if (!file) return
+  imageError.value = ''
+  if (!file.type.startsWith('image/')) {
+    imageError.value = '请选择图片文件'
+    return
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    imageError.value = '图片不能超过 8MB'
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => { attachedImage.value = reader.result }
+  reader.onerror = () => { imageError.value = '图片读取失败' }
+  reader.readAsDataURL(file)
+}
+
+function onPaste(event) {
+  const items = event.clipboardData?.items
+  if (!items) return
+  for (const it of items) {
+    if (it.type.startsWith('image/')) {
+      event.preventDefault()
+      _readImageFile(it.getAsFile())
+      return
+    }
+  }
+}
+
+function onFilePicked(event) {
+  const f = event.target.files?.[0]
+  _readImageFile(f)
+  event.target.value = ''  // 允许重复选同一文件
+}
+
+function removeImage() {
+  attachedImage.value = null
+  imageError.value = ''
+}
+
 async function copyMessage(content, index) {
   if (!content) return
   try {
@@ -755,6 +834,7 @@ const customModelForm = reactive({
   api_key: '',
   requires_api_key: false,
   temperature: 0,
+  supports_vision: false,
 })
 const selectedModel = computed(() => (
   modelOptions.value.find(model => model.id === selectedModelId.value) || null
@@ -832,6 +912,7 @@ function openCustomModelModal() {
     api_key: '',
     requires_api_key: false,
     temperature: 0,
+    supports_vision: false,
   })
   customModelModalOpen.value = true
 }
@@ -856,6 +937,7 @@ async function saveCustomModel() {
       api_key: customModelForm.api_key.trim(),
       requires_api_key: customModelForm.requires_api_key,
       temperature: customModelForm.temperature,
+      supports_vision: customModelForm.supports_vision,
     })
     await loadModels(created.id)
     customModelModalOpen.value = false
@@ -1225,6 +1307,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
       messages.value = (res.messages || []).map(m => ({
         role: m.role,
         content: m.content,
+        image: m.image || null,
         sources: m.meta?.sources || [],
         skills: m.meta?.skills || [],
         meta: (m.meta?.agent_mode || m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.skills?.length) ? {
@@ -1286,6 +1369,7 @@ async function send() {
   messages.value.push({
     role: 'user',
     content: text,
+    image: attachedImage.value || null,
     skills: requestSkills,
     deepResearch: deepResearch.value,
     time: formatTime(new Date(userTs).toISOString()),
@@ -1330,6 +1414,7 @@ async function send() {
       model_id: selectedModelId.value,
       skill_ids: requestSkills.map(skill => skill.id),
       deep_research: deepResearch.value,
+      image: attachedImage.value || undefined,
     }, (ev) => {
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
@@ -1497,6 +1582,8 @@ async function send() {
   } finally {
     sending.value = false
     if (currentAbort) { currentAbort = null }
+    attachedImage.value = null
+    imageError.value = ''
     scrollBottom()
     nextTick(() => inputEl.value?.focus())
   }

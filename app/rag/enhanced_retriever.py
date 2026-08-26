@@ -1199,14 +1199,20 @@ class EnhancedRetriever:
 
         n = min(len(docs), top_k)
         candidates = docs[:n]
-        cand_text = "\n".join(
-            f"[{i + 1}] {d.content[:120]}" for i, d in enumerate(candidates)
-        )
+        # 清理候选文本：移除可能导致 prompt 解析失败的特殊字符
+        cand_text_parts = []
+        for i, d in enumerate(candidates):
+            # 截取内容并清理控制字符
+            content = d.content[:120].replace('\r', ' ').replace('\n', ' ').strip()
+            cand_text_parts.append(f"[{i + 1}] {content}")
+        cand_text = "\n".join(cand_text_parts)
+
         sub_questions_str = "\n".join(
             f"  {i + 1}. {sq}" for i, sq in enumerate(decomposition.sub_questions)
         ) or "  （无）"
 
         try:
+            # 增加 max_tokens 到 2500，避免长 prompt 导致输出被截断为空
             data = self.llm.chat_json_sync([{
                 "role": "user",
                 "content": _ANSWERABILITY_PROMPT.format(
@@ -1214,7 +1220,7 @@ class EnhancedRetriever:
                     sub_questions=sub_questions_str,
                     candidates=cand_text,
                 ),
-            }], max_tokens=1500)
+            }], max_tokens=2500)
             scores = data.get("scores", {}) if isinstance(data, dict) else {}
         except Exception as exc:
             logger.warning(

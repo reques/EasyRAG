@@ -118,6 +118,7 @@ class AgentService:
         user_id=None,
         knowledge_base_ids: Optional[Sequence[str]] = None,
         knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
+        image_data: Optional[str] = None,
     ) -> Dict[str, Any]:
         logger.info("[agent_service] session=%s query=%r", session_id, query[:80])
         start = time.perf_counter()
@@ -167,6 +168,7 @@ class AgentService:
             "user_id": str(user_id) if user_id else "",
             "knowledge_base_ids": list(knowledge_base_ids or []),
             "knowledge_catalog": list(knowledge_catalog or []),
+            "image_data": image_data,
             "steps": [],
             "retrieved_docs": [],
             "tool_args": {},
@@ -458,6 +460,7 @@ class AgentService:
         user_id=None,
         knowledge_base_ids: Optional[Sequence[str]] = None,
         knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
+        image_data: Optional[str] = None,
         on_step=None,
         on_artifact=None,
     ) -> Dict[str, Any]:
@@ -682,8 +685,17 @@ class AgentService:
                 context = context[:MAX_CONTEXT_CHARS] + "\n\n[... context truncated ...]"
             messages.append({
                 "role": "user",
-                "content": ANSWER_WITH_ENHANCED_CONTEXT.format(
-                    query=resolved_query, context=context, tool_result=tool_result_text
+                "content": (
+                    [
+                        {"type": "text", "text": ANSWER_WITH_ENHANCED_CONTEXT.format(
+                            query=resolved_query, context=context, tool_result=tool_result_text
+                        )},
+                        {"type": "image_url", "image_url": {"url": image_data}},
+                    ]
+                    if image_data else
+                    ANSWER_WITH_ENHANCED_CONTEXT.format(
+                        query=resolved_query, context=context, tool_result=tool_result_text
+                    )
                 ),
             })
         elif docs:
@@ -692,14 +704,32 @@ class AgentService:
             )
             messages.append({
                 "role": "user",
-                "content": ANSWER_WITH_CONTEXT.format(
-                    query=resolved_query, context=context, tool_result=tool_result_text
+                "content": (
+                    [
+                        {"type": "text", "text": ANSWER_WITH_CONTEXT.format(
+                            query=resolved_query, context=context, tool_result=tool_result_text
+                        )},
+                        {"type": "image_url", "image_url": {"url": image_data}},
+                    ]
+                    if image_data else
+                    ANSWER_WITH_CONTEXT.format(
+                        query=resolved_query, context=context, tool_result=tool_result_text
+                    )
                 ),
             })
         else:
             messages.append({
                 "role": "user",
-                "content": ANSWER_NO_CONTEXT.format(query=resolved_query, tool_result=tool_result_text),
+                "content": (
+                    [
+                        {"type": "text", "text": ANSWER_NO_CONTEXT.format(
+                            query=resolved_query, tool_result=tool_result_text
+                        )},
+                        {"type": "image_url", "image_url": {"url": image_data}},
+                    ]
+                    if image_data else
+                    ANSWER_NO_CONTEXT.format(query=resolved_query, tool_result=tool_result_text)
+                ),
             })
 
         return {
