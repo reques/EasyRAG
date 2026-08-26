@@ -16,7 +16,7 @@
 |----|------|
 | 前端 | Vue 3.5 · Vite 6 · Pinia · Axios · lucide 图标 |
 | 后端 | FastAPI（async）· SQLAlchemy 2.0 async · LangGraph 工作流 |
-| Agent | LangGraph（意图分流 / ReAct 循环 / 校验重试）· 多智能体编排（Orchestrator + Worker + Blackboard） |
+| Agent | LangGraph（意图分流 / ReAct 循环 / 校验重试）· DeepAgents 统一多智能体（主 Agent + SubAgent + DAG 委派 + 结构化黑板） |
 | 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 配置）· Redis · MinIO |
 | 向量 | Milvus 2.5（etcd + MinIO 依赖）· BGE-M3 embedding（Ollama 本地 / API） |
 | LLM | DeepSeek / MiniMax / Qwen(DashScope) / GLM / 任意 OpenAI 兼容 API |

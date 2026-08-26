@@ -1,6 +1,6 @@
 # EasyRAG 项目架构与设计
 
-> 最后更新：2026-08-18 | 快速上手见 [README](../README.md)，演进记录见 [PROGRESS.md](../PROGRESS.md)
+> 最后更新：2026-08-26（多智能体统一到 DeepAgents，Orchestrator-Worker 退役） | 快速上手见 [README](../README.md)，演进记录见 [PROGRESS.md](../PROGRESS.md)
 
 ---
 
@@ -33,8 +33,8 @@ EasyRAG 是一个面向真实业务场景的企业知识库智能问答平台：
 │ app/agents     │ │ app/rag      │ │ app/tools    │ │                 │
 │ app/graph      │ │ (chunker/    │ │ registry     │ │ Postgres(pgvector│
 │ (LangGraph)    │ │  embedding/  │ │ + MCP 桥接   │ │  +图谱+业务)     │
-│ Orchestrator   │ │  retriever/  │ │ app/skills   │ │ Milvus(向量)     │
-│ + Workers      │ │  bm25/rerank/│ │              │ │ Redis · MinIO    │
+│ DeepAgents     │ │  retriever/  │ │ app/skills   │ │ Milvus(向量)     │
+│ 委派协同        │ │  bm25/rerank/│ │              │ │ Redis · MinIO    │
 │                │ │  ocr/parsers)│ │              │ │ Ollama(embedding)│
 └────────────────┘ └──────────────┘ └──────────────┘ │ MinerU(旁路解析) │
                                                      └──────────────────┘
@@ -48,7 +48,7 @@ EasyRAG 是一个面向真实业务场景的企业知识库智能问答平台：
 |----|------|
 | 前端 | Vue 3.5 · Vite 6 · Pinia · Axios · lucide 图标 |
 | 后端 | FastAPI（async）· SQLAlchemy 2.0 async · LangGraph 工作流 |
-| Agent | LangGraph StateGraph（意图分流 / ReAct 循环 / 校验重试）· 多智能体编排（Orchestrator + Worker + Blackboard） |
+| Agent | LangGraph StateGraph（意图分流 / ReAct 循环 / 校验重试）· DeepAgents 统一多智能体（主 Agent + SubAgent + DAG 委派 + 结构化黑板） |
 | 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 配置）· Redis · MinIO（文件对象存储） |
 | 向量 | Milvus 2.5（etcd + MinIO 依赖）· BGE-M3 embedding（Ollama 本地 / API） |
 | LLM | DeepSeek / MiniMax / Qwen(DashScope) / GLM / 任意 OpenAI 兼容 API（可配置 base_url，支持自定义模型） |
@@ -63,10 +63,10 @@ EasyRAG 是一个面向真实业务场景的企业知识库智能问答平台：
 ```
 EasyRAG/
 ├── app/                          # Agent 内核（与业务后端解耦的纯逻辑层）
-│   ├── agents/                   #   多智能体编排
-│   │   ├── orchestrator.py       #     任务拆解 → Worker 派发 → 结果汇总
-│   │   ├── blackboard.py         #     共享黑板（跨 worker 状态）
-│   │   └── workers/              #     base.py + rag/code/legal 三个专家 Worker
+│   ├── agents/                   #   多智能体层（DeepAgents 统一实现）
+│   │   ├── events.py             #     统一事件流（请求级 trace + emit + 事件汇聚）
+│   │   ├── progress.py           #     进度投影器（SSE 进度摘要）
+│   │   └── deep/                 #     主 Agent / task、spawn_tasks 委派 / 结构化黑板 / 子智能体名册
 │   ├── graph/                    #   LangGraph 工作流
 │   │   ├── state.py              #     AgentState 定义
 │   │   ├── nodes.py              #     各节点实现（意图/规划/检索/工具/生成/校验/兜底）
@@ -146,14 +146,21 @@ any error --> fallback_handler --> END
 - **校验重试**：`answer_validation` 检查回答质量，不合格最多重生成 1 次
 - **兜底**：任何节点异常 → `fallback_handler`，不把错误裸抛给用户
 
-### 5.2 多智能体编排（app/agents）
+### 5.2 多智能体（app/agents/deep，DeepAgents 统一实现）
 
-借鉴 subagent-driven-development 的"任务简报（brief）"思想：
+2026-08-26 起，多智能体统一到 LangGraph 原生 DeepAgents（原 Orchestrator-Worker
+已退役删除）：
 
-- **Orchestrator**：LLM 把用户查询拆解为结构化 `TaskBrief`，按 `worker_hint` 路由到专家 Worker，用线程池并行执行，汇总各 `WorkerReport` 生成最终回答
-- **Workers**：`rag_worker`（知识库问答）、`code_worker`（代码）、`legal_worker`（法律），继承 `BaseWorker`
-- **Blackboard**：每次 run 创建的黑板对象，跨 Worker 共享上下文
-- 前端"状态栏/任务面板"展示 run 的任务进度（done/total）与状态
+- **主 Agent**（`deep/agent.py`）：`create_react_agent` + checkpointer 会话记忆，
+  自行决定何时委派；`AGENT_MODE=multi` 作为 `deepagents` 的兼容别名保留
+- **委派工具**：`task`（单任务委派，含熔断与降级）、`spawn_tasks`（DAG 并行委派，
+  `depends_on` 拓扑分层 + 线程池）、`revise_plan`（运行中动态重规划）
+- **子智能体**（`deep/subagents.py`）：内置 research-agent / coding-agent，支持
+  外部 JSON/YAML 配置与动态工具绑定（`*` / `except:` / `@tag`）
+- **结构化黑板**（`deep/blackboard.py`）：任务产出物 `{key, producer, summary, data,
+  tags, version}` 两级共享 + 依赖订阅注入；区别于旧版 500 字摘要黑板（已删）
+- **统一事件流**（`agents/events.py`）：请求级 trace + span + 事件汇聚，跨层串联、
+  可回放；委派执行落库（Run/Task/AgentRun）并桥接为前端既有任务面板协议
 
 ### 5.3 RAG 管线（app/rag）
 
@@ -202,7 +209,7 @@ any error --> fallback_handler --> END
 
 1. **意图识别分流**：先分类再干活，避免无差别检索（`route_after_intent`）
 2. **ReAct 子图**：复杂任务走推理-工具循环，普通任务走直通管道，兼顾质量与延迟
-3. **多智能体并行**：任务拆解后 Worker 线程池并行执行，黑板上下文共享
+3. **多智能体统一**：DeepAgents 主 Agent 自主委派（task / spawn_tasks DAG 并行 + 黑板共享），取代旧 Orchestrator-Worker 手工拆解派发
 4. **SSE 流式**：`/chat/stream` 边生成边推送，前端逐 token 渲染
 5. **异步索引**：202 + 阶段进度轮询（10%→30%→80%→100%），大文件可关弹窗后台继续
 6. **Skill 执行层强制**：工具白名单在后端校验，指令注入系统上下文，自定义 Skill 无需改代码/重启
@@ -270,7 +277,7 @@ any error --> fallback_handler --> END
 | 模块 | 能力 |
 |------|------|
 | **智能对话** | SSE 流式逐 token 渲染 · 意图识别自动分流（闲聊/计算/联网搜索/知识库问答）· 引用来源可点击跳转 · 多模型切换 + 自定义模型 |
-| **多智能体** | 任务拆解 → 专家 Worker 并行执行 → 汇总；侧边任务状态栏展示进度 |
+| **多智能体** | DeepAgents 主 Agent 自主委派（task / spawn_tasks DAG）→ 子智能体并行执行 → 汇总；侧边任务面板展示进度与产出 |
 | **知识库管理** | 多知识库隔离 · txt/md/pdf/docx/图片上传 · 扫描件 OCR · 本地/MinerU 双解析 · 文件预览 · 两阶段上传进度条 |
 | **检索增强** | Milvus 向量检索 · 多策略分块 · BM25 混合 + 重排 · 知识图谱实体关系抽取与查询注入 |
 | **Agent 工具** | web_search（Tavily）· calculator · datetime · text_tool · MCP 外部工具 |

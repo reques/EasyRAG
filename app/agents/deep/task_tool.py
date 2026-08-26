@@ -10,7 +10,8 @@ SubAgent。设计参考 DeepAgents SubAgentMiddleware / Yuxi subagent_task：
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+import time
+from typing import Any, Dict, Optional, Tuple
 
 from app.agents.deep.subagents import (
     get_subagent_config,
@@ -21,6 +22,61 @@ from app.agents.deep.subagents import (
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+# ── S5 委派熔断（2026-08-26，阶段 1）────────────────────────────────────
+# 按 (session_id, subagent_type) 记录连续失败：达到阈值后拒绝再委派该子智能体
+# （返回提示让主 Agent 自行处理，避免死循环式反复委派）；成功即清零；条目带
+# TTL，长期无活动自动过期，避免旧故障永久封禁。session_id 取自请求级 trace
+# （无 trace 上下文时退化为进程级单键——测试/脚本场景）。
+TASK_FAIL_LIMIT = 3
+TASK_BREAKER_TTL_S = 600.0
+_task_failures: Dict[Tuple[str, str], Dict[str, float]] = {}
+
+
+def reset_task_breaker() -> None:
+    """清空熔断状态（测试用）。"""
+    _task_failures.clear()
+
+
+def _breaker_session() -> str:
+    from app.agents.events import get_trace
+
+    trace = get_trace()
+    return trace.session_id if trace else ""
+
+
+def _breaker_check(subagent_type: str) -> Optional[str]:
+    """熔断检查：连续失败达到阈值时返回给主 Agent 的提示文本，否则 None。"""
+    now = time.time()
+    key = (_breaker_session(), subagent_type)
+    entry = _task_failures.get(key)
+    if not entry:
+        return None
+    if now - entry["last_ts"] > TASK_BREAKER_TTL_S:
+        _task_failures.pop(key, None)
+        return None
+    if entry["fails"] >= TASK_FAIL_LIMIT:
+        return (
+            f"子智能体 '{subagent_type}' 近期已连续失败 {entry['fails']} 次，"
+            "委派已被熔断；请基于已有信息自行完成任务，或换用其他子智能体。"
+        )
+    return None
+
+
+def _breaker_record(subagent_type: str, ok: bool) -> None:
+    """记录一次委派结果：成功清零，失败累加（窗口外重计）。"""
+    key = (_breaker_session(), subagent_type)
+    now = time.time()
+    if ok:
+        _task_failures.pop(key, None)
+        return
+    entry = _task_failures.get(key)
+    if entry and now - entry["last_ts"] <= TASK_BREAKER_TTL_S:
+        entry["fails"] += 1
+    else:
+        entry = {"fails": 1}
+    entry["last_ts"] = now
+    _task_failures[key] = entry
 
 TASK_SYSTEM_PROMPT = """## `task`（子智能体委派工具）
 
@@ -65,26 +121,53 @@ def build_task_tool(model=None, recursion_limit: Optional[int] = None) -> Any:
             raise ValueError(
                 f"未知子智能体类型 '{subagent_type}'，可用: {available}"
             )
+        # S5 熔断：连续失败的子智能体直接拒绝委派
+        tripped = _breaker_check(subagent_type)
+        if tripped:
+            logger.warning(
+                "[deepagents] task -> subagent=%s circuit OPEN, rejecting",
+                subagent_type,
+            )
+            return tripped
         logger.info(
             "[deepagents] task -> subagent=%s description=%r",
             subagent_type, description[:100],
         )
+        # 统一事件流：委派事件携带 trace（无 trace 上下文时 no-op）
+        from app.agents.events import emit, use_span
+        from app.observability.tracing import trace_span
+
+        emit("delegation", "task_start", f"委派 {subagent_type}", description[:200],
+             task_key=subagent_type, subagent_type=subagent_type)
         try:
             # S3 步骤透传：主 Agent 的 SSE 回调（use_task_observers 设置）
             # → 子 Agent 观察者（run_subagent 的 stream 循环读取）
             from app.agents.deep.observe import get_task_observers, use_subagent_observers
 
-            on_step, on_artifact = get_task_observers() or (None, None)
-            if on_step is None and on_artifact is None:
-                return run_subagent(
-                    cfg, description, model=model, recursion_limit=recursion_limit
-                )
-            with use_subagent_observers(on_step, on_artifact):
-                return run_subagent(
-                    cfg, description, model=model, recursion_limit=recursion_limit
-                )
+            # use_span：子 Agent 层事件以 subagent/<name> 标识（同 trace）
+            # trace_span：阶段 5 遥测（OTel 未安装时 no-op）
+            with use_span(f"subagent/{subagent_type}"), trace_span(
+                f"subagent.{subagent_type}", subagent=subagent_type
+            ):
+                on_step, on_artifact = get_task_observers() or (None, None)
+                if on_step is None and on_artifact is None:
+                    result = run_subagent(
+                        cfg, description, model=model, recursion_limit=recursion_limit
+                    )
+                else:
+                    with use_subagent_observers(on_step, on_artifact):
+                        result = run_subagent(
+                            cfg, description, model=model, recursion_limit=recursion_limit
+                        )
+            _breaker_record(subagent_type, True)
+            emit("delegation", "task_end", f"{subagent_type} 完成", str(result)[:200],
+                 task_key=subagent_type, subagent_type=subagent_type)
+            return result
         except Exception as e:
+            _breaker_record(subagent_type, False)
             logger.warning("[deepagents] task -> subagent=%s failed: %s", subagent_type, e)
+            emit("delegation", "task_error", f"{subagent_type} 失败", str(e)[:200],
+                 task_key=subagent_type, subagent_type=subagent_type)
             return f"子智能体执行失败: {e}"
 
     return StructuredTool.from_function(

@@ -76,7 +76,7 @@ class Run(Base):
 
 
 class Task(Base):
-    """A durable task produced by the orchestrator decomposition step."""
+    """A durable task produced by agent delegation（DeepAgents spawn_tasks/task）。"""
 
     __tablename__ = "run_tasks"
     __table_args__ = (

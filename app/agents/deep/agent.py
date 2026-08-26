@@ -3,6 +3,8 @@
 主 Agent = langgraph ``create_react_agent``：
 - 项目全量工具（ToolRegistry → StructuredTool，含技能白名单）
 - ``task`` 委派工具（→ 配置化 SubAgent）
+- ``spawn_tasks`` 批量委派工具（阶段 3：DAG 依赖 + 分层并发）
+- ``revise_plan`` 计划修订工具（阶段 4：追加/取消/细化重发）
 - system prompt 注入：任务工具说明 + 可用子智能体名册
 
 架构对照 DeepAgents ``create_deep_agent``（底层同为 create_react_agent +
@@ -27,11 +29,18 @@ MAIN_SYSTEM_PROMPT = """你是一名智能助理，运行在 EasyRAG 企业知�
 1. 直接回答用户问题（知识库检索结果会作为上下文提供）。
 2. 调用可用工具获取实时信息（搜索/计算等）。
 3. 把复杂、独立的子任务通过 `task` 工具委派给子智能体，并在其结果基础上继续推理。
+4. 复杂多域任务：先规划拆解，用 `spawn_tasks` 一次声明多个子任务及其依赖，
+   调度器会按依赖层级并发执行并把上游产出注入下游任务。
 
 {subagents_section}
 
 工作原则：
 - 简单问题直接回答；需要外部信息时先调工具；任务复杂且可独立时用 `task` 委派。
+- 多个相互关联的子任务（有先后依赖、需并行）时用 `spawn_tasks` 表达依赖；
+  单一子任务用 `task`。简单委派不要过度拆解。
+- 复杂任务按 Plan-and-Execute：先高层规划 → 执行（`spawn_tasks`）→ 根据返回的
+  状态/遗留关注/建议后续用 `revise_plan` 修订（追加、取消未完成的、细化重发）
+  → 信息充分后收敛给出最终回答；不要无止境地追加任务。
 - 委派后基于子智能体返回的结果继续推理，给出最终完整回答。
 - 回答使用中文，引用来源时注明。
 """
@@ -56,9 +65,12 @@ def build_main_agent(
     from langgraph.prebuilt import create_react_agent
 
     from app.agents.deep.llm import get_langchain_model
+    from app.agents.deep.planner import build_revise_plan_tool, build_spawn_tasks_tool
 
     global _main_agent_cache
-    if model is None and _main_agent_cache is not None:
+    cacheable = model is None  # 修复（2026-08-26 阶段 3）：model 随后会被重赋值，
+    # 旧版 `if model is None:` 存入分支恒不成立——主 Agent 缓存从不生效
+    if cacheable and _main_agent_cache is not None:
         return _main_agent_cache
     if model is None:
         model = get_langchain_model()
@@ -66,15 +78,20 @@ def build_main_agent(
         recursion_limit = get_settings().DEEP_SUBAGENT_RECURSION_LIMIT
     tools = registry_to_langchain_tools()  # 全量（技能白名单生效）
     tools.append(build_task_tool(model=subagent_model or model, recursion_limit=recursion_limit))
+    tools.append(build_spawn_tasks_tool(model=subagent_model or model))
+    tools.append(build_revise_plan_tool(model=subagent_model or model))
     prompt = MAIN_SYSTEM_PROMPT.format(subagents_section=task_system_prompt())
-    logger.info("[deepagents] main agent built: %d tools (incl. task)", len(tools))
+    logger.info(
+        "[deepagents] main agent built: %d tools (incl. task, spawn_tasks, revise_plan)",
+        len(tools),
+    )
     agent = create_react_agent(
         model=model,
         tools=tools,
         prompt=prompt,
         name="easyrag_deep_agent",
     )
-    if model is None:
+    if cacheable:
         _main_agent_cache = agent
     return agent
 
@@ -90,4 +107,6 @@ def get_agent_tool_names() -> List[str]:
 
     names = [t.name for t in registry_to_langchain_tools()]
     names.append("task")
+    names.append("spawn_tasks")
+    names.append("revise_plan")
     return names

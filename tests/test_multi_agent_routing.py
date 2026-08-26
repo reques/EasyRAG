@@ -100,3 +100,67 @@ def test_any_two_domains_trigger():
     a = AgentService._DOMAIN_KEYWORDS["金融/财经"][0]
     b = AgentService._DOMAIN_KEYWORDS["医疗/健康"][0]
     assert _multi(f"帮我同时处理{a}和{b}的问题")
+
+
+# ── 阶段 3：multi / auto 命中改指 deepagents（Orchestrator 冻结）───────
+def test_multi_mode_routes_to_deepagents(monkeypatch):
+    """AGENT_MODE=multi → 转发 _run_deep（不再进 orchestrator）。"""
+    from types import SimpleNamespace
+    import app.services.agent_service as svc_mod
+
+    calls = {}
+
+    def _fake_run_deep(self, query, **kwargs):
+        calls["deep"] = (query, kwargs)
+        return {"final_answer": "deep", "is_fallback": False}
+
+    monkeypatch.setattr(svc_mod, "cfg", SimpleNamespace(AGENT_MODE="multi"))
+    monkeypatch.setattr(AgentService, "_run_deep", _fake_run_deep)
+    svc = object.__new__(AgentService)
+    result = svc.run("帮我同时处理股票和药品的问题", session_id="s1")
+    assert result["final_answer"] == "deep"
+    assert calls["deep"][0] == "帮我同时处理股票和药品的问题"
+
+
+def test_auto_complex_query_routes_to_deepagents(monkeypatch):
+    """auto + 跨领域命中 → _run_deep；单领域仍走单 Agent 路径。"""
+    from types import SimpleNamespace
+    import app.services.agent_service as svc_mod
+
+    deep_called = {"n": 0}
+
+    def _fake_run_deep(self, query, **kwargs):
+        deep_called["n"] += 1
+        return {"final_answer": "deep", "is_fallback": False}
+
+    monkeypatch.setattr(svc_mod, "cfg", SimpleNamespace(AGENT_MODE="auto"))
+    monkeypatch.setattr(AgentService, "_run_deep", _fake_run_deep)
+    svc = object.__new__(AgentService)
+    svc._sessions = None
+    # 跨领域（股票 + 药）→ 命中规则 → deepagents
+    svc.run("分析一下股票，再查一下这个药的用法", session_id="s2")
+    assert deep_called["n"] == 1
+
+
+def test_auto_simple_query_stays_single(monkeypatch):
+    """auto + 简单查询 → 不走 deep，进单 Agent 路径。"""
+    from types import SimpleNamespace
+    import app.services.agent_service as svc_mod
+
+    deep_called = {"n": 0}
+
+    def _fake_run_deep(self, query, **kwargs):
+        deep_called["n"] += 1
+        return {"final_answer": "deep"}
+
+    monkeypatch.setattr(svc_mod, "cfg", SimpleNamespace(AGENT_MODE="auto"))
+    monkeypatch.setattr(AgentService, "_run_deep", _fake_run_deep)
+    monkeypatch.setattr(svc_mod, "get_graph", lambda: None)
+    svc = object.__new__(AgentService)
+    from app.services.agent_service import SessionStore
+    svc._sessions = SessionStore()
+    try:
+        svc.run("今天天气怎么样", session_id="s3", history=[])
+    except Exception:
+        pass  # 单 Agent 路径会碰 graph（已 mock 为 None）——只需确认没进 deep
+    assert deep_called["n"] == 0

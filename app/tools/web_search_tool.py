@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
@@ -91,6 +91,7 @@ def web_search(
     max_results: Optional[int] = None,
     search_depth: Optional[str] = None,
     include_answer: Optional[bool] = None,
+    progress_callback: Optional[Callable[..., Any]] = None,
 ) -> str:
     """Search the web via Tavily and return formatted results.
 
@@ -99,6 +100,7 @@ def web_search(
         max_results:    Number of results to return (default 5, max 10).
         search_depth:   "basic" (fast) or "advanced" (deeper, slower).
         include_answer: Whether to include Tavily's short summary answer.
+        progress_callback: 阶段 5 可选进度上报（由 registry.invoke 注入）。
 
     Returns:
         A formatted string with the summary answer (if any) and the top
@@ -128,6 +130,8 @@ def web_search(
     }
 
     logger.info("web_search: query=%r max_results=%d depth=%s", query, max_results, search_depth)
+    if progress_callback:
+        progress_callback("联网搜索：请求 Tavily API…", percent=30)
 
     try:
         resp = requests.post(_TAVILY_API_URL, json=payload, timeout=_DEFAULT_TIMEOUT)
@@ -144,6 +148,8 @@ def web_search(
     except ValueError as exc:
         raise ToolExecutionError(f"Failed to parse Tavily response: {exc}") from exc
 
+    if progress_callback:
+        progress_callback("联网搜索：整理结果…", percent=90)
     return _format_results(data, max_results)
 
 
@@ -159,10 +165,21 @@ def _check() -> bool:
 TOOL = ToolDefinition(
     name="web_search",
     description="Search the web for current/real-time information: news, weather, recent events, prices, or anything not in the knowledge base. Returns titles, URLs and content snippets.",
-    fn=lambda query, max_results=None, **_: web_search(query=query, max_results=max_results),
+    fn=lambda query, max_results=None, progress_callback=None, **_: web_search(
+        query=query, max_results=max_results, progress_callback=progress_callback,
+    ),
     arg_schema={
         "query": ("string", "The search query, e.g. 'latest AI news today'", True),
         "max_results": ("number", "Max results to return (1-10, default 5)", False),
     },
     check_fn=_check,
+    # 网络工具：瞬时失败（抖动/限流）重试一次，指数退避（2026-08-26 阶段 1）。
+    # 超时不重试（重试只会翻倍等待）。
+    timeout_s=45,
+    max_retries=1,
+    # 阶段 2：工具发现元数据（适用场景关键词 + 能力标签）
+    metadata={
+        "scenarios": ["联网搜索", "网络搜索", "上网查", "新闻", "天气", "实时", "最新", "近期", "行情", "价格"],
+        "tags": ["search", "web", "internet"],
+    },
 )
