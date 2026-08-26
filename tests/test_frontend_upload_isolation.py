@@ -5,7 +5,7 @@ def test_upload_polling_cannot_replace_another_knowledge_base_file_list():
     source = (
         Path(__file__).parents[1] / "frontend/src/views/KnowledgeView.vue"
     ).read_text(encoding="utf-8")
-    polling = source.split("async function pollIndexing", 1)[1]
+    polling = source.split("function pollIndexing", 1)[1]
     polling = polling.split("async function openPreview", 1)[0]
 
     assert "String(activeKb.value?.id || '') === String(kbId)" in polling

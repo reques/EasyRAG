@@ -86,7 +86,7 @@ async def _extract_graph_rule_based(
     """
     total_entities = 0
     total_relations = 0
-    seen_entities: set = set()   # (name, type)
+    seen_entities: set = set()   # (name, type, source_file)
     seen_relations: set = set()  # (source, relation, target)
 
     total = len(chunks)
@@ -120,7 +120,7 @@ async def _extract_graph_rule_based(
         ).strip()
         article_desc = (f"{title}；{body[:150]}" if title else body[:150]).strip()[:1024]
 
-        ent_key = (article_name, "article")
+        ent_key = (article_name, "article", source_name)
         if ent_key not in seen_entities:
             seen_entities.add(ent_key)
             session.add(KnowledgeEntity(
@@ -129,18 +129,20 @@ async def _extract_graph_rule_based(
                 entity_type="article",
                 description=article_desc,
                 source_chunks=chunk_ref,
+                source_file=source_name,
             ))
             graph_cache.upsert_entity(
                 name=article_name,
                 entity_type="article",
                 description=article_desc,
                 kb_id=str(kb_id),
+                source_file=source_name,
             )
             total_entities += 1
 
         # 章节实体 + 归属关系
         if section:
-            sec_key = (section, "chapter")
+            sec_key = (section, "chapter", source_name)
             if sec_key not in seen_entities:
                 seen_entities.add(sec_key)
                 session.add(KnowledgeEntity(
@@ -149,12 +151,14 @@ async def _extract_graph_rule_based(
                     entity_type="chapter",
                     description="",
                     source_chunks=chunk_ref,
+                    source_file=source_name,
                 ))
                 graph_cache.upsert_entity(
                     name=section,
                     entity_type="chapter",
                     description="",
                     kb_id=str(kb_id),
+                    source_file=source_name,
                 )
                 total_entities += 1
 
@@ -167,6 +171,7 @@ async def _extract_graph_rule_based(
                     target_entity=section,
                     relation_type="属于",
                     description="",
+                    source_file=source_name,
                 ))
                 graph_cache.add_relation(
                     source=article_name,
@@ -174,6 +179,7 @@ async def _extract_graph_rule_based(
                     relation_type="属于",
                     description="",
                     kb_id=str(kb_id),
+                    source_file=source_name,
                 )
                 total_relations += 1
 
@@ -191,6 +197,7 @@ async def _extract_graph_rule_based(
                     target_entity=ref,
                     relation_type="引用",
                     description="",
+                    source_file=source_name,
                 ))
                 graph_cache.add_relation(
                     source=article_name,
@@ -198,6 +205,7 @@ async def _extract_graph_rule_based(
                     relation_type="引用",
                     description="",
                     kb_id=str(kb_id),
+                    source_file=source_name,
                 )
                 total_relations += 1
 
@@ -347,7 +355,7 @@ async def _extract_graph_generic(
 
         # 实体入库
         for name, etype, desc in entities[:6]:
-            ent_key = (name, etype)
+            ent_key = (name, etype, source_name)
             if ent_key in seen_entities:
                 continue
             seen_entities.add(ent_key)
@@ -357,12 +365,14 @@ async def _extract_graph_generic(
                 entity_type=etype,
                 description=desc,
                 source_chunks=chunk_ref,
+                source_file=source_name,
             ))
             graph_cache.upsert_entity(
                 name=name,
                 entity_type=etype,
                 description=desc,
                 kb_id=str(kb_id),
+                source_file=source_name,
             )
             total_entities += 1
 
@@ -381,6 +391,7 @@ async def _extract_graph_generic(
                     target_entity=tgt,
                     relation_type="相关",
                     description="",
+                    source_file=source_name,
                 ))
                 graph_cache.add_relation(
                     source=src,
@@ -388,6 +399,7 @@ async def _extract_graph_generic(
                     relation_type="相关",
                     description="",
                     kb_id=str(kb_id),
+                    source_file=source_name,
                 )
                 total_relations += 1
 
@@ -493,7 +505,7 @@ async def _extract_graph_llm(
     # 串行入库（AsyncSession 非并发安全）
     total_entities = 0
     total_relations = 0
-    seen_entities: set = set()   # name 跨 chunk 去重（同名实体合并为一个节点）
+    seen_entities: set = set()   # (name, source_file) 跨 chunk 去重（同文件内同名合并为一个节点）
     seen_relations: set = set()  # (source, relation, target) 跨 chunk 去重
     for i, text, meta in valid:
         raw = extracted.get(i) or {}
@@ -506,21 +518,23 @@ async def _extract_graph_llm(
             if not name:
                 continue
             ent_type = (e.get("type") or "concept")[:64]
-            if name in seen_entities:
+            if (name, source_name) in seen_entities:
                 continue
-            seen_entities.add(name)
+            seen_entities.add((name, source_name))
             session.add(KnowledgeEntity(
                 knowledge_base_id=kb_id,
                 name=name,
                 entity_type=ent_type,
                 description=(e.get("description") or "")[:1024],
                 source_chunks=chunk_ref,
+                source_file=source_name,
             ))
             graph_cache.upsert_entity(
                 name=name,
                 entity_type=(e.get("type") or "concept"),
                 description=(e.get("description") or ""),
                 kb_id=str(kb_id),
+                source_file=source_name,
             )
             total_entities += 1
 
@@ -540,6 +554,7 @@ async def _extract_graph_llm(
                 target_entity=tgt,
                 relation_type=rel[:128],
                 description=(r.get("description") or "")[:1024],
+                source_file=source_name,
             ))
             graph_cache.add_relation(
                 source=src,
@@ -547,6 +562,7 @@ async def _extract_graph_llm(
                 relation_type=rel,
                 description=(r.get("description") or ""),
                 kb_id=str(kb_id),
+                source_file=source_name,
             )
             total_relations += 1
 

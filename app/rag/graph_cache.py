@@ -3,6 +3,10 @@
 Graph extraction writes to this cache during ingestion. Retrieval is always
 scoped to an explicit set of authorised knowledge-base ids; an empty scope
 returns no data.
+
+Entity identity = (knowledge_base_id, source_file, name) — 同名实体在不同
+文件（source_file）中各自独立成节点，避免跨文档同名污染（如两个文件的
+「第六章」不再错误合并）。source_file 为 None 时按 name 匹配（老数据兜底）。
 """
 
 from __future__ import annotations
@@ -15,7 +19,12 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-EntityKey = Tuple[str, str]  # (knowledge_base_id, entity_name)
+# (knowledge_base_id, source_file, entity_name) — source_file 可为 None（老数据）
+EntityKey = Tuple[str, Optional[str], str]
+
+
+def _ek(kb_id: str, source_file: Optional[str], name: str) -> EntityKey:
+    return (kb_id, source_file or "", name)
 
 
 class GraphCache:
@@ -33,11 +42,12 @@ class GraphCache:
         entity_type: str = "concept",
         description: str = "",
         kb_id: str = "",
+        source_file: Optional[str] = None,
     ) -> None:
         if not kb_id:
             logger.warning("[graph_cache] ignored entity without knowledge_base_id")
             return
-        key = (kb_id, name)
+        key = _ek(kb_id, source_file, name)
         with self._lock:
             existing = self._entities.get(key)
             if existing:
@@ -53,6 +63,7 @@ class GraphCache:
                 "type": entity_type[:64],
                 "description": description[:1024],
                 "kb_id": kb_id,
+                "source_file": source_file,
             }
 
     def add_relation(
@@ -62,6 +73,7 @@ class GraphCache:
         relation_type: str,
         description: str = "",
         kb_id: str = "",
+        source_file: Optional[str] = None,
     ) -> None:
         if not kb_id:
             logger.warning("[graph_cache] ignored relation without knowledge_base_id")
@@ -74,10 +86,11 @@ class GraphCache:
                 "relation": relation_type[:128],
                 "description": description[:1024],
                 "kb_id": kb_id,
+                "source_file": source_file,
             }
             self._relations.append(rel)
-            self._entity_relations[(kb_id, source)].append(idx)
-            self._entity_relations[(kb_id, target)].append(idx)
+            self._entity_relations[_ek(kb_id, source_file, source)].append(idx)
+            self._entity_relations[_ek(kb_id, source_file, target)].append(idx)
 
     def match_entities(
         self,
@@ -91,7 +104,7 @@ class GraphCache:
         with self._lock:
             name_hits: List[Dict[str, Any]] = []
             desc_hits: List[Dict[str, Any]] = []
-            for (kb_id, name), info in self._entities.items():
+            for (kb_id, _sf, name), info in self._entities.items():
                 if kb_id not in allowed_ids:
                     continue
                 desc = info.get("description", "") or ""
@@ -107,14 +120,29 @@ class GraphCache:
         entity_name: str,
         max_relations: int = 6,
         knowledge_base_ids: Optional[Sequence[str]] = None,
+        source_file: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        """查询实体的邻居关系。
+
+        source_file 给定 → 只查该文件内的同名实体（命名空间隔离）；
+        source_file 为 None → 按 name 查所有文件（兼容老数据/聚合场景）。
+        """
         allowed_ids = list(knowledge_base_ids or [])
         if not allowed_ids:
             return []
         with self._lock:
             indices: List[int] = []
             for kb_id in allowed_ids:
-                indices.extend(self._entity_relations.get((kb_id, entity_name), []))
+                if source_file is not None:
+                    indices.extend(
+                        self._entity_relations.get(_ek(kb_id, source_file, entity_name), [])
+                    )
+                else:
+                    # 老数据兜底：source_file 为 None 时匹配所有该 (kb_id, name) 的键
+                    for sf_key in (None, ""):
+                        indices.extend(
+                            self._entity_relations.get((kb_id, sf_key, entity_name), [])
+                        )
             return [dict(self._relations[i]) for i in indices[:max_relations]]
 
     def get_relations_by_predicate(
@@ -131,26 +159,30 @@ class GraphCache:
             chains = []
             for kb_id in allowed_ids:
                 for start in entity_names[:5]:
-                    for idx in self._entity_relations.get((kb_id, start), []):
-                        rel = self._relations[idx]
-                        if rel["source"] != start:
-                            continue
-                        pred_match = any(
-                            p in rel["relation"] or rel["relation"] in p
-                            for p in predicates
-                        )
-                        step1 = dict(rel)
-                        if pred_match or len(chains) < 5:
-                            chains.append({"steps": [step1], "kb_id": kb_id})
-                        if len(chains) < max_chains:
-                            target_key = (kb_id, rel["target"])
-                            for idx2 in self._entity_relations.get(target_key, [])[:3]:
-                                rel2 = self._relations[idx2]
-                                if rel2["source"] == rel["target"]:
-                                    chains.append({
-                                        "steps": [step1, dict(rel2)],
-                                        "kb_id": kb_id,
-                                    })
+                    for sf_key in (None, ""):
+                        for idx in self._entity_relations.get((kb_id, sf_key, start), []):
+                            rel = self._relations[idx]
+                            if rel["source"] != start:
+                                continue
+                            pred_match = any(
+                                p in rel["relation"] or rel["relation"] in p
+                                for p in predicates
+                            )
+                            step1 = dict(rel)
+                            if pred_match or len(chains) < 5:
+                                chains.append({"steps": [step1], "kb_id": kb_id})
+                            if len(chains) < max_chains:
+                                for idx2 in self._entity_relations.get(
+                                    (kb_id, sf_key, rel["target"]), []
+                                )[:3]:
+                                    rel2 = self._relations[idx2]
+                                    if rel2["source"] == rel["target"]:
+                                        chains.append({
+                                            "steps": [step1, dict(rel2)],
+                                            "kb_id": kb_id,
+                                        })
+                            if len(chains) >= max_chains:
+                                break
                     if len(chains) >= max_chains:
                         break
                 if len(chains) >= max_chains:
@@ -176,8 +208,8 @@ class GraphCache:
             self._relations = [r for _, r in keep]
             rebuilt = defaultdict(list)
             for new_idx, (_, rel) in enumerate(keep):
-                rebuilt[(rel["kb_id"], rel["source"])].append(new_idx)
-                rebuilt[(rel["kb_id"], rel["target"])].append(new_idx)
+                rebuilt[_ek(rel["kb_id"], rel.get("source_file"), rel["source"])].append(new_idx)
+                rebuilt[_ek(rel["kb_id"], rel.get("source_file"), rel["target"])].append(new_idx)
             self._entity_relations = rebuilt
 
     @property

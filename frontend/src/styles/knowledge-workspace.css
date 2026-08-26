@@ -558,12 +558,29 @@
 .kbw-path-tag { padding: 2px 7px; border-radius: 6px; background: #f0f2f5; color: #62676d; font-size: 9px; font-weight: 620; }
 .kbw-block-doc > p { max-height: 220px; margin: 0; overflow: auto; color: #50545a; font-size: 11px; line-height: 1.75; white-space: normal; word-break: break-word; }
 
-.kbw-graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 14px; }
+.kbw-graph-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr) 260px; gap: 14px; }
 .kbw-graph-canvas { min-height: 520px; }
+/* 按文件筛选面板（2026-08-25）：左侧勾选控制图中展示哪些文件的实体与关系 */
+.kbw-graph-filter { display: flex; flex-direction: column; max-height: 520px; overflow-y: auto; align-self: start; }
+.kbw-filter-toggle { border: 1px solid #e2e5e9; background: #fafbfc; color: #5a5e64; font-size: 9px; line-height: 1.4; padding: 2px 8px; border-radius: 6px; cursor: pointer; transition: border-color .15s, color .15s, background .15s; white-space: nowrap; }
+.kbw-filter-toggle:hover { border-color: #4348ff; color: #4348ff; background: #f5f6ff; }
+.kbw-filter-item { display: flex; align-items: center; gap: 7px; margin: 2px 14px; padding: 4px 6px; border-radius: 6px; cursor: pointer; color: #4a4e54; font-size: 10px; }
+.kbw-filter-item:hover { background: #f0f2f5; }
+.kbw-filter-item input { margin: 0; accent-color: #4348ff; flex: 0 0 auto; }
+.kbw-filter-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kbw-filter-empty { margin: 10px 17px; color: #9aa0a6; font-size: 10px; }
 .kbw-graph-stage { height: 520px; min-height: 520px; position: relative; background-color: #fcfcfc; background-image: radial-gradient(#dfe1e4 1px, transparent 1px); background-size: 18px 18px; }
 .kbw-graph-legend { margin: 8px 17px; display: flex; flex-wrap: wrap; gap: 8px 12px; }
 .kbw-legend-item { display: inline-flex; align-items: center; gap: 5px; color: #5c6066; font-size: 10px; }
 .kbw-legend-item i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+/* 来源文件图例（2026-08-25）：文件色描边 = 实体所属文件，同名不同文件一眼区分 */
+.kbw-file-legend { margin: 0 17px 8px; padding-top: 6px; border-top: 1px dashed #e6e8ec; display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.kbw-file-legend-title { width: 100%; color: #9aa0a6; font-size: 9px; font-weight: 680; letter-spacing: 0.5px; }
+/* 详情栏来源文件行 */
+.kbw-node-source { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: #5c6066; font-size: 10px; }
+.kbw-node-source i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+/* 邻居列表里的来源文件色点 */
+.kbw-neighbor-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
 .kbw-node-detail { margin: 10px 17px 17px; padding: 12px; border: 1px solid #e6e8ec; border-radius: 9px; background: #fafbfc; }
 .kbw-node-detail strong { display: block; margin-bottom: 4px; color: #2c2e31; font-size: 12px; word-break: break-word; }
 .kbw-node-type { font-size: 9px; font-weight: 680; }
@@ -689,11 +706,15 @@
 .kbw-parser-option > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .kbw-parser-option strong { overflow: hidden; color: #303236; font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .kbw-parser-option small { color: #858990; font-size: 8px; line-height: 1.35; }
+.kbw-selected-files { width: 100%; display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow-y: auto; }
 .kbw-selected-file { width: 100%; display: flex; align-items: center; gap: 10px; }
-.kbw-selected-file > svg { width: 38px; height: 38px; padding: 10px; border-radius: 9px; background: #eceeef; color: #55595f; }
-.kbw-selected-file > span { min-width: 0; display: flex; flex-direction: column; }
+.kbw-selected-file > svg { width: 38px; height: 38px; padding: 10px; border-radius: 9px; background: #eceeef; color: #55595f; flex: 0 0 auto; }
+.kbw-selected-file-text { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
 .kbw-selected-file strong { overflow: hidden; color: #303236; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .kbw-selected-file small { color: #8f9399; font-size: 10px; }
+.kbw-file-remove { flex: 0 0 auto; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent; color: #9aa0a6; border-radius: 50%; cursor: pointer; padding: 0; }
+.kbw-file-remove:hover { background: #fdecec; color: #e45b5b; }
+.kbw-selected-count { display: block; margin-top: 2px; color: #9aa0a6; font-size: 10px; font-style: normal; }
 .kbw-danger-modal .kbw-modal-heading > div > span { background: #eceeef; color: #26282b; }
 
 .kbw-preview-modal { width: min(980px, 94vw); height: min(760px, 88vh); padding: 0; overflow: hidden; }

@@ -475,6 +475,7 @@ class EntityResponse(BaseModel):
     entity_type: str
     description: Optional[str]
     source_chunks: Optional[str]
+    source_file: Optional[str] = None  # 所属文件（命名空间维度，2026-08-25）
 
 
 class RelationResponse(BaseModel):
@@ -484,6 +485,7 @@ class RelationResponse(BaseModel):
     relation_type: str
     description: Optional[str]
     weight: float
+    source_file: Optional[str] = None  # 关系所属文件（两端同文件）
 
 
 class GraphResponse(BaseModel):
@@ -532,13 +534,15 @@ async def get_kb_graph(
         if semantic_only:
             entities = [e for e in entities if e.entity_type not in _STRUCTURAL_ENTITY_TYPES]
 
-        # 按 name 去重（同名实体合并为一个节点，避免前端图 name 冲突）
-        seen_names: set = set()
+        # 按 (name, source_file) 去重（2026-08-25：实体身份 = kb_id + 文件 + 名称，
+        # 同名不同文件各自独立成节点，不再合并；仅清理真正的重复行）
+        seen_keys: set = set()
         deduped = []
         for e in entities:
-            if e.name in seen_names:
+            key = (e.name, e.source_file)
+            if key in seen_keys:
                 continue
-            seen_names.add(e.name)
+            seen_keys.add(key)
             deduped.append(e)
         entities = deduped
 
@@ -567,10 +571,12 @@ async def get_kb_graph(
             entities=[EntityResponse(
                 id=str(e.id), name=e.name, entity_type=e.entity_type,
                 description=e.description, source_chunks=e.source_chunks,
+                source_file=e.source_file,
             ) for e in selected],
             relations=[RelationResponse(
                 id=str(r.id), source_entity=r.source_entity, target_entity=r.target_entity,
                 relation_type=r.relation_type, description=r.description, weight=r.weight,
+                source_file=r.source_file,
             ) for r in filtered_relations],
         )
 
@@ -583,10 +589,12 @@ class GraphNeighborItem(BaseModel):
     direction: str                     # "out" = 当前实体 → 邻居；"in" = 邻居 → 当前实体
     relation_description: Optional[str] = None
     weight: float = 1.0
+    source_file: Optional[str] = None  # 邻居实体所属文件（命名空间维度）
 
 
 class GraphNeighborsResponse(BaseModel):
     entity: str
+    source_file: Optional[str] = None
     total: int
     neighbors: list[GraphNeighborItem]
 
@@ -595,6 +603,7 @@ class GraphNeighborsResponse(BaseModel):
 async def get_kb_graph_neighbors(
     kb_id: str,
     entity: str = Query(..., min_length=1, max_length=256),
+    source_file: Optional[str] = Query(default=None, max_length=512),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
 ):
@@ -603,36 +612,57 @@ async def get_kb_graph_neighbors(
     点击图谱节点时前端调用此接口，在右侧栏罗列「与它有关系的实体 + 对应关系」。
     direction: out = 当前实体 → 邻居；in = 邻居 → 当前实体。
     同一邻居的多条同类型关系去重（保留 weight 最高的）。
+
+    source_file 给定 → 只查该文件内的同名实体（命名空间隔离，同名不同文件
+    各自独立）；缺省 → 按 name 查所有文件（老数据/未指定来源时兜底）。
     """
-    from sqlalchemy import or_, select
+    from sqlalchemy import and_, or_, select
     from backend.storage.postgres.models_knowledge import KnowledgeEntity, KnowledgeRelation
 
     kb = await _require_owned_kb(kb_id, current_user)
+
+    # 关系匹配条件：按名称（+ 可选来源文件）精确匹配
+    def _rel_side(col):
+        if source_file is not None:
+            return and_(col == entity, KnowledgeRelation.source_file == source_file)
+        return col == entity
 
     async with get_session() as session:
         rels = (await session.execute(
             select(KnowledgeRelation).where(
                 KnowledgeRelation.knowledge_base_id == kb.id,
                 or_(
-                    KnowledgeRelation.source_entity == entity,
-                    KnowledgeRelation.target_entity == entity,
+                    _rel_side(KnowledgeRelation.source_entity),
+                    _rel_side(KnowledgeRelation.target_entity),
                 ),
             )
         )).scalars().all()
 
-        neighbor_names = {
-            r.target_entity if r.source_entity == entity else r.source_entity
-            for r in rels
-        }
+        # 邻居实体（name + source_file 双维度）
+        neighbor_keys = set()
+        for r in rels:
+            if r.source_entity == entity and (source_file is None or r.source_file == source_file):
+                neighbor_keys.add((r.target_entity, r.source_file))
+            elif r.target_entity == entity and (source_file is None or r.source_file == source_file):
+                neighbor_keys.add((r.source_entity, r.source_file))
+            else:
+                # 未给 source_file 时，对端也按同名任意文件匹配（兼容老数据）
+                if source_file is None:
+                    neighbor_keys.add(
+                        (r.target_entity, r.source_file)
+                        if r.source_entity == entity
+                        else (r.source_entity, r.source_file)
+                    )
+
         ent_rows: dict = {}
-        if neighbor_names:
+        if neighbor_keys:
             ents = (await session.execute(
                 select(KnowledgeEntity).where(
                     KnowledgeEntity.knowledge_base_id == kb.id,
-                    KnowledgeEntity.name.in_(neighbor_names),
+                    KnowledgeEntity.name.in_({k[0] for k in neighbor_keys}),
                 )
             )).scalars().all()
-            ent_rows = {e.name: e for e in ents}
+            ent_rows = {(e.name, e.source_file): e for e in ents}
 
         items: list[GraphNeighborItem] = []
         seen: set = set()
@@ -641,11 +671,15 @@ async def get_kb_graph_neighbors(
                 nb_name, direction = r.target_entity, "out"
             else:
                 nb_name, direction = r.source_entity, "in"
-            key = (nb_name, r.relation_type, direction)
+            # 当前关系是否属于目标命名空间（source_file 未给时全部算）
+            if source_file is not None and r.source_file != source_file:
+                continue
+            nb_sf = r.source_file
+            key = (nb_name, nb_sf, r.relation_type, direction)
             if key in seen:
                 continue
             seen.add(key)
-            ent = ent_rows.get(nb_name)
+            ent = ent_rows.get((nb_name, nb_sf)) or ent_rows.get((nb_name, None))
             items.append(GraphNeighborItem(
                 name=nb_name,
                 entity_type=ent.entity_type if ent else "unknown",
@@ -654,11 +688,13 @@ async def get_kb_graph_neighbors(
                 direction=direction,
                 relation_description=r.description,
                 weight=r.weight or 1.0,
+                source_file=nb_sf,
             ))
 
         items.sort(key=lambda x: (-x.weight, x.relation_type, x.name))
         return GraphNeighborsResponse(
             entity=entity,
+            source_file=source_file,
             total=len(items),
             neighbors=items[:limit],
         )
@@ -1469,41 +1505,35 @@ async def _clear_file_index(
     except Exception as exc:
         logger.error("[knowledge/reindex] vector delete failed: %s", exc)
 
-    # 2. 图谱实体/关系（实体按 source_chunks 前缀匹配，关系按实体名清理）
+    # 2. 图谱实体/关系（2026-08-25 起按 source_file 精确匹配：
+    #    关系表新增 source_file 列，实体/关系都带所属文件，删除不再依赖
+    #    「按实体名反查」——旧逻辑会误删其他文件同名实体的关系）
     try:
-        from sqlalchemy import delete as sa_delete, or_, select
+        from sqlalchemy import delete as sa_delete
         from backend.storage.postgres.models_knowledge import (
             KnowledgeEntity,
             KnowledgeRelation,
         )
 
-        entity_names = (
+        entity_count = (
             await session.execute(
-                select(KnowledgeEntity.name).where(
+                sa_delete(KnowledgeEntity).where(
                     KnowledgeEntity.knowledge_base_id == kb_id,
-                    KnowledgeEntity.source_chunks.like(f"{filename}#%"),
+                    KnowledgeEntity.source_file == filename,
                 )
             )
-        ).scalars().all()
-
-        if entity_names:
+        ).rowcount
+        relation_count = (
             await session.execute(
                 sa_delete(KnowledgeRelation).where(
                     KnowledgeRelation.knowledge_base_id == kb_id,
-                    or_(
-                        KnowledgeRelation.source_entity.in_(entity_names),
-                        KnowledgeRelation.target_entity.in_(entity_names),
-                    ),
+                    KnowledgeRelation.source_file == filename,
                 )
             )
-        await session.execute(
-            sa_delete(KnowledgeEntity).where(
-                KnowledgeEntity.knowledge_base_id == kb_id,
-                KnowledgeEntity.source_chunks.like(f"{filename}#%"),
-            )
-        )
+        ).rowcount
         logger.info(
-            "[knowledge/reindex] cleared graph for '%s' (%d entities)", filename, len(entity_names)
+            "[knowledge/reindex] cleared graph for '%s' (%d entities, %d relations)",
+            filename, entity_count, relation_count,
         )
     except Exception as exc:
         logger.warning("[knowledge/reindex] graph cleanup failed: %s", exc)
