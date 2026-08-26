@@ -216,6 +216,13 @@ class MCPServerHandle:
             arg_schema: Dict[str, Any] = {}
             props = getattr(t, "inputSchema", {}) or {}
             for arg_name, meta in (props.get("properties") or {}).items():
+                # 跳过下划线开头的参数（不符合 Pydantic/JSON Schema 规范）
+                if arg_name.startswith("_"):
+                    logger.debug(
+                        "[mcp:%s] skip parameter %r in tool %r (leading underscore)",
+                        cfg.name, arg_name, t.name
+                    )
+                    continue
                 arg_schema[arg_name] = (
                     str(meta.get("type", "string")),
                     str(meta.get("description", "")),

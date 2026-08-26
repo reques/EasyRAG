@@ -914,7 +914,8 @@ async def send_message_stream(
                         "skills": skill_payload,
                     }
                     await add_message(
-                        session, conv_id, "assistant", answer, metadata_json=meta
+                        session, conv_id, "assistant", answer,
+                        metadata_json=json.dumps(meta, ensure_ascii=False)
                     )
                     await session.commit()
             except Exception as exc:
