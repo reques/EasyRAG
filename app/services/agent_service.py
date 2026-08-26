@@ -83,7 +83,10 @@ class AgentService:
 
     @staticmethod
     def _should_use_multi(query: str, history: Optional[List[Dict[str, str]]] = None) -> bool:
-        """auto 模式下按查询特征判断是否走 Orchestrator-Worker 多智能体。
+        """auto 模式下按查询特征判断是否走多智能体路径。
+
+        2026-08-26（阶段 3）：命中后路由到 DeepAgents（主 Agent + SubAgent +
+        spawn_tasks DAG），Orchestrator-Worker 已退役。规则本身不变：
 
         规则（轻量，不调用 LLM）：
         1. 查询命中 ≥2 个**不同领域**的关键词 → multi
@@ -91,8 +94,6 @@ class AgentService:
            任意跨领域组合都命中，不再围绕单一领域列举 pair）
         2. 查询长度 > 80 字符且含「然后」「再」「并且」「同时」等连词 → multi
         3. 其余 → single（快速路径）
-        即便规则触发，LLM 拆解器仍可判定单一意图并退化为单 Agent（degenerate），
-        所以规则 1 宁可放宽（误触发会被拆解器打回），不可漏掉真跨领域。
         """
         q = query.lower()
         hit_domains = {
@@ -134,28 +135,34 @@ class AgentService:
                 knowledge_catalog=knowledge_catalog,
             )
 
-        # ── 多智能体分支（AGENT_MODE=multi 或 auto 智能判断）────────────────
-        if cfg.AGENT_MODE == "multi" or (
-            cfg.AGENT_MODE == "auto" and self._should_use_multi(query, history)
-        ):
-            try:
-                from app.agents.orchestrator import get_orchestrator
-
-                orchestrator = get_orchestrator()
-                result = orchestrator.run(
-                    query,
-                    history=history,
-                    knowledge_base_ids=knowledge_base_ids,
-                    knowledge_catalog=knowledge_catalog,
-                )
-                # 拆解器判定单一意图 → 回退单 Agent 快速路径
-                if not result.get("degenerate_to_single"):
-                    result["session_id"] = session_id
-                    return result
-                logger.info("[agent_service] orchestrator degenerated to single, fast path")
-            except Exception as exc:
-                logger.error("[agent_service] multi-agent failed, fallback single: %s", exc)
-                # 崩溃回退 single，可用性永不回退
+        # ── 多智能体分支：multi / auto 命中均路由到 DeepAgents（统一实现）──
+        # AGENT_MODE=multi 作为 deepagents 的兼容别名保留（2026-08-26 阶段 5，
+        # Orchestrator-Worker 已退役删除）。
+        if cfg.AGENT_MODE == "multi":
+            logger.warning(
+                "[agent_service] AGENT_MODE=multi 已废弃（deepagents 别名），"
+                "建议改用 AGENT_MODE=deepagents"
+            )
+            return self._run_deep(
+                query,
+                session_id=session_id,
+                history=history,
+                user_id=user_id,
+                knowledge_base_ids=knowledge_base_ids,
+                knowledge_catalog=knowledge_catalog,
+            )
+        if cfg.AGENT_MODE == "auto" and self._should_use_multi(query, history):
+            logger.info(
+                "[agent_service] auto 判定复杂任务，路由至 deepagents（主 Agent 自行拆解/委派）"
+            )
+            return self._run_deep(
+                query,
+                session_id=session_id,
+                history=history,
+                user_id=user_id,
+                knowledge_base_ids=knowledge_base_ids,
+                knowledge_catalog=knowledge_catalog,
+            )
 
         # ── 单 Agent 路径（默认，行为不变）─────────────────────────────────
         # 优先使用传入的 DB 历史，否则回退到内存 SessionStore
@@ -208,17 +215,53 @@ class AgentService:
         on_step=None,
         on_artifact=None,
     ) -> Dict[str, Any]:
+        """DeepAgents 入口：建立请求级 trace（统一事件流，2026-08-26 阶段 1）。
+
+        作用域内所有结构化事件（步骤/工具调用/委派）进入同一事件流，随响应
+        返回 ``trace_id`` + ``events``（内存级执行轨迹，供诊断/前端消费；
+        持久化在后续阶段接入）。SSE 步骤透传行为不变（见 _run_deep_inner）。
+        """
+        from app.agents.events import use_request_trace
+
+        with use_request_trace(session_id=session_id) as request_trace:
+            result = self._run_deep_inner(
+                query,
+                session_id=session_id,
+                history=history,
+                user_id=user_id,
+                knowledge_base_ids=knowledge_base_ids,
+                knowledge_catalog=knowledge_catalog,
+                on_step=on_step,
+                on_artifact=on_artifact,
+            )
+            result["trace_id"] = request_trace.trace.trace_id
+            result["events"] = list(request_trace.events)
+            return result
+
+    def _run_deep_inner(
+        self,
+        query: str,
+        session_id: str = "default",
+        history: Optional[List[Dict[str, str]]] = None,
+        user_id=None,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
+        on_step=None,
+        on_artifact=None,
+    ) -> Dict[str, Any]:
         """DeepAgents 风格：主 Agent（create_react_agent + task 工具）→ SubAgent。
 
         同步执行（子 Agent 内联在 task 工具中，无异步任务系统）。
         on_step: 可选回调 fn(step, detail)，供 SSE 流式端点实时透传阶段状态。
         on_artifact: 可选回调 fn(dict)，推送 ReAct 每轮推理思考 / 工具输入输出
           等中间产出（{kind, stage, title, content}），实时透传给前端。
-        返回与单 Agent 兼容的响应结构。
+        返回与单 Agent 兼容的响应结构。（由 _run_deep 包裹统一事件流。）
         """
         from app.agents.deep.agent import get_main_agent
+        from app.agents.events import emit
         from app.services.knowledge_catalog import format_knowledge_catalog
         from app.skills.context import get_active_skill_prompt
+        from langgraph.errors import GraphRecursionError
 
         start = time.perf_counter()
         steps: List[str] = []
@@ -226,6 +269,7 @@ class AgentService:
 
         def _step(step: str, detail: str = ""):
             steps.append(f"{step}: {detail}")
+            emit("step", step, step, detail)
             if on_step:
                 try:
                     on_step(step, detail)
@@ -237,6 +281,7 @@ class AgentService:
                 return
             ev = {"kind": kind, "stage": stage, "title": title[:80], "content": content}
             artifacts.append(ev)
+            emit("artifact", stage, title, content, artifact_kind=kind)
             if on_artifact:
                 try:
                     on_artifact(dict(ev))
@@ -342,6 +387,7 @@ class AgentService:
             agent = get_main_agent()
             tool_called: Optional[str] = None
             final_state: Optional[Dict[str, Any]] = None
+            recursion_hit = False
             try:
                 # stream_mode="values"：每个 chunk 是全量 state，最后一个即最终状态
                 for chunk in agent.stream(
@@ -396,6 +442,13 @@ class AgentService:
                     elif mtype == "ai" and getattr(last, "content", ""):
                         # 无 tool_calls 的 AI 消息 = 最终回答（循环末尾），不是中间思考
                         _step("generate", "主 Agent 生成回答中...")
+            except GraphRecursionError:
+                # S4 超限降级（2026-08-26，阶段 1）：基于已积累的 messages 强制收尾，
+                # 对齐单 Agent 图的 "max iterations, forced answer"——不再直接返回错误。
+                # final_state 保留了最后一个成功 chunk（部分执行状态）。
+                recursion_hit = True
+                steps.append("deep agent hit recursion limit, forced answer from partial state")
+                _step("fallback", "已达推理步数上限，基于已有信息收尾")
             except Exception as exc:
                 logger.error("[run_deep] deep agent error: %s", exc)
                 steps.append(f"deep agent error: {exc}")
@@ -417,21 +470,41 @@ class AgentService:
                     "artifacts": artifacts,
                     "sources": sources,
                     "is_fallback": True,
+                    "degraded": False,
                     "error_message": str(exc),
                     "elapsed_seconds": round(time.perf_counter() - start, 3),
                 }
 
         msgs = (final_state or {}).get("messages") or []
         answer = ""
+        answer_is_final_ai = False
         for m in reversed(msgs):
             content = getattr(m, "content", "") or ""
             if getattr(m, "type", "") == "ai" and content:
                 answer = content if isinstance(content, str) else str(content)
+                answer_is_final_ai = True
                 break
         if not answer and msgs:
             answer = str(getattr(msgs[-1], "content", "") or "")
 
-        _step("generate_done", f"回答完成（{len(answer)} 字符）")
+        if recursion_hit:
+            # S4：部分状态里通常没有最终 AI 消息——用已收集的工具结果拼接
+            # forced answer（与单 Agent 图 agent_reasoning 的收尾一致）。
+            tool_texts = [
+                str(getattr(m, "content", "") or "")
+                for m in msgs
+                if getattr(m, "type", "") == "tool"
+            ]
+            observations = "\n".join(t for t in tool_texts if t.strip())
+            if not answer_is_final_ai:
+                if observations:
+                    answer = f"基于已有信息：\n{observations[:600]}"
+                else:
+                    # 无 AI 回答也无工具产出：answer 只是残留的原始消息文本，不可用
+                    answer = "（已达推理步数上限，未能收集到足够信息；请尝试简化问题后重新提问。）"
+            _step("generate_done", "超限收尾完成（降级回答）")
+        else:
+            _step("generate_done", f"回答完成（{len(answer)} 字符）")
         return {
             "query": query,
             "session_id": session_id,
@@ -449,6 +522,7 @@ class AgentService:
             "artifacts": artifacts,
             "sources": sources,
             "is_fallback": False,
+            "degraded": recursion_hit,
             "elapsed_seconds": round(time.perf_counter() - start, 3),
         }
 

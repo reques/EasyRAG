@@ -1286,3 +1286,62 @@ HTTP 冒烟 `GET /evaluation/runs` 200、`POST/GET /evaluation/datasets` 正常�
 - `modlens doctor`：openai ok，故障切换链 `openai -> claude-cli`，guard 放行
 - 真实读图 `frontend/smoke-chat.png`：OCR/布局/语义完整（Edge「未找到文件」错误页），model=qwen3.7-plus，30.9s
 **注意：** skill 列表在会话启动时加载，当前会话看不到 modlens skill；新会话即可直接粘贴图片/拖入文件路径触发。
+
+#### 2026-08-26 — DeepAgents 统一多智能体改造（阶段 1-5，Orchestrator-Worker 退役）
+
+**背景：** 原 Orchestrator-Worker 多智能体（LLM 拆解 → Worker 派发 → 汇总）存在
+固定编排、单例并行竞态、工具白名单静态化等问题；评审后决策统一到 LangGraph 原生
+DeepAgents：**由主 Agent（create_react_agent）根据工具描述自主决定拆解/委派/汇总**，
+拆解器不再作为独立流程存在。分五个阶段实施（容错可观测 → 动态授权 → DAG+黑板 →
+动态规划 → 异步增量与退役）。
+
+**阶段 1 — 容错与统一事件流：**
+- `app/tools/registry.py`：工具调用超时（可配置）+ 指数退避重试 + 事件钩子，
+  `ToolDefinition` 新增 tags / timeout / max_retries 元数据字段
+- `app/agents/events.py`：统一事件流（请求级 TraceContext + span + emit + sink），
+  `snapshot_request_context()` 快照请求级 ContextVar（聊天模型/KB 授权/Skill），
+  供线程池任务重放（ThreadPoolExecutor 不自动传播 contextvars）
+- `deep/task_tool.py` 熔断：SubAgent 连续失败熔断后续委派，降级返回失败说明
+- `_run_deep` 超限降级：recursion limit 超限时降级为直接生成而非整轮失败
+
+**阶段 2 — 动态工具授权：**
+- SubAgent 配置支持动态工具绑定：`*`（全量）/ `except:`（排除）/ `@tag`（按标签）
+  + 缓存指纹（工具集变化自动失效）
+- 越权调用错误信息附带当前可用工具清单，便于模型自纠
+- kb_search 授权范围从 `use_authorised_kb_ids` ContextVar 读取——工具签名不携带
+  请求上下文通道，模型无法通过工具参数越权（取代旧 TaskBrief 传参隔离）
+
+**阶段 3 — DAG 委派 + 结构化黑板：**
+- `deep/planner.py` `spawn_tasks`：`depends_on` 拓扑分层 + 线程池并行执行，
+  依赖产出摘要自动注入下游任务；请求上下文快照逐任务重放
+- `deep/blackboard.py` 结构化黑板：产出物 `{key, producer, summary, data, tags, version}`
+  摘要/全量两级共享 + 依赖订阅通知
+- 路由收敛：`AGENT_MODE=multi` 变为 `deepagents` 兼容别名（仅告警），
+  `agent_mode` 徽标收敛为 `deepagents | single` 两值；orchestrator 路径冻结
+- `_run_deep` 注入知识库目录（`format_knowledge_catalog` system 消息）
+
+**阶段 4 — 动态规划：**
+- `revise_plan` 委派工具：运行中增/改/取消任务（结构化尾部输出）
+- `run_subagent` 结构化尾部：SubAgent 结果摘要标准化供主 Agent 整合
+
+**阶段 5 — 可观测/持久化/前端/退役：**
+- `observability/tracing.py`：OTel 可选 span（`tool.invoke.<name>` /
+  `subagent.<type>` / `spawn_tasks`），未装 OTel 时为 no-op；工具进度回调接入事件流
+- `backend/services/delegation_service.py`：统一事件 → Run/Task/AgentRun 三表落库
+  （best-effort，复用既有表）；`bridge_delegation_event` 把统一事件桥接为既有
+  任务面板协议（sub_tasks/status/worker_output/progress_summary），前端零新组件复用；
+  `/chat/send` 的 run_id 完全由 `persist_delegation` 返回值提供（不再预创建 run）
+- chat_router stream 端点删除 404 行 orchestrator 分支（回调/流式汇总/落库），
+  决策块折叠为 `use_deep`；旧 `_synthesize` token 治理由主 Agent 整合与委派结果截断承接；
+  对话历史由 deep agent checkpointer 会话记忆承接（原 TaskBrief.history 语义）
+- **退役删除**：`app/agents/orchestrator.py`、`app/agents/blackboard.py`、
+  `app/agents/workers/`（base/rag/legal/code worker 全部）；
+  `app/agents/__init__.py` 重写为 DeepAgents 层描述
+- 测试迁移：`test_agent_run_persistence` / `test_chat_model_selection` /
+  `test_context_injection` / `test_retrieval_isolation` / `test_knowledge_catalog`
+  中 Orchestrator/Worker 用例迁移为 deep 路径等价物（上下文快照并发模型继承、
+  kb_search ContextVar 隔离、目录注入 system 消息等），30 测试全绿；
+  新增 `scripts/verify_deepagents_unified.py` 静态+可选 live 冒烟 13/13 通过
+- 文档同步：README / `docs/ARCHITECTURE.md` / `docs/ARCHITECTURE_DETAILED.md`
+  （架构图、目录树、5.2/5.4 路由、第 10 节重写、第 18 节端到端时序）；
+  `.env.template` 与 `app/core/config.py` 注明 `multi` 为废弃别名

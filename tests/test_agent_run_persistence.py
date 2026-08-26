@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.agents.orchestrator import Orchestrator
-from app.agents.workers.base import TaskBrief, WorkerReport
 from backend.services.agent_run_service import finalize_run, serialize_run
 from backend.storage.postgres.models_agent_run import AgentRun, Run, Task
 
@@ -100,61 +98,3 @@ def test_serialize_run_exposes_tasks_and_worker_runs_without_owner_id():
 async def test_finalize_run_rejects_non_terminal_status_before_db_access():
     with pytest.raises(ValueError, match="invalid terminal run status"):
         await finalize_run(None, uuid.uuid4(), status="running")
-
-
-def test_orchestrator_exposes_task_and_worker_records_for_sync_persistence():
-    orchestrator = Orchestrator.__new__(Orchestrator)
-    brief = TaskBrief(task_id="task-1", goal="分析项目", worker_hint="rag")
-    report = WorkerReport(
-        task_id="task-1",
-        worker_name="rag",
-        status="done",
-        summary="分析完成",
-    )
-    orchestrator._decompose = lambda _query, _history: ([brief], "parallel", "")
-    orchestrator._dispatch = lambda *_args: [report]
-    orchestrator._synthesize = lambda *_args: "最终答案"
-
-    result = orchestrator.run("分析项目")
-
-    assert result["task_details"] == [{
-        "task_id": "task-1",
-        "goal": "分析项目",
-        "worker_hint": "rag",
-    }]
-    assert result["worker_reports"][0]["status"] == "done"
-    assert result["worker_reports"][0]["summary"] == "分析完成"
-
-
-def test_task_status_events_carry_their_task_identity():
-    class Worker:
-        name = "rag"
-        blackboard = None
-        tool_callback = None
-
-        def run_with_board(self, brief):
-            if self.tool_callback:
-                self.tool_callback("web_search", {"query": brief.goal})
-            return WorkerReport(
-                task_id=brief.task_id,
-                worker_name=self.name,
-                status="done",
-                summary="完成",
-            )
-
-    orchestrator = Orchestrator.__new__(Orchestrator)
-    orchestrator._workers = {"rag": Worker()}
-    orchestrator._default_worker = "rag"
-    orchestrator.blackboard = None
-    events = []
-
-    orchestrator._dispatch_sequential(
-        [TaskBrief(task_id="task-7", goal="核验数据", worker_hint="rag")],
-        [],
-        status_cb=lambda step, detail, task_id="": events.append(
-            (step, detail, task_id)
-        ),
-    )
-
-    assert any(step == "task_started" and task_id == "task-7" for step, _, task_id in events)
-    assert any(step == "tool_call" and task_id == "task-7" for step, _, task_id in events)

@@ -123,4 +123,9 @@ TOOL = ToolDefinition(
         "expression": ("string", "Math expression to evaluate, e.g. '(12+34)*2'", True),
     },
     check_fn=_check,
+    # 阶段 2：工具发现元数据（适用场景关键词 + 能力标签）
+    metadata={
+        "scenarios": ["计算", "算一下", "算术", "加减乘除", "求和", "math", "calculate"],
+        "tags": ["math", "calculator"],
+    },
 )

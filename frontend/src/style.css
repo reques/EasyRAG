@@ -837,6 +837,8 @@ body.task-panel-resizing {
   margin-top: 2px;
 }
 .task-error-mark { color: #e05d5d; font-size: 12px; font-weight: 700; }
+.task-skip-mark { color: var(--gray-400, #9ca3af); font-size: 12px; }
+.agent-card.task-skipped { opacity: 0.7; }
 .task-pending-dot {
   width: 8px;
   height: 8px;

@@ -534,30 +534,9 @@ async def send_message(
                 logger.warning("[chat/send] OCR 失败，降级为无图：%s", _ocr_exc)
                 effective_query = f"{req.query}\n\n[图片识别服务不可用，已忽略图片内容]"
 
-    from app.services.agent_service import AgentService
-
-    use_multi = cfg.AGENT_MODE == "multi" or (
-        cfg.AGENT_MODE == "auto"
-        and AgentService._should_use_multi(effective_query, db_history)
-    )
-    multi_run_id: Optional[uuid.UUID] = None
-    if use_multi:
-        from backend.services.agent_run_service import create_run
-
-        async with get_session() as session:
-            run = await create_run(
-                session,
-                conversation_id=conv_id,
-                user_id=current_user.id,
-                source_message_id=user_message_id,
-                goal=effective_query,
-                model_id=selected_model.id,
-            )
-            await session.commit()
-            multi_run_id = run.id
-
     # =====================================================================
-    # 调用 LangGraph Agent，传入 DB 中的对话历史
+    # 调用 LangGraph Agent，传入 DB 中的对话历史。
+    # AGENT_MODE=multi 作为 deepagents 的兼容别名，由 AgentService 内部路由。
     # =====================================================================
     result: dict[str, Any] = {}
     try:
@@ -581,60 +560,23 @@ async def send_message(
         logger.error("[chat/send] agent error: %s", exc)
         answer = f"处理请求时发生错误: {exc}"
 
-    if multi_run_id:
-        from backend.services.agent_run_service import (
-            create_tasks as persist_tasks,
-            finalize_run,
-            finish_task,
-            start_pending_tasks,
-        )
+    # 委派持久化（best-effort，复用 Run/Task/AgentRun 表）；无委派事件时自动跳过。
+    delegation_run_id = ""
+    if result.get("events"):
+        from backend.services.delegation_service import persist_delegation
 
         try:
-            async with get_session() as session:
-                task_details = result.get("task_details", [])
-                if result.get("intent") == "multi_agent" and task_details:
-                    await persist_tasks(
-                        session, multi_run_id, task_details, selected_model.id
-                    )
-                    await start_pending_tasks(session, multi_run_id)
-                    worker_reports = result.get("worker_reports", [])
-                    for report in worker_reports:
-                        await finish_task(
-                            session,
-                            multi_run_id,
-                            report.get("task_id", ""),
-                            worker_status=report.get("status", "error"),
-                            output_summary=report.get("summary", ""),
-                            error_summary=report.get("error", ""),
-                        )
-                    all_failed = bool(worker_reports) and not any(
-                        report.get("status") in {"done", "done_with_concerns"}
-                        for report in worker_reports
-                    )
-                    await finalize_run(
-                        session,
-                        multi_run_id,
-                        status="failed" if all_failed else "completed",
-                        execution_mode=result.get("execution_mode", ""),
-                        error_summary="所有子任务执行失败" if all_failed else "",
-                    )
-                elif result:
-                    await finalize_run(
-                        session,
-                        multi_run_id,
-                        status="completed",
-                        execution_mode="degenerate",
-                    )
-                else:
-                    await finalize_run(
-                        session,
-                        multi_run_id,
-                        status="failed",
-                        error_summary="多智能体执行未返回结果",
-                    )
-                await session.commit()
+            delegation_run_id = await persist_delegation(
+                get_session,
+                conversation_id=conv_id,
+                user_id=current_user.id,
+                events=result.get("events"),
+                goal=effective_query,
+                model_id=selected_model.id,
+                source_message_id=user_message_id,
+            ) or ""
         except Exception as exc:
-            logger.warning("[chat/send] run %s persist failed: %s", multi_run_id, exc)
+            logger.warning("[chat/send] delegation persist failed: %s", exc)
 
     # 兜底：Agent 返回空答案时，用 LLM 直接生成（跳过检索）
     if not answer.strip():
@@ -687,7 +629,7 @@ async def send_message(
     async with get_session() as session:
         meta = json.dumps({
             "intent": result.get("intent", ""),
-            "run_id": str(multi_run_id) if multi_run_id else "",
+            "run_id": delegation_run_id,
             "steps": result.get("steps", []),
             "sources": result.get("sources", []),
             "model_id": selected_model.id,
@@ -700,7 +642,7 @@ async def send_message(
     return ChatResponse(
         conversation_id=str(conv_id),
         answer=answer,
-        run_id=str(multi_run_id) if multi_run_id else "",
+        run_id=delegation_run_id,
         model_id=selected_model.id,
         model_name=selected_model.name,
         intent=result.get("intent", ""),
@@ -771,7 +713,7 @@ async def send_message_stream(
             session, current_user.id
         )
 
-    # ── 图片裁决（multi / deep / single 共用）────────────────────────────────────
+    # ── 图片裁决（deep / single 共用）──────────────────────────────────────────
     # OCR 回退只做一次：所选模型不支持多模态时，把图片转成文字拼进查询；
     # 多模态模型则保留 image_for_context 直读，query 不变。
     effective_query = req.query
@@ -792,38 +734,22 @@ async def send_message_stream(
                 logger.warning("[chat/stream] OCR 失败，降级为无图：%s", _ocr_exc)
                 effective_query = f"{req.query}\n\n[图片识别服务不可用，已忽略图片内容]"
 
-    # Decide and persist the multi-agent run before opening the stream so the
-    # first event can expose a durable run_id to the client.
     from app.services.agent_service import AgentService
 
-    # 深度研究开关（按请求选择）→ 强制 DeepAgents；全局 AGENT_MODE=deepagents 同样启用
-    use_deep = cfg.AGENT_MODE == "deepagents" or bool(req.deep_research)
-    # deep 优先：选了深度研究就不再走多智能体编排（避免创建多余的 multi run）
-    use_multi = (not use_deep) and (
-        cfg.AGENT_MODE == "multi"
+    # 深度研究开关（按请求选择）→ 强制 DeepAgents；全局 AGENT_MODE=deepagents 同样启用。
+    # AGENT_MODE=multi 作为 deepagents 的兼容别名；auto 仍按请求判断是否多智能体——
+    # 均路由到 DeepAgents（2026-08-26 阶段 5，Orchestrator 已退役）。
+    use_deep = (
+        cfg.AGENT_MODE == "deepagents"
+        or cfg.AGENT_MODE == "multi"
+        or bool(req.deep_research)
         or (
             cfg.AGENT_MODE == "auto"
             and AgentService._should_use_multi(effective_query, db_history)
         )
     )
-    # 本轮实际执行的 Agent 路径（前端徽标/诊断用）：
-    # deepagents（主 Agent + SubAgent）| multi（多智能体编排）| single（单 Agent）
-    agent_mode = "deepagents" if use_deep else ("multi" if use_multi else "single")
-    multi_run_id: Optional[uuid.UUID] = None
-    if use_multi:
-        from backend.services.agent_run_service import create_run
-
-        async with get_session() as session:
-            run = await create_run(
-                session,
-                conversation_id=conv_id,
-                user_id=current_user.id,
-                source_message_id=user_message_id,
-                goal=effective_query,
-                model_id=selected_model.id,
-            )
-            await session.commit()
-            multi_run_id = run.id
+    # 本轮实际执行的 Agent 路径（前端徽标/诊断用）：deepagents（主 Agent + SubAgent）| single（单 Agent）
+    agent_mode = "deepagents" if use_deep else "single"
 
     async def _event_gen_inner():
         from app.services.agent_service import get_agent_service
@@ -839,7 +765,8 @@ async def send_message_stream(
         yield _sse({
             "type": "conversation_id",
             "conversation_id": str(conv_id),
-            "run_id": str(multi_run_id) if multi_run_id else "",
+            # run_id 在委派持久化完成后才可知，随 done 事件下发
+            "run_id": "",
             "model_id": selected_model.id,
             "model_name": selected_model.name,
             "skills": skill_payload,
@@ -850,6 +777,7 @@ async def send_message_stream(
             # ── DeepAgents 路径：主 Agent + task → SubAgent（同步 + 状态透传）─
             import queue as _q
             from app.agents.progress import ProgressProjector
+            from app.agents.events import use_event_sink
 
             status_queue: "_q.Queue" = _q.Queue()
             deep_progress_summaries: list[dict] = []
@@ -865,8 +793,40 @@ async def send_message_stream(
                 except Exception:
                     pass
 
+            # 统一事件流 → orchestrator 时代 SSE 协议（阶段 5）：委派树/工具时间线
+            # 由前端现有任务面板与 AgentActivity 直接消费，无需新组件。
+            # 映射规则见 delegation_service.bridge_delegation_event（可单测）。
+            from backend.services.delegation_service import bridge_delegation_event
+
+            _panel_sent = {"v": False}
+
+            def _bridge_event(ev: dict) -> None:
+                try:
+                    for payload in bridge_delegation_event(ev):
+                        if payload["type"] == "sub_tasks":
+                            _panel_sent["v"] = True
+                        elif (
+                            payload["type"] == "status"
+                            and payload.get("step") == "task_started"
+                            and not _panel_sent["v"]
+                        ):
+                            # 单任务委派（task 工具）无 spawn_start：自造单任务清单，
+                            # 且必须先于 task_started 下发（前端面板需要先初始化）
+                            _panel_sent["v"] = True
+                            status_queue.put({"type": "sub_tasks", "tasks": [{
+                                "task_id": payload.get("task_id", ""),
+                                "goal": (ev.get("content") or "")[:200],
+                                "worker_hint": ev.get("subagent_type", ""),
+                            }]})
+                        elif payload["type"] == "progress_summary":
+                            payload["created_at"] = time.time()
+                        status_queue.put(payload)
+                except Exception:
+                    pass
+
             def _run_deep_in_thread():
-                with use_chat_model(selected_model), use_skill_context(skill_context):
+                with use_chat_model(selected_model), use_skill_context(skill_context), \
+                        use_event_sink(_bridge_event):
                     return agent._run_deep(
                         req.query,
                         session_id=str(conv_id),
@@ -882,8 +842,8 @@ async def send_message_stream(
                     )
 
             # 注意：此处不能用 `start` 命名 —— _event_gen_inner 内任何赋值都会
-            # 把 start 变成局部变量，遮蔽外层函数的 start（use_multi/单 Agent
-            # 分支的 elapsed 计算依赖它），导致 UnboundLocalError（实测 bug）
+            # 把 start 变成局部变量，遮蔽外层函数的 start（单 Agent 分支的
+            # elapsed 计算依赖它），导致 UnboundLocalError（实测 bug）
             deep_start = time.perf_counter()
             deep_future = loop.run_in_executor(None, _run_deep_in_thread)
             while True:
@@ -895,7 +855,13 @@ async def send_message_stream(
                     if deep_future.done():
                         break
                     continue
-                if isinstance(ev, dict) and ev.get("type") == "progress_summary":
+                if isinstance(ev, dict) and ev.get("type"):
+                    # progress_summary / sub_tasks / status / worker_output（统一事件流桥接）
+                    if ev.get("type") == "progress_summary":
+                        deep_progress_summaries.append({
+                            k: ev.get(k)
+                            for k in ("id", "sequence", "phase", "status", "text", "created_at")
+                        })
                     yield _sse(ev)
             try:
                 deep_result = deep_future.result()
@@ -912,6 +878,23 @@ async def send_message_stream(
                     "is_fallback": True,
                 }
             answer = deep_result.get("final_answer", "") or ""
+            # 阶段 5：委派执行落库（best-effort；无委派事件自动跳过）
+            delegation_run_id = ""
+            if deep_result.get("events"):
+                from backend.services.delegation_service import persist_delegation
+
+                try:
+                    delegation_run_id = await persist_delegation(
+                        get_session,
+                        conversation_id=conv_id,
+                        user_id=current_user.id,
+                        events=deep_result.get("events"),
+                        goal=req.query,
+                        model_id=selected_model.id,
+                        source_message_id=user_message_id,
+                    ) or ""
+                except Exception as exc:
+                    logger.warning("[chat/stream] delegation persist failed: %s", exc)
             # DeepAgents 的详细 steps 可能含模型推理、工具参数和结果片段；
             # 客户端只保存 progress_summaries，不再下发原始执行轨迹。
             step_objs: list[dict] = []
@@ -931,7 +914,8 @@ async def send_message_stream(
                         "skills": skill_payload,
                     }
                     await add_message(
-                        session, conv_id, "assistant", answer, metadata_json=meta
+                        session, conv_id, "assistant", answer,
+                        metadata_json=json.dumps(meta, ensure_ascii=False)
                     )
                     await session.commit()
             except Exception as exc:
@@ -943,6 +927,7 @@ async def send_message_stream(
                 "sources": [],
                 "intent": "deepagents",
                 "agent_mode": agent_mode,
+                "run_id": delegation_run_id,
                 "steps": step_objs,
                 "artifacts": [],
                 "progress_summaries": deep_progress_summaries,
@@ -967,410 +952,6 @@ async def send_message_stream(
 
                 asyncio.get_event_loop().create_task(_gen_title_deep())
             return
-
-        if use_multi:
-            # ── 多智能体路径：Orchestrator + 状态实时透传 ────────────────────
-            try:
-                from app.agents.orchestrator import get_orchestrator
-                from backend.services.agent_run_service import (
-                    create_tasks as persist_tasks,
-                    finalize_run,
-                    finish_task,
-                    start_task,
-                )
-
-                orchestrator = get_orchestrator()
-
-                # 状态实时透传：orchestrator 在 executor 线程跑，通过线程安全队列
-                # 把每一步状态桥接回事件循环, SSE 逐步推给前端 — 复杂任务不再黑盒等待。
-                import queue as _q
-
-                status_queue: "_q.Queue" = _q.Queue()
-                status_list: list[dict] = []  # 完整状态列表，供落库
-                _ORCH_SENTINEL = object()
-                from app.agents.progress import ProgressProjector
-                multi_projector = ProgressProjector()
-                multi_progress: list[dict] = []
-
-                def _on_status(step: str, detail: str, task_id: str = ""):
-                    ev = {"step": step, "detail": detail, "task_id": task_id}
-                    status_list.append(ev)
-                    status_queue.put({"type": "status", **ev})
-                    try:
-                        progress = multi_projector.feed(step, detail)
-                        if progress:
-                            progress["created_at"] = time.time()
-                            multi_progress.append(dict(progress))
-                            status_queue.put({"type": "progress_summary", **progress})
-                    except Exception:
-                        pass
-
-                def _on_tasks(tasks: list):
-                    # 拆解完成 → 推送待办清单，前端渲染侧边任务进度面板
-                    status_queue.put({"type": "sub_tasks", "tasks": tasks})
-
-                # 收集 worker 中间产出，落库时与汇总结果拼接成完整答案
-                worker_outputs: list[dict] = []
-
-                def _on_worker_done(report):
-                    # Worker 完成 → 推送子任务产出（边执行边输出中间结果）
-                    content = report.detail or report.summary or ""
-                    if report.status == "error":
-                        content = f"⚠️ 子任务 {report.task_id} 执行失败：{report.error or '未知错误'}"
-                    if not content.strip():
-                        content = f"（子任务 {report.task_id} 无产出）"
-                    worker_outputs.append({
-                        "task_id": report.task_id,
-                        "worker": report.worker_name,
-                        "content": content,
-                        "summary": report.summary or "",
-                    })
-                    status_queue.put({
-                        "type": "worker_output",
-                        "task_id": report.task_id,
-                        "worker": report.worker_name,
-                        "status": report.status,
-                        "error": report.error or "",
-                        "content": content,
-                        "summary": report.summary or "",
-                    })
-
-                async def _prepare_orchestrator_event(ev: dict) -> dict:
-                    """Persist one lifecycle transition, then expose it to SSE."""
-                    ev_type = ev.get("type", "status")
-                    try:
-                        async with get_session() as session:
-                            if ev_type == "sub_tasks":
-                                await persist_tasks(
-                                    session,
-                                    multi_run_id,
-                                    ev.get("tasks", []),
-                                    selected_model.id,
-                                )
-                            elif ev_type == "worker_output":
-                                await finish_task(
-                                    session,
-                                    multi_run_id,
-                                    ev.get("task_id", ""),
-                                    worker_status=ev.get("status", "error"),
-                                    output_summary=ev.get("content", ""),
-                                    error_summary=ev.get("error", ""),
-                                )
-                            elif ev.get("step") == "task_started":
-                                await start_task(
-                                    session,
-                                    multi_run_id,
-                                    ev.get("task_id", ""),
-                                )
-                            await session.commit()
-                    except Exception as exc:
-                        logger.warning(
-                            "[chat/stream] run %s lifecycle persist failed: %s",
-                            multi_run_id,
-                            exc,
-                        )
-
-                    if ev_type == "worker_output":
-                        return {
-                            "type": "worker_output",
-                            "run_id": str(multi_run_id),
-                            "task_id": ev["task_id"],
-                            "worker": ev["worker"],
-                            "status": ev.get("status", ""),
-                            "content": ev["content"],
-                            "summary": ev.get("summary", ""),
-                        }
-                    if ev_type == "sub_tasks":
-                        return {
-                            "type": "sub_tasks",
-                            "run_id": str(multi_run_id),
-                            "tasks": ev["tasks"],
-                        }
-                    if ev_type == "progress_summary":
-                        return {**ev, "run_id": str(multi_run_id)}
-                    if ev.get("step") == "tool_call":
-                        return {
-                            "type": "tool_call",
-                            "run_id": str(multi_run_id),
-                            "task_id": ev.get("task_id", ""),
-                            "detail": ev.get("detail", ""),
-                        }
-                    return {
-                        "type": "status",
-                        "run_id": str(multi_run_id),
-                        "task_id": ev.get("task_id", ""),
-                        "step": ev["step"],
-                        "detail": ev["detail"],
-                    }
-
-                # 在 executor 里跑 orchestrator（同步 LLM 调用）
-                # return_synthesize_payload=True：synthesize 交给主事件循环流式生成
-                def _run_orch():
-                    try:
-                        with use_chat_model(selected_model), use_skill_context(skill_context):
-                            return orchestrator.run(
-                                effective_query,
-                                history=db_history,
-                                status_callback=_on_status,
-                                worker_done_callback=_on_worker_done,
-                                tasks_callback=_on_tasks,
-                                return_synthesize_payload=True,
-                                knowledge_base_ids=knowledge_base_ids,
-                                knowledge_catalog=knowledge_catalog,
-                            )
-                    finally:
-                        status_queue.put(_ORCH_SENTINEL)
-
-                orch_future = loop.run_in_executor(None, _run_orch)
-
-                # 边等 orchestrator 边 drain 队列, 实时推状态和子任务产出
-                result = None
-                while True:
-                    try:
-                        ev = await loop.run_in_executor(None, status_queue.get, True, 0.1)
-                    except Exception:
-                        ev = None  # queue.Empty 超时 → 检查 future
-                    if ev is _ORCH_SENTINEL:
-                        break
-                    if ev is not None:
-                        yield _sse(await _prepare_orchestrator_event(ev))
-                    if orch_future.done() and status_queue.empty():
-                        break
-                # drain 残留
-                while not status_queue.empty():
-                    ev = status_queue.get_nowait()
-                    if ev is _ORCH_SENTINEL:
-                        continue
-                    yield _sse(await _prepare_orchestrator_event(ev))
-
-                try:
-                    result = orch_future.result()
-                except Exception as exc:
-                    logger.error("[chat/stream] orchestrator future error: %s", exc)
-                    async with get_session() as session:
-                        await finalize_run(
-                            session,
-                            multi_run_id,
-                            status="failed",
-                            error_summary=str(exc),
-                        )
-                        await session.commit()
-                    yield _sse({"type": "status", "step": "fallback", "detail": "多智能体失败，回退单 Agent"})
-                _fb_progress = multi_projector.feed("fallback", "多智能体失败，回退单 Agent")
-                if _fb_progress:
-                    _fb_progress["created_at"] = time.time()
-                    multi_progress.append(dict(_fb_progress))
-                    yield _sse({"type": "progress_summary", **_fb_progress})
-                    result = None
-
-                # 拆解器判定单一意图 → 回退单 Agent 快速路径（走下面的 single 分支）
-                if result and result.get("degenerate_to_single"):
-                    async with get_session() as session:
-                        await finalize_run(
-                            session,
-                            multi_run_id,
-                            status="completed",
-                            execution_mode="degenerate",
-                        )
-                        await session.commit()
-                    yield _sse({"type": "status", "step": "fallback", "detail": "单一意图，走快速路径"})
-                elif result:
-                    # ── 流式汇总：在主事件循环里用 chat_stream 逐 token 整合 ──
-                    payload = result.get("synthesize_payload")
-                    answer = ""  # 汇总部分
-                    if payload:
-                        reports = payload["reports"]
-                        # 多任务：LLM 流式整合；单任务成功：直接用该任务产出（已推过，避免重复）
-                        ok_reports = [r for r in reports if r.ok()]
-                        if len(ok_reports) == 1 and not payload["final_inst"]:
-                            answer = ok_reports[0].detail or ok_reports[0].summary
-                            if answer:
-                                yield _sse({"type": "delta", "content": answer})
-                        elif not ok_reports:
-                            answer = "所有子任务执行失败，无法生成回答。"
-                            yield _sse({"type": "delta", "content": answer})
-                        else:
-                            combined = "\n\n".join(
-                                f"## {r.task_id} ({r.worker_name})\n{r.detail or r.summary}"
-                                for r in ok_reports
-                            )
-                            # ── 压缩子任务产出 ──
-                            # 多任务时 prompt 可能很长，先用 fast model 摘要压缩，
-                            # 减少综合阶段的输入 tokens，给输出留足空间避免截断
-                            prompt_input = combined
-                            if len(ok_reports) > 1:
-                                fast_llm = get_llm_client(tier="fast", profile=selected_model)
-
-                                async def _summarize(report):
-                                    content = report.detail or report.summary or ""
-                                    if len(content) <= 500:
-                                        return f"## {report.task_id} ({report.worker_name})\n{content}"
-                                    try:
-                                        resp = await fast_llm.chat(
-                                            [{"role": "user", "content": (
-                                                "用2-3句话概括以下内容的核心要点，保留关键事实和数据：\n\n"
-                                                f"{content}"
-                                            )}],
-                                            temperature=0.1,
-                                            max_tokens=300,
-                                        )
-                                        summary = resp.strip() or content[:300]
-                                        return f"## {report.task_id} ({report.worker_name})\n{summary}"
-                                    except Exception:
-                                        logger.warning("[chat/stream] fast summary failed for %s", report.task_id)
-                                        return f"## {report.task_id} ({report.worker_name})\n{content[:300]}"
-
-                                summaries = await asyncio.gather(
-                                    *[_summarize(r) for r in ok_reports]
-                                )
-                                prompt_input = "\n\n".join(summaries)
-
-                            from app.graph.nodes import _format_history_for_prompt
-                            prompt = (
-                                f"对话历史（最近，供理解指代与追问）:\n"
-                                f"{_format_history_for_prompt(payload.get('history') or [])}\n\n"
-                                f"用户原始查询：{payload['query']}\n\n"
-                                f"各子任务产出：\n{prompt_input}\n\n"
-                                f"汇总要求：{payload['final_inst'] or '综合各子任务结果，给出完整、连贯的回答。'}"
-                            )
-                            if skill_context.active:
-                                prompt = skill_context.render_prompt() + "\n\n" + prompt
-                            try:
-                                llm = get_llm_client(profile=selected_model)
-                                parts: list[str] = []
-                                async for chunk in llm.chat_stream(
-                                    [{"role": "user", "content": prompt}],
-                                    max_tokens=16384,
-                                ):
-                                    parts.append(chunk)
-                                    yield _sse({"type": "delta", "content": chunk})
-                                answer = "".join(parts).strip()
-                                if not answer:
-                                    # 流式整合空响应 → 回退用 combined 作为答案
-                                    logger.warning("[chat/stream] synthesize stream empty, fallback combined")
-                                    answer = combined
-                                    yield _sse({"type": "delta", "content": combined})
-                            except Exception as exc:
-                                logger.error("[chat/stream] synthesize stream failed: %s", exc)
-                                answer = combined
-                                yield _sse({"type": "delta", "content": combined})
-                    else:
-                        # 无 payload（兼容旧路径，理论上 return_synthesize_payload=True 时不会到这）
-                        answer = result.get("final_answer", "")
-                        if answer:
-                            yield _sse({"type": "delta", "content": answer})
-
-                    # 汇总真正完成后才发收尾状态（orchestrator 内联路径会自己发，
-                    # 流式路径在这里补发，避免"汇总完成"先于汇总内容出现）
-                    _syn_done = {"step": "synthesize_done", "detail": "汇总完成"}
-                    status_list.append(_syn_done)
-                    yield _sse({"type": "status", **_syn_done})
-                    _syn_progress = multi_projector.feed("synthesize_done", _syn_done["detail"])
-                    if _syn_progress:
-                        _syn_progress["created_at"] = time.time()
-                        multi_progress.append(dict(_syn_progress))
-                        yield _sse({"type": "progress_summary", **_syn_progress})
-
-                    # 子任务产出作为独立过程数据保存；聊天正文只持久化最终回答。
-                    full_answer = answer
-
-                    elapsed = round(time.perf_counter() - start, 3)
-
-                    # 落库
-                    try:
-                        async with get_session() as session:
-                            meta = json.dumps({
-                                "intent": result.get("intent", "multi_agent"),
-                                "agent_mode": agent_mode,
-                                "run_id": str(multi_run_id),
-                                "worker_outputs": worker_outputs,
-                                "sources": result.get("sources", []),
-                                # status_list 是 {step, detail} 对象数组，前端可直接渲染；
-                                # result["steps"] 是 orchestrator 内部字符串日志，格式不兼容
-                                "steps": status_list,
-                                "progress_summaries": multi_progress,
-                                "execution_mode": result.get("execution_mode", ""),
-                                "model_id": selected_model.id,
-                                "model_name": selected_model.name,
-                                "skills": skill_payload,
-                            }, ensure_ascii=False)
-                            await add_message(session, conv_id, "assistant", full_answer, metadata_json=meta)
-                            await session.commit()
-                    except Exception as exc:
-                        logger.warning("[chat/stream] multi persist failed: %s", exc)
-
-                    run_status = "completed"
-                    if payload and not any(report.ok() for report in payload["reports"]):
-                        run_status = "failed"
-                    async with get_session() as session:
-                        await finalize_run(
-                            session,
-                            multi_run_id,
-                            status=run_status,
-                            execution_mode=result.get("execution_mode", ""),
-                            error_summary=(
-                                "所有子任务执行失败" if run_status == "failed" else ""
-                            ),
-                        )
-                        await session.commit()
-
-                    yield _sse({
-                        "type": "done",
-                        "run_id": str(multi_run_id),
-                        "sources": result.get("sources", []),
-                        "intent": result.get("intent", "multi_agent"),
-                        "agent_mode": agent_mode,
-                        "steps": status_list,
-                        "progress_summaries": multi_progress,
-                        "elapsed_seconds": elapsed,
-                        "execution_mode": result.get("execution_mode", ""),
-                        "model_id": selected_model.id,
-                        "model_name": selected_model.name,
-                        "skills": skill_payload,
-                    })
-
-                    # 新会话标题后台生成
-                    if is_new and answer:
-                        async def _gen_title_multi():
-                            try:
-                                title = await generate_conversation_title(req.query, answer)
-                                async with get_session() as session:
-                                    c = await get_conversation(session, conv_id)
-                                    if c:
-                                        c.title = title
-                                        await session.commit()
-                            except Exception as exc:
-                                logger.warning("[chat/stream] title gen failed: %s", exc)
-
-                        asyncio.get_event_loop().create_task(_gen_title_multi())
-
-                    return
-            except Exception as exc:
-                logger.error("[chat/stream] multi-agent error, fallback single: %s", exc)
-                try:
-                    from backend.services.agent_run_service import finalize_run
-
-                    async with get_session() as session:
-                        await finalize_run(
-                            session,
-                            multi_run_id,
-                            status="failed",
-                            error_summary=str(exc),
-                        )
-                        await session.commit()
-                except Exception as persist_exc:
-                    logger.warning(
-                        "[chat/stream] failed to finalize run %s: %s",
-                        multi_run_id,
-                        persist_exc,
-                    )
-                yield _sse({"type": "status", "step": "fallback", "detail": "多智能体失败，回退单 Agent"})
-                _fb_progress = multi_projector.feed("fallback", "多智能体失败，回退单 Agent")
-                if _fb_progress:
-                    _fb_progress["created_at"] = time.time()
-                    multi_progress.append(dict(_fb_progress))
-                    yield _sse({"type": "progress_summary", **_fb_progress})
-                # 继续走下面的 single 路径
 
         # ── 单 Agent 路径（带实时思考过程透出）─────────────────────────────────
         # 1. 同步编排(检索/工具)在 executor 线程跑, 通过线程安全队列把每一步的
@@ -1614,8 +1195,7 @@ async def send_message_stream(
             if not completed_normally:
                 # 注意：此处处于任务取消状态（CancelledError 处理中），
                 # 直接 await 会立即再次抛出 CancelledError —— 必须用
-                # asyncio.shield 让清理协程在后台独立完成（与下方
-                # multi_run_id finalize 同款处理）。
+                # asyncio.shield 让清理协程在后台独立完成。
                 async def _cleanup_terminated_turn():
                     try:
                         async with get_session() as session:
@@ -1645,30 +1225,6 @@ async def send_message_stream(
                     await asyncio.shield(cleanup_task)
                 except asyncio.CancelledError:
                     # shield keeps the cleanup coroutine alive on the app loop.
-                    pass
-            if multi_run_id:
-                async def _close_unfinished_run():
-                    from backend.services.agent_run_service import finalize_run_if_active
-
-                    async with get_session() as session:
-                        changed = await finalize_run_if_active(
-                            session,
-                            multi_run_id,
-                            status="failed" if completed_normally else "cancelled",
-                            error_summary=(
-                                "流式响应结束但运行未写入终态"
-                                if completed_normally
-                                else "客户端在运行完成前断开连接"
-                            ),
-                        )
-                        if changed:
-                            await session.commit()
-
-                close_task = asyncio.create_task(_close_unfinished_run())
-                try:
-                    await asyncio.shield(close_task)
-                except asyncio.CancelledError:
-                    # shield keeps the database finalizer alive on the app loop.
                     pass
 
     return StreamingResponse(

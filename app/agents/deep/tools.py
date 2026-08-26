@@ -39,6 +39,10 @@ def _args_model(tool: ToolDefinition) -> type[BaseModel]:
     """根据 ToolDefinition.arg_schema 动态构造 pydantic 参数模型。"""
     fields: Dict[str, Any] = {}
     for arg_name, (type_str, desc, is_required) in (tool.arg_schema or {}).items():
+        # 跳过下划线开头的参数（Pydantic 不允许）
+        if arg_name.startswith("_"):
+            logger.debug("[deepagents] skip arg %r in tool %r (leading underscore)", arg_name, tool.name)
+            continue
         py_type = _TYPE_MAP.get((type_str or "").lower(), str)
         # 必填字段没有默认值；可选字段给 None 默认
         if is_required:
@@ -49,7 +53,8 @@ def _args_model(tool: ToolDefinition) -> type[BaseModel]:
                 Field(default=None, description=desc or arg_name),
             )
     if not fields:
-        fields["_noop"] = (Optional[str], Field(default=None, description="无参数"))
+        # Pydantic 不允许下划线开头的字段名，改用 noop
+        fields["noop"] = (Optional[str], Field(default=None, description="无参数"))
     return create_model(f"{tool.name}Args", **fields)
 
 

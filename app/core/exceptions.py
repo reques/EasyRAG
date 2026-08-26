@@ -83,6 +83,19 @@ class ToolExecutionError(AgentError):
         super().__init__(detail)
 
 
+class ToolTimeoutError(ToolExecutionError):
+    """Tool execution exceeded its timeout_s budget (2026-08-26, 阶段 1).
+
+    独立子类是为了让重试策略能区分“超时”（重试只会翻倍等待，不重试）与
+    “瞬时失败”（如网络抖动，值得重试）。
+    """
+
+    def __init__(self, tool_name: str = "unknown", timeout_s: float = 0):
+        self.tool_name = tool_name
+        self.timeout_s = timeout_s
+        super().__init__(f"Tool '{tool_name}' timed out after {timeout_s}s")
+
+
 # ── Validation ───────────────────────────────────────────────────────────────
 
 class ValidationError(AgentError):
