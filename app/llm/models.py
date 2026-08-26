@@ -26,6 +26,9 @@ class ChatModelProfile:
     requires_api_key: bool = True
     source: str = "builtin"
     provider_type: str = "cloud"
+    # 是否支持多模态（图片）输入。内置模型由我们在下方显式标注；
+    # 自定义模型由用户在"添加模型"表单里勾选。默认 False → 走 OCR 回退。
+    supports_vision: bool = False
 
     @property
     def available(self) -> bool:
@@ -52,6 +55,8 @@ class ChatModelProfile:
             "source": self.source,
             "provider_type": self.provider_type,
             "can_delete": self.source == "custom",
+            # 前端据此决定是否显示"粘贴图片"入口的提示 / 直接禁用图片按钮
+            "supports_vision": self.supports_vision,
         }
 
 
@@ -87,6 +92,7 @@ def list_chat_model_profiles(
             api_key=provider_key(cfg.MINIMAX_API_KEY, cfg.MINIMAX_BASE_URL),
             model=cfg.MINIMAX_MODEL,
             temperature=cfg.MINIMAX_TEMPERATURE,
+            supports_vision=False,
         ),
         ChatModelProfile(
             id="deepseek-v4-flash",
@@ -96,6 +102,7 @@ def list_chat_model_profiles(
             api_key=provider_key(cfg.LLM_API_KEY, cfg.DEEPSEEK_BASE_URL),
             model=cfg.DEEPSEEK_MODEL,
             temperature=cfg.DEEPSEEK_TEMPERATURE,
+            supports_vision=False,
         ),
         ChatModelProfile(
             id="qwen3.6-flash",
@@ -105,6 +112,7 @@ def list_chat_model_profiles(
             api_key=provider_key(cfg.DASHSCOPE_API_KEY, cfg.QWEN_BASE_URL),
             model=cfg.QWEN_MODEL,
             temperature=cfg.QWEN_TEMPERATURE,
+            supports_vision=True,
         ),
         ChatModelProfile(
             id="glm-5.2",
@@ -114,6 +122,7 @@ def list_chat_model_profiles(
             api_key=provider_key(cfg.ZHIPUAI_API_KEY, cfg.GLM_BASE_URL),
             model=cfg.GLM_MODEL,
             temperature=cfg.GLM_TEMPERATURE,
+            supports_vision=True,
         ),
     ]
 

@@ -1,7 +1,7 @@
 <template>
   <section class="progress-journal" :class="{ 'is-running': running, 'is-error': !!error }" aria-live="polite">
     <header class="progress-journal-head">
-      <span class="progress-journal-title"><Activity :size="14" /> 研究进展</span>
+      <span class="progress-journal-title"><Activity :size="14" /> 工作进度</span>
       <span v-if="running" class="progress-journal-state"><i></i> 进行中</span>
       <span v-else-if="error" class="progress-journal-state is-warning"><CircleAlert :size="12" /> 遇到问题</span>
       <span v-else-if="stopped" class="progress-journal-state is-warning"><CircleAlert :size="12" /> 已停止</span>

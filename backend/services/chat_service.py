@@ -79,12 +79,14 @@ async def add_message(
     role: str,
     content: str,
     metadata_json: Optional[str] = None,
+    image: Optional[str] = None,
 ) -> Message:
     repo = MessageRepository(session)
     msg = Message(
         conversation_id=conversation_id,
         role=role,
         content=content,
+        image=image,
         metadata_json=metadata_json,
     )
     await repo.add(msg)
@@ -152,6 +154,7 @@ async def get_conversation_history(
             "id": m.id,
             "role": m.role,
             "content": m.content,
+            "image": getattr(m, "image", None),
             "created_at": m.created_at.isoformat() if m.created_at else "",
         }
         raw = getattr(m, "metadata_json", None)

@@ -75,6 +75,37 @@ async def _migrate_legacy_evaluation_runs(conn) -> None:
     logger.info("[postgres] migrated evaluation_runs.dataset_id")
 
 
+async def _migrate_custom_model_supports_vision(conn) -> None:
+    """Add custom_model_configs.supports_vision to pre-existing databases."""
+    row = await conn.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'custom_model_configs' "
+        "AND column_name = 'supports_vision'"
+    ))
+    if row.scalar():
+        return
+    await conn.execute(text(
+        "ALTER TABLE custom_model_configs "
+        "ADD COLUMN supports_vision BOOLEAN NOT NULL DEFAULT FALSE"
+    ))
+    logger.info("[postgres] migrated custom_model_configs.supports_vision")
+
+
+async def _migrate_messages_image(conn) -> None:
+    """Add messages.image for persisted chat images."""
+    row = await conn.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'messages' "
+        "AND column_name = 'image'"
+    ))
+    if row.scalar():
+        return
+    await conn.execute(text(
+        "ALTER TABLE messages ADD COLUMN image TEXT"
+    ))
+    logger.info("[postgres] migrated messages.image")
+
+
 async def init_db() -> None:
     """创建所有表（开发/测试用；生产应使用 Alembic 迁移）。"""
     from backend.storage.postgres.models_user import User, Department  # noqa: F401
@@ -88,6 +119,8 @@ async def init_db() -> None:
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_legacy_evaluation_runs(conn)
+        await _migrate_custom_model_supports_vision(conn)
+        await _migrate_messages_image(conn)
     logger.info("[postgres] tables created")
 
 

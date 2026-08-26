@@ -60,6 +60,8 @@ class Message(Base):
     )
     role: Mapped[str] = mapped_column(String(16), nullable=False)  # user / assistant / system / tool
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # 用户消息附带的上传图片（data URL）；仅 user 角色使用，未落独立存储
+    image: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # 可选的元数据 JSON（来源引用、工具调用等）
     metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

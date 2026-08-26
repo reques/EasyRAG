@@ -766,9 +766,10 @@ def answer_generation(state):
     tool_error = state.get("tool_error") or ""
     regen_count = state.get("regeneration_count") or 0
     history = state.get("history") or []
+    image_data = state.get("image_data") or None  # 多模态直读：data URL
     logger.info(
-        "[answer_generation] docs=%d tool_result=%s regen=%d history_turns=%d",
-        len(docs), bool(tool_result), regen_count, len(history) // 2,
+        "[answer_generation] docs=%d tool_result=%s regen=%d history_turns=%d image=%s",
+        len(docs), bool(tool_result), regen_count, len(history) // 2, bool(image_data),
     )
     client = get_llm_client()
     effective_tool = tool_result or ("Tool failed: " + tool_error if tool_error else "N/A")
@@ -804,8 +805,17 @@ def answer_generation(state):
                 context = context[:MAX_CONTEXT_CHARS] + "\n\n[... context truncated ...]"
             messages.append({
                 "role": "user",
-                "content": ANSWER_WITH_ENHANCED_CONTEXT.format(
-                    query=query, context=context, tool_result=effective_tool
+                "content": (
+                    [
+                        {"type": "text", "text": ANSWER_WITH_ENHANCED_CONTEXT.format(
+                            query=query, context=context, tool_result=effective_tool
+                        )},
+                        {"type": "image_url", "image_url": {"url": image_data}},
+                    ]
+                    if image_data else
+                    ANSWER_WITH_ENHANCED_CONTEXT.format(
+                        query=query, context=context, tool_result=effective_tool
+                    )
                 ),
             })
         elif docs:
@@ -814,15 +824,33 @@ def answer_generation(state):
             )
             messages.append({
                 "role": "user",
-                "content": ANSWER_WITH_CONTEXT.format(
-                    query=query, context=context, tool_result=effective_tool
+                "content": (
+                    [
+                        {"type": "text", "text": ANSWER_WITH_CONTEXT.format(
+                            query=query, context=context, tool_result=effective_tool
+                        )},
+                        {"type": "image_url", "image_url": {"url": image_data}},
+                    ]
+                    if image_data else
+                    ANSWER_WITH_CONTEXT.format(
+                        query=query, context=context, tool_result=effective_tool
+                    )
                 ),
             })
         else:
             messages.append({
                 "role": "user",
-                "content": ANSWER_NO_CONTEXT.format(
-                    query=query, tool_result=effective_tool
+                "content": (
+                    [
+                        {"type": "text", "text": ANSWER_NO_CONTEXT.format(
+                            query=query, tool_result=effective_tool
+                        )},
+                        {"type": "image_url", "image_url": {"url": image_data}},
+                    ]
+                    if image_data else
+                    ANSWER_NO_CONTEXT.format(
+                        query=query, tool_result=effective_tool
+                    )
                 ),
             })
         draft = client.chat_sync(messages)

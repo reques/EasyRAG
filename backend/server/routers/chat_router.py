@@ -75,6 +75,9 @@ class ChatRequest(BaseModel):
     # 2026-08-21：深度研究开关 — 用户显式选择时强制走 DeepAgents 工作流
     # （主 Agent + SubAgent），不依赖全局 AGENT_MODE 配置
     deep_research: bool = False
+    # 2026-08-25：图片输入。前端粘贴/上传后以 data URL（data:image/...;base64,...）
+    # 形式随对话请求发出。后端据此裁决：所选模型支持多模态则直读，否则 OCR 转文字。
+    image: Optional[str] = Field(default=None, description="图片 data URL，可选")
 
 
 class ChatResponse(BaseModel):
@@ -106,6 +109,7 @@ class ChatModelInfo(BaseModel):
     source: str = "builtin"
     provider_type: str = "cloud"
     can_delete: bool = False
+    supports_vision: bool = False
 
 
 class ChatModelListResponse(BaseModel):
@@ -122,6 +126,8 @@ class CustomModelCreate(BaseModel):
     api_key: str = Field(default="", max_length=8192)
     requires_api_key: bool = True
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    # 是否支持图片（多模态）输入：用户添加自定义模型时勾选
+    supports_vision: bool = False
 
 
 class ChatSkillInfo(BaseModel):
@@ -375,6 +381,7 @@ async def list_chat_models(
                 model=record.model_name,
                 temperature=record.temperature,
                 requires_api_key=True,
+                supports_vision=bool(record.supports_vision),
             ))
     return ChatModelListResponse(
         default_model_id=cfg.LLM_DEFAULT_MODEL_ID,
@@ -424,6 +431,7 @@ async def create_custom_chat_model(
             api_key_encrypted=encrypted_key,
             requires_api_key=req.requires_api_key,
             temperature=req.temperature,
+            supports_vision=bool(req.supports_vision),
         )
         try:
             await repo.add(record)
@@ -495,6 +503,7 @@ async def send_message(
             conv_id,
             "user",
             req.query,
+            image=req.image,
             metadata_json=json.dumps({"skills": skill_payload}, ensure_ascii=False),
         )
         await session.commit()
@@ -506,11 +515,30 @@ async def send_message(
             session, current_user.id
         )
 
+    # ── 图片裁决（OCR 回退只做一次）────────────────────────────────────────────
+    effective_query = req.query
+    image_for_context: Optional[str] = None
+    if req.image:
+        if selected_model.supports_vision:
+            image_for_context = req.image
+        else:
+            try:
+                from app.ocr.engine import ocr_image_to_text
+                _ocr_text = (await ocr_image_to_text(req.image)).strip()
+                effective_query = (
+                    f"{req.query}\n\n[图片识别内容（OCR）]:\n{_ocr_text}"
+                    if _ocr_text
+                    else f"{req.query}\n\n[图片无法识别为文字，已忽略图片内容]"
+                )
+            except Exception as _ocr_exc:
+                logger.warning("[chat/send] OCR 失败，降级为无图：%s", _ocr_exc)
+                effective_query = f"{req.query}\n\n[图片识别服务不可用，已忽略图片内容]"
+
     from app.services.agent_service import AgentService
 
     use_multi = cfg.AGENT_MODE == "multi" or (
         cfg.AGENT_MODE == "auto"
-        and AgentService._should_use_multi(req.query, db_history)
+        and AgentService._should_use_multi(effective_query, db_history)
     )
     multi_run_id: Optional[uuid.UUID] = None
     if use_multi:
@@ -522,7 +550,7 @@ async def send_message(
                 conversation_id=conv_id,
                 user_id=current_user.id,
                 source_message_id=user_message_id,
-                goal=req.query,
+                goal=effective_query,
                 model_id=selected_model.id,
             )
             await session.commit()
@@ -540,12 +568,13 @@ async def send_message(
         agent = get_agent_service()
         with use_chat_model(selected_model), use_skill_context(skill_context):
             result = agent.run(
-                query=req.query,
+                query=effective_query,
                 session_id=str(conv_id),
                 history=db_history,          # ← 关键：传入 DB 历史
                 user_id=current_user.id,
                 knowledge_base_ids=knowledge_base_ids,
                 knowledge_catalog=knowledge_catalog,
+                image_data=image_for_context,
             )
         answer = result.get("final_answer", "")
     except Exception as exc:
@@ -732,6 +761,7 @@ async def send_message_stream(
             conv_id,
             "user",
             req.query,
+            image=req.image,
             metadata_json=json.dumps({"skills": skill_payload}, ensure_ascii=False),
         )
         await session.commit()
@@ -740,6 +770,27 @@ async def send_message_stream(
         knowledge_base_ids, knowledge_catalog = await _load_knowledge_scope(
             session, current_user.id
         )
+
+    # ── 图片裁决（multi / deep / single 共用）────────────────────────────────────
+    # OCR 回退只做一次：所选模型不支持多模态时，把图片转成文字拼进查询；
+    # 多模态模型则保留 image_for_context 直读，query 不变。
+    effective_query = req.query
+    image_for_context: Optional[str] = None
+    if req.image:
+        if selected_model.supports_vision:
+            image_for_context = req.image
+        else:
+            try:
+                from app.ocr.engine import ocr_image_to_text
+                _ocr_text = (await ocr_image_to_text(req.image)).strip()
+                effective_query = (
+                    f"{req.query}\n\n[图片识别内容（OCR）]:\n{_ocr_text}"
+                    if _ocr_text
+                    else f"{req.query}\n\n[图片无法识别为文字，已忽略图片内容]"
+                )
+            except Exception as _ocr_exc:
+                logger.warning("[chat/stream] OCR 失败，降级为无图：%s", _ocr_exc)
+                effective_query = f"{req.query}\n\n[图片识别服务不可用，已忽略图片内容]"
 
     # Decide and persist the multi-agent run before opening the stream so the
     # first event can expose a durable run_id to the client.
@@ -752,7 +803,7 @@ async def send_message_stream(
         cfg.AGENT_MODE == "multi"
         or (
             cfg.AGENT_MODE == "auto"
-            and AgentService._should_use_multi(req.query, db_history)
+            and AgentService._should_use_multi(effective_query, db_history)
         )
     )
     # 本轮实际执行的 Agent 路径（前端徽标/诊断用）：
@@ -768,7 +819,7 @@ async def send_message_stream(
                 conversation_id=conv_id,
                 user_id=current_user.id,
                 source_message_id=user_message_id,
-                goal=req.query,
+                goal=effective_query,
                 model_id=selected_model.id,
             )
             await session.commit()
@@ -798,11 +849,11 @@ async def send_message_stream(
         if use_deep:
             # ── DeepAgents 路径：主 Agent + task → SubAgent（同步 + 状态透传）─
             import queue as _q
-            from app.agents.deep.progress import DeepResearchProgressProjector
+            from app.agents.progress import ProgressProjector
 
             status_queue: "_q.Queue" = _q.Queue()
             deep_progress_summaries: list[dict] = []
-            progress_projector = DeepResearchProgressProjector()
+            progress_projector = ProgressProjector()
 
             def _deep_status(step: str, detail: str = ""):
                 try:
@@ -937,11 +988,22 @@ async def send_message_stream(
                 status_queue: "_q.Queue" = _q.Queue()
                 status_list: list[dict] = []  # 完整状态列表，供落库
                 _ORCH_SENTINEL = object()
+                from app.agents.progress import ProgressProjector
+                multi_projector = ProgressProjector()
+                multi_progress: list[dict] = []
 
                 def _on_status(step: str, detail: str, task_id: str = ""):
                     ev = {"step": step, "detail": detail, "task_id": task_id}
                     status_list.append(ev)
                     status_queue.put({"type": "status", **ev})
+                    try:
+                        progress = multi_projector.feed(step, detail)
+                        if progress:
+                            progress["created_at"] = time.time()
+                            multi_progress.append(dict(progress))
+                            status_queue.put({"type": "progress_summary", **progress})
+                    except Exception:
+                        pass
 
                 def _on_tasks(tasks: list):
                     # 拆解完成 → 推送待办清单，前端渲染侧边任务进度面板
@@ -1024,6 +1086,8 @@ async def send_message_stream(
                             "run_id": str(multi_run_id),
                             "tasks": ev["tasks"],
                         }
+                    if ev_type == "progress_summary":
+                        return {**ev, "run_id": str(multi_run_id)}
                     if ev.get("step") == "tool_call":
                         return {
                             "type": "tool_call",
@@ -1045,7 +1109,7 @@ async def send_message_stream(
                     try:
                         with use_chat_model(selected_model), use_skill_context(skill_context):
                             return orchestrator.run(
-                                req.query,
+                                effective_query,
                                 history=db_history,
                                 status_callback=_on_status,
                                 worker_done_callback=_on_worker_done,
@@ -1092,6 +1156,11 @@ async def send_message_stream(
                         )
                         await session.commit()
                     yield _sse({"type": "status", "step": "fallback", "detail": "多智能体失败，回退单 Agent"})
+                _fb_progress = multi_projector.feed("fallback", "多智能体失败，回退单 Agent")
+                if _fb_progress:
+                    _fb_progress["created_at"] = time.time()
+                    multi_progress.append(dict(_fb_progress))
+                    yield _sse({"type": "progress_summary", **_fb_progress})
                     result = None
 
                 # 拆解器判定单一意图 → 回退单 Agent 快速路径（走下面的 single 分支）
@@ -1196,6 +1265,11 @@ async def send_message_stream(
                     _syn_done = {"step": "synthesize_done", "detail": "汇总完成"}
                     status_list.append(_syn_done)
                     yield _sse({"type": "status", **_syn_done})
+                    _syn_progress = multi_projector.feed("synthesize_done", _syn_done["detail"])
+                    if _syn_progress:
+                        _syn_progress["created_at"] = time.time()
+                        multi_progress.append(dict(_syn_progress))
+                        yield _sse({"type": "progress_summary", **_syn_progress})
 
                     # 子任务产出作为独立过程数据保存；聊天正文只持久化最终回答。
                     full_answer = answer
@@ -1214,6 +1288,7 @@ async def send_message_stream(
                                 # status_list 是 {step, detail} 对象数组，前端可直接渲染；
                                 # result["steps"] 是 orchestrator 内部字符串日志，格式不兼容
                                 "steps": status_list,
+                                "progress_summaries": multi_progress,
                                 "execution_mode": result.get("execution_mode", ""),
                                 "model_id": selected_model.id,
                                 "model_name": selected_model.name,
@@ -1246,6 +1321,7 @@ async def send_message_stream(
                         "intent": result.get("intent", "multi_agent"),
                         "agent_mode": agent_mode,
                         "steps": status_list,
+                        "progress_summaries": multi_progress,
                         "elapsed_seconds": elapsed,
                         "execution_mode": result.get("execution_mode", ""),
                         "model_id": selected_model.id,
@@ -1289,6 +1365,11 @@ async def send_message_stream(
                         persist_exc,
                     )
                 yield _sse({"type": "status", "step": "fallback", "detail": "多智能体失败，回退单 Agent"})
+                _fb_progress = multi_projector.feed("fallback", "多智能体失败，回退单 Agent")
+                if _fb_progress:
+                    _fb_progress["created_at"] = time.time()
+                    multi_progress.append(dict(_fb_progress))
+                    yield _sse({"type": "progress_summary", **_fb_progress})
                 # 继续走下面的 single 路径
 
         # ── 单 Agent 路径（带实时思考过程透出）─────────────────────────────────
@@ -1301,11 +1382,23 @@ async def send_message_stream(
         collected_steps: list[dict] = []
         # 收集本轮中间产出（检索片段/工具结果/思维链），随 meta 落库
         collected_artifacts: list[dict] = []
+        from app.agents.progress import ProgressProjector
+        single_projector = ProgressProjector()
+        # 收集本轮工作日志（进度摘要），随 meta 落库，历史回放时恢复
+        single_progress: list[dict] = []
 
         def _on_step(step: str, detail: str = ""):
             ev = {"step": step, "detail": detail}
             collected_steps.append(ev)
             step_queue.put({"type": "status", **ev})
+            try:
+                progress = single_projector.feed(step, detail)
+                if progress:
+                    progress["created_at"] = time.time()
+                    single_progress.append(dict(progress))
+                    step_queue.put({"type": "progress_summary", **progress})
+            except Exception:
+                pass
 
         def _on_artifact(ev: dict):
             collected_artifacts.append(dict(ev))
@@ -1315,11 +1408,12 @@ async def send_message_stream(
             try:
                 with use_chat_model(selected_model), use_skill_context(skill_context):
                     return agent.prepare_context(
-                        req.query,
+                        effective_query,
                         db_history,
                         user_id=current_user.id,
                         knowledge_base_ids=knowledge_base_ids,
                         knowledge_catalog=knowledge_catalog,
+                        image_data=image_for_context,
                         on_step=_on_step,
                         on_artifact=_on_artifact,
                     )
@@ -1446,6 +1540,11 @@ async def send_message_stream(
         _gen_done = {"step": "generate_done", "detail": f"回答生成完成（{len(answer)} 字符）"}
         collected_steps.append(_gen_done)
         yield _sse({"type": "status", **_gen_done})
+        _gen_progress = single_projector.feed("generate_done", _gen_done["detail"])
+        if _gen_progress:
+            _gen_progress["created_at"] = time.time()
+            single_progress.append(dict(_gen_progress))
+            yield _sse({"type": "progress_summary", **_gen_progress})
 
         # 3. 落库助手回复(含引用)
         try:
@@ -1455,6 +1554,7 @@ async def send_message_stream(
                     "agent_mode": agent_mode,
                     "sources": ctx["sources"],
                     "steps": collected_steps,
+                    "progress_summaries": single_progress,
                     "artifacts": collected_artifacts,
                     "model_id": selected_model.id,
                     "model_name": selected_model.name,
@@ -1471,6 +1571,7 @@ async def send_message_stream(
             "intent": ctx["intent"],
             "agent_mode": agent_mode,
             "steps": collected_steps,
+            "progress_summaries": single_progress,
             "artifacts": collected_artifacts,
             "elapsed_seconds": elapsed,
             "model_id": selected_model.id,
