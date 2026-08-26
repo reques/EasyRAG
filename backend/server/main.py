@@ -57,6 +57,49 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 "ALTER TABLE conversations "
                 "ADD COLUMN IF NOT EXISTS last_summarized_message_id INTEGER"
             ))
+            # 图谱实体/关系按文件命名空间隔离（2026-08-25）：
+            # 实体身份 = (kb_id, source_file, name)，同名不同文件各自独立成节点。
+            await conn.execute(text(
+                "ALTER TABLE knowledge_entities "
+                "ADD COLUMN IF NOT EXISTS source_file VARCHAR(512)"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE knowledge_relations "
+                "ADD COLUMN IF NOT EXISTS source_file VARCHAR(512)"
+            ))
+            # 老实体回填：source_chunks 格式为 "<filename>#<chunk_index>"，取 # 前部分。
+            # 老关系无来源信息，保持 NULL（图谱展示时按 name 唯一匹配兜底）。
+            await conn.execute(text(
+                "UPDATE knowledge_entities SET source_file = split_part(source_chunks, '#', 1) "
+                "WHERE source_file IS NULL AND source_chunks IS NOT NULL "
+                "AND source_chunks <> ''"
+            ))
+            # 老库同 (kb_id, source_file, name) 重复行清理：保留 source_chunks 最长的行
+            # （信息最全），删除其余——防止同一文件内同名实体多行残留导致前端节点 id 冲突。
+            await conn.execute(text(
+                """
+                DELETE FROM knowledge_entities a
+                USING knowledge_entities b
+                WHERE a.id <> b.id
+                  AND a.knowledge_base_id = b.knowledge_base_id
+                  AND a.source_file IS NOT DISTINCT FROM b.source_file
+                  AND a.name = b.name
+                  AND (length(coalesce(a.source_chunks, '')) <
+                       length(coalesce(b.source_chunks, '')))
+                """
+            ))
+            await conn.execute(text(
+                """
+                DELETE FROM knowledge_relations a
+                USING knowledge_relations b
+                WHERE a.id <> b.id
+                  AND a.knowledge_base_id = b.knowledge_base_id
+                  AND a.source_file IS NOT DISTINCT FROM b.source_file
+                  AND a.source_entity = b.source_entity
+                  AND a.target_entity = b.target_entity
+                  AND a.relation_type = b.relation_type
+                """
+            ))
         logger.info("[lifespan] incremental migrations applied")
     except Exception as exc:
         logger.warning("[lifespan] database init skipped: %s", exc)

@@ -754,12 +754,16 @@ class EnhancedRetriever:
         for ent in matched:
             desc = ent.get("description", "")
             name = ent.get("name", "")
+            ent_sf = ent.get("source_file") or None  # 命名空间：该实体所属文件
+            ent_sources = {name: ent_sf}
             if desc:
                 docs.append(CandidateDoc(
                     content=f"[实体] {name} ({ent.get('type','')}): {desc}",
                     metadata={
                         "source": "knowledge_graph",
                         "entity": name,
+                        "entity_source_file": ent_sf,
+                        "entity_source_files": dict(ent_sources),
                         "score": 1.0,
                         "knowledge_base_id": ent.get("kb_id", ""),
                     },
@@ -767,10 +771,15 @@ class EnhancedRetriever:
                     retrieval_path="entity",
                     graph_entities=[name],
                 ))
-            # 邻居关系
+            # 邻居关系（按命名空间精确查询：同名实体只展开自己文件内的边，不跨文件混）
             for rel in graph_cache.get_neighbor_relations(
-                name, knowledge_base_ids=knowledge_base_ids
+                name,
+                knowledge_base_ids=knowledge_base_ids,
+                source_file=ent_sf,
             )[:6]:
+                rel_sf = rel.get("source_file") or ent_sf
+                ent_sources[rel.get("source", "")] = rel_sf
+                ent_sources[rel.get("target", "")] = rel_sf
                 rel_text = (
                     f"[关系] {rel['source']} --[{rel['relation']}]--> "
                     f"{rel['target']}: {rel.get('description','')}"
@@ -780,6 +789,8 @@ class EnhancedRetriever:
                     metadata={
                         "source": "knowledge_graph",
                         "entity": name,
+                        "entity_source_file": ent_sf,
+                        "entity_source_files": dict(ent_sources),
                         "relation": rel["relation"],
                         "knowledge_base_id": rel.get("kb_id", ""),
                     },
@@ -1494,7 +1505,8 @@ class EnhancedRetriever:
             avg_score = sum(d.score for d in block_docs) / len(block_docs)
 
             block_relations = self._collect_block_relations(
-                block_entities[:10], knowledge_base_ids
+                block_entities[:10], knowledge_base_ids,
+                entity_sources=self._collect_entity_sources(block_docs),
             )
             # 聚合该知识块覆盖的子问题（去重保序）
             block_sub_questions: List[str] = []
@@ -1536,20 +1548,40 @@ class EnhancedRetriever:
         logger.info("[enhanced] clustered %d docs → %d blocks", len(docs), len(blocks))
         return blocks
 
+    @staticmethod
+    def _collect_entity_sources(docs: List[CandidateDoc]) -> Dict[str, Optional[str]]:
+        """聚合块内文档携带的实体→来源文件映射（命名空间隔离用）。
+
+        实体路径的文档在 metadata.entity_source_files 里记录了每个图谱实体的
+        所属文件；其他路径（语义/BM25）没有该信息，返回空 dict 走聚合兜底。
+        """
+        merged: Dict[str, Optional[str]] = {}
+        for d in docs:
+            sf_map = (d.metadata or {}).get("entity_source_files") or {}
+            for ent, sf in sf_map.items():
+                if ent and ent not in merged:
+                    merged[ent] = sf or None
+        return merged
+
     def _collect_block_relations(
         self,
         entities: List[str],
         knowledge_base_ids: Optional[Sequence[str]] = None,
+        entity_sources: Optional[Dict[str, Optional[str]]] = None,
     ) -> List[Dict[str, str]]:
         """从图谱缓存收集块内实体之间的关系（两端都在块内实体集合内）。
 
         KnowledgeBlock.relations 此前恒为空——聚类时丢失了图谱关系信息，
         导致前端「关系」展示与 format_blocks_for_prompt 的关系注入都失效。
+
+        entity_sources 提供实体→来源文件映射时，按命名空间精确查询邻居
+        （同名实体不跨文件混边）；缺省时按 name 聚合查询（老数据兜底）。
         """
         if not entities or not knowledge_base_ids:
             return []
         from app.rag.graph_cache import graph_cache
 
+        entity_sources = entity_sources or {}
         entity_set = set(entities)
         relations: List[Dict[str, str]] = []
         seen: set = set()
@@ -1557,7 +1589,8 @@ class EnhancedRetriever:
         for ent in entities:
             try:
                 neighbors = graph_cache.get_neighbor_relations(
-                    ent, max_relations=20, knowledge_base_ids=knowledge_base_ids
+                    ent, max_relations=20, knowledge_base_ids=knowledge_base_ids,
+                    source_file=entity_sources.get(ent),
                 )
             except Exception as exc:
                 logger.warning(

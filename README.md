@@ -81,6 +81,7 @@ npm run dev                 # http://localhost:5173, /api 代理到 :8000
 | 文档 | 内容 |
 |------|------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 项目结构与逻辑（模块详解、核心设计、API 概览） |
+| [docs/ARCHITECTURE_DETAILED.md](docs/ARCHITECTURE_DETAILED.md) | 整体架构深度详解（请求生命周期、LangGraph 工作流、增强检索流水线、图谱子系统） |
 | [PROGRESS.md](PROGRESS.md) | 逐次迭代的演进记录 |
 | [docs/plans/](docs/plans/) · [docs/specs/](docs/specs/) | 设计稿与规格说明 |
 | [deploy/mineru/README.md](deploy/mineru/README.md) | MinerU 解析服务部署与运维 |

@@ -489,6 +489,17 @@
           </div>
 
           <div class="kbw-graph-layout">
+            <aside class="kbw-panel-card kbw-graph-filter">
+              <div class="kbw-panel-title">
+                <div><ListFilter :size="17" /><strong>按文件筛选</strong></div>
+                <button type="button" class="kbw-filter-toggle" @click="toggleAllFiles">{{ allFilesSelected ? '清空' : '全选' }}</button>
+              </div>
+              <div v-if="fileOptions.length === 0" class="kbw-filter-empty">图谱暂无文件</div>
+              <label v-for="f in fileOptions" :key="f" class="kbw-filter-item" :title="f || '未知文件'">
+                <input type="checkbox" :value="f" v-model="selectedFiles" />
+                <span class="kbw-filter-name">{{ f || '未知文件' }}</span>
+              </label>
+            </aside>
             <article class="kbw-panel-card kbw-graph-canvas">
               <div class="kbw-panel-title">
                 <div><Network :size="17" /><strong>实体关系图</strong></div>
@@ -507,9 +518,14 @@
                 <strong>尚未抽取实体</strong>
                 <span>上传并处理文件后，系统会自动抽取实体与关系。点击右上角「刷新」重新加载。</span>
               </div>
+              <div v-else-if="!filteredGraphData?.entities?.length" class="kbw-result-empty">
+                <ListFilter :size="28" />
+                <strong>未勾选任何文件</strong>
+                <span>在左侧「按文件筛选」中勾选文件后，图中会展示对应实体与关系。</span>
+              </div>
               <div
                 ref="graphContainer"
-                v-show="graphData && graphData.entities?.length && !graphLoading && !graphError"
+                v-show="graphData && graphData.entities?.length && filteredGraphData?.entities?.length && !graphLoading && !graphError"
                 class="kbw-graph-stage"
               ></div>
             </article>
@@ -525,6 +541,9 @@
               <div v-if="graphNodeDetail" class="kbw-node-detail">
                 <strong>{{ graphNodeDetail.label }}</strong>
                 <span class="kbw-node-type" :style="{ color: entityColor(graphNodeDetail.type) }">{{ graphNodeDetail.type }}</span>
+                <div v-if="graphNodeDetail.source_file" class="kbw-node-source">
+                  <i :style="{ background: fileColor(graphNodeDetail.source_file) }"></i>{{ graphNodeDetail.source_file }}
+                </div>
                 <p v-if="graphNodeDetail.description" class="kbw-node-desc">{{ graphNodeDetail.description }}</p>
                 <div class="kbw-node-neighbors">
                   <div class="kbw-neighbors-head">
@@ -539,11 +558,12 @@
                       v-for="(n, ni) in graphNodeDetail.neighbors"
                       :key="ni"
                       class="kbw-neighbor-item"
-                      :title="n.relation_description || ''"
+                      :title="(n.relation_description || '') + (n.source_file ? ' · 来自：' + n.source_file : '')"
                       @click="focusNeighbor(n)"
                     >
                       <span class="kbw-neighbor-arrow" :class="n.direction">{{ n.direction === 'out' ? '→' : '←' }}</span>
                       <span class="kbw-neighbor-rel">{{ n.relation_type }}</span>
+                      <i v-if="n.source_file" class="kbw-neighbor-dot" :style="{ background: fileColor(n.source_file) }"></i>
                       <span class="kbw-neighbor-name">{{ n.name }}</span>
                       <span class="kbw-neighbor-type" :style="{ color: entityColor(n.entity_type) }">{{ n.entity_type }}</span>
                     </li>
@@ -696,23 +716,39 @@
       <div class="modal kbw-modal">
         <div class="kbw-modal-heading">
           <div><span><FileUp :size="18" /></span><div><h3>上传文件</h3><p>上传到「{{ activeKb?.name }}」</p></div></div>
-          <button :disabled="uploading && uploadPhase === 'transferring'" @click="closeUpload"><X :size="17" /></button>
+          <button @click="closeUpload"><X :size="17" /></button>
         </div>
         <label
           class="file-label kbw-dropzone"
-          :class="{ 'file-label--dragover': dragOver, 'file-label--has-file': uploadFile }"
+          :class="{ 'file-label--dragover': dragOver, 'file-label--has-file': uploadFiles.length }"
           @dragover.prevent="onDragOver"
           @dragleave.prevent="onDragLeave"
           @drop.prevent="onDrop"
         >
-          <input type="file" :disabled="uploading" accept=".txt,.md,.pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.bmp,.webp,.gif,.tif,.tiff,.jp2" @change="onFileSelect" />
-          <span v-if="!uploadFile" class="file-label-hint">
+          <input type="file" multiple :disabled="uploading" accept=".txt,.md,.pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.bmp,.webp,.gif,.tif,.tiff,.jp2" @change="onFileSelect" />
+          <span v-if="!uploadFiles.length" class="file-label-hint">
             <UploadCloud :size="23" class="file-label-icon" />
             <strong>{{ dragOver ? '松开以上传' : '点击选择或拖拽文件到这里' }}</strong>
-            <em>TXT、MD、PDF、DOCX 与常见图片</em>
+            <em>支持一次选择/拖拽多个文件 · TXT、MD、PDF、DOCX 与常见图片</em>
           </span>
-          <span v-else class="kbw-selected-file">
-            <FileText :size="20" /><span><strong>{{ uploadFile.name }}</strong><small>{{ formatSize(uploadFile.size) }}</small></span>
+          <span v-else class="kbw-selected-files">
+            <span v-for="(item, fi) in uploadFiles" :key="fi" class="kbw-selected-file" :class="'is-' + item.status">
+              <FileText :size="18" />
+              <span class="kbw-selected-file-text">
+                <strong>{{ item.file.name }}</strong>
+                <small>{{ uploadFileStatusLabel(item) }}</small>
+              </span>
+              <span v-if="item.status === 'done'" class="kbw-file-state is-ok">完成</span>
+              <span v-else-if="item.status === 'failed'" class="kbw-file-state is-error">失败</span>
+              <button
+                v-if="!uploading && item.status !== 'done'"
+                type="button"
+                class="kbw-file-remove"
+                :title="`移除 ${item.file.name}`"
+                @click.stop.prevent="removeUploadFile(fi)"
+              ><X :size="12" /></button>
+            </span>
+            <em class="kbw-selected-count">共 {{ uploadFiles.length }} 个文件，并行上传</em>
           </span>
         </label>
         <div class="kbw-parser-picker">
@@ -772,12 +808,12 @@
         </div>
         <p v-if="uploadMsg" :class="['kbw-inline-notice', uploadOk ? 'is-success' : 'is-error']">{{ uploadMsg }}</p>
         <div class="modal-actions">
-          <button class="kbw-secondary-button" :disabled="uploading && uploadPhase === 'transferring'" @click="closeUpload">
+          <button class="kbw-secondary-button" @click="closeUpload">
             {{ uploading ? '后台继续' : '关闭' }}
           </button>
-          <button class="kbw-primary-button" :disabled="!uploadFile || uploading" @click="doUpload">
+          <button class="kbw-primary-button" :disabled="!uploadFiles.length || uploading" @click="doUpload">
             <LoaderCircle v-if="uploading" :size="14" class="spin" />
-            <Upload v-else :size="14" /> {{ uploading ? '处理中' : '上传并索引' }}
+            <Upload v-else :size="14" /> {{ uploading ? '处理中' : `上传并索引${uploadFiles.length > 1 ? `（${uploadFiles.length} 个）` : ''}` }}
           </button>
         </div>
       </div>
@@ -861,6 +897,27 @@ let graphChart = null
 
 const PALETTE = ['#5b8def', '#34c77b', '#f5a623', '#e45b5b', '#9b6bf0', '#2ab8c2', '#e05ba0', '#8a9b6b', '#6b8f9b', '#c2a05b', '#8d6e63', '#5c6bc0', '#26a69a', '#ec407a', '#7cb342', '#ab47bc']
 
+// 文件描边色（2026-08-25）：黄金角色相分布。
+// 黄金角 ≈ 137.508°（360° × (1 - 1/φ)）保证任意 N 个文件在色环上近似均匀散布，
+// 新增文件时已有文件的颜色不变（新文件落入空隙）——可无限扩展且始终清晰；
+// 固定中等饱和度/亮度（s=0.68, l=0.52）：柔和不刺眼、白底可读、观感和谐。
+const GOLDEN_ANGLE = 137.508
+
+function hslToHex(h, s, l) {
+  h = ((h % 360) + 360) % 360
+  const a = s * Math.min(l, 1 - l)
+  const f = (n) => {
+    const k = (n + h / 30) % 12
+    const c = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1)
+    return Math.round(255 * c).toString(16).padStart(2, '0')
+  }
+  return `#${f(0)}${f(8)}${f(4)}`
+}
+
+function fileColorFor(index) {
+  return hslToHex(index * GOLDEN_ANGLE, 0.62, 0.55)
+}
+
 // 从实际图谱数据动态统计实体类型并分配颜色（通用：不预设任何领域类型）
 const graphTypeColors = computed(() => {
   const types = []
@@ -876,6 +933,75 @@ const graphTypeColors = computed(() => {
 
 function entityColor(type) {
   return graphTypeColors.value[type] || '#9aa0a6'
+}
+
+// 来源文件 → 专属色（2026-08-25）：同名不同文件的实体用文件色描边区分。
+// 从实际返回数据的 source_file 动态生成，不预设任何文件名；空来源归「未知文件」灰。
+const fileColors = computed(() => {
+  const files = []
+  const seen = new Set()
+  for (const e of (graphData.value?.entities || [])) {
+    const f = e.source_file || ''
+    if (!seen.has(f)) { seen.add(f); files.push(f) }
+  }
+  const map = {}
+  files.forEach((f, i) => {
+    map[f] = f ? fileColorFor(i) : '#b9bec4'
+  })
+  return map
+})
+
+function fileColor(sourceFile) {
+  return fileColors.value[sourceFile || ''] || '#b9bec4'
+}
+
+// ── 按文件筛选（2026-08-25）：勾选 = 图中展示该文件的实体与关系 ──────────
+// 文件列表从图谱数据的 source_file 动态生成（含 ''=未知文件，老数据无来源）；
+// 过滤在前端完成（数据已全量返回），切换勾选只重渲染 echarts，不重新请求。
+const fileOptions = computed(() => {
+  const files = []
+  const seen = new Set()
+  for (const e of (graphData.value?.entities || [])) {
+    const f = e.source_file || ''
+    if (!seen.has(f)) { seen.add(f); files.push(f) }
+  }
+  return files
+})
+const selectedFiles = ref([])
+// 文件列表变化（切换知识库/刷新图谱）→ 重置为全选；内容相同则保留用户勾选
+watch(fileOptions, (opts) => {
+  const cur = [...selectedFiles.value].sort().join('|')
+  const next = [...opts].sort().join('|')
+  if (cur !== next) selectedFiles.value = [...opts]
+}, { immediate: true })
+const allFilesSelected = computed(() =>
+  fileOptions.value.length > 0 && selectedFiles.value.length === fileOptions.value.length
+)
+function toggleAllFiles() {
+  selectedFiles.value = allFilesSelected.value ? [] : [...fileOptions.value]
+}
+// 过滤后的图谱数据（实体/关系按 source_file 归属过滤）。
+// 老数据 source_file 为空的无法归属 → 始终保留（不参与文件筛选，防止关系被误杀）；
+// 渲染时 resolveEdgeKey 会自动丢弃端点不在图中的边。
+const filteredGraphData = computed(() => {
+  const data = graphData.value
+  if (!data) return null
+  const sel = new Set(selectedFiles.value)
+  return {
+    entities: data.entities.filter((e) => !e.source_file || sel.has(e.source_file)),
+    relations: data.relations.filter((r) => !r.source_file || sel.has(r.source_file)),
+  }
+})
+watch(selectedFiles, () => {
+  if (graphData.value && !graphLoading.value) {
+    renderGraph(filteredGraphData.value)
+  }
+})
+
+// 节点/边的内部唯一键：source_file::name（source_file 缺失时退化为 name）。
+// ECharts 图用 id 做唯一标识，label 仍显示纯名——内部隔离、展示精简。
+function graphKey(sourceFile, name) {
+  return sourceFile ? `${sourceFile}::${name}` : name
 }
 
 async function loadGraph() {
@@ -895,9 +1021,11 @@ async function loadGraph() {
   }
   // 等 graphLoading=false 后容器才通过 v-show 显示（否则尺寸为 0，echarts.init 失败）
   if (fetched) {
+    // 新图谱 → 默认全选文件（fileOptions 基于刚赋值的 graphData 即时计算）
+    selectedFiles.value = fileOptions.value
     await nextTick()
     try {
-      renderGraph(fetched)
+      renderGraph(filteredGraphData.value)
     } catch (e) {
       console.error('[graph] renderGraph failed:', e)
       graphError.value = '图谱渲染失败：' + (e && e.message ? e.message : String(e))
@@ -906,6 +1034,9 @@ async function loadGraph() {
 }
 
 function renderGraph(data) {
+  // 空筛选结果（用户清空全部勾选）直接返回，不 init——
+  // 否则容器 v-show 隐藏导致 clientWidth=0，requestAnimationFrame 会无限重试
+  if (!data || !data.entities || !data.entities.length) return
   if (graphChart) {
     if (graphChart.__resizeHandler) window.removeEventListener('resize', graphChart.__resizeHandler)
     graphChart.dispose()
@@ -921,39 +1052,56 @@ function renderGraph(data) {
   const entities = data.entities || []
   const relations = data.relations || []
 
-  // 计算连接度
-  const degree = {}
-  for (const r of relations) {
-    degree[r.source_entity] = (degree[r.source_entity] || 0) + 1
-    degree[r.target_entity] = (degree[r.target_entity] || 0) + 1
-  }
-
-  // 类型 → 索引（categories）
+  // 类型 → 颜色索引：与图例同源（graphTypeColors 基于全量数据生成）。
+  // 筛选后若重建 typeIndex，类型顺序会变 → 节点颜色与图例错位（bug 修复 2026-08-25）
+  const typeList = Object.keys(graphTypeColors.value)
   const typeIndex = {}
-  const typeList = []
-  for (const e of entities) {
+  typeList.forEach((t, i) => { typeIndex[t] = i })
+  const colors = typeList.map((t) => graphTypeColors.value[t])
+
+  // 节点：id = 唯一键（source_file::name），label 显示纯名——内部隔离、展示精简。
+  // 样式（2026-08-25 终版）：本体按实体类型着色、无文件色外圈；来源文件只在
+  // hover tooltip 与点击详情中展示（图面保持干净，不预设任何文件维度视觉）。
+  const nodes = entities.map((e) => {
+    const key = graphKey(e.source_file, e.name)
     const t = e.entity_type || 'other'
-    if (!(t in typeIndex)) {
-      typeIndex[t] = typeList.length
-      typeList.push(t)
+    return {
+      id: key,
+      name: e.name,
+      value: 0,
+      category: typeIndex[t] !== undefined ? typeIndex[t] : 0,
+      description: e.description || '',
+      source_file: e.source_file || null,
+      symbolSize: 8,
     }
+  })
+  const keyToNode = new Map(nodes.map((n) => [n.id, n]))
+
+  // 边端点解析（三级）：精确唯一键 → 老数据关系无 source_file 时按 name 唯一匹配
+  // 节点 id → 同名多节点无法确定指向才丢边。degree 与 links 共用同一解析，保证一致。
+  function resolveEdgeKey(r, side) {
+    const name = side === 's' ? r.source_entity : r.target_entity
+    const key = graphKey(r.source_file, name)
+    if (keyToNode.has(key)) return key
+    const matches = nodes.filter((n) => n.name === name)
+    return matches.length === 1 ? matches[0].id : null
   }
 
-  const nodes = entities.map((e) => ({
-    id: e.name,
-    name: e.name,
-    value: degree[e.name] || 0,
-    category: typeIndex[e.entity_type || 'other'],
-    description: e.description || '',
-    symbolSize: 8 + Math.min(degree[e.name] || 0, 12) * 2,
-  }))
-  const links = relations.map((r) => ({
-    source: r.source_entity,
-    target: r.target_entity,
-    value: r.relation_type,
-  }))
-
-  const colors = typeList.map((_, i) => PALETTE[i % PALETTE.length])
+  // 计算连接度（按唯一键：同名不同文件的节点各自统计）
+  const degree = {}
+  const links = []
+  for (const r of relations) {
+    const sk = resolveEdgeKey(r, 's')
+    const tk = resolveEdgeKey(r, 't')
+    if (!sk || !tk) continue
+    degree[sk] = (degree[sk] || 0) + 1
+    degree[tk] = (degree[tk] || 0) + 1
+    links.push({ source: sk, target: tk, value: r.relation_type })
+  }
+  for (const n of nodes) {
+    n.value = degree[n.id] || 0
+    n.symbolSize = 8 + Math.min(n.value, 12) * 2
+  }
 
   graphChart = echarts.init(el)
   graphChart.setOption({
@@ -962,7 +1110,8 @@ function renderGraph(data) {
       formatter: (p) => {
         if (p.dataType === 'node') {
           const t = p.data.category !== undefined ? typeList[p.data.category] : 'other'
-          return `${p.data.name} · ${t}`
+          const sf = p.data.source_file || ''
+          return `${p.data.name} · ${t}${sf ? `<br/>来自：${sf}` : ''}`
         }
         return p.data.value || ''
       },
@@ -987,6 +1136,7 @@ function renderGraph(data) {
         color: '#8b9096',
         position: 'middle',
       },
+      // 描边 = 来源文件色（2026-08-25：同名不同文件的实体一眼区分，本体色仍按实体类型）
       itemStyle: {
         shadowBlur: 8,
         shadowColor: 'rgba(0,0,0,0.25)',
@@ -1015,12 +1165,13 @@ function renderGraph(data) {
         label: params.data.name,
         type: params.data.category !== undefined ? typeList[params.data.category] : 'other',
         description: params.data.description,
+        source_file: params.data.source_file || null,
         neighbors: null,
         neighborTotal: 0,
         neighborsLoading: true,
         neighborsError: '',
       }
-      loadNeighbors(params.data.name)
+      loadNeighbors(params.data.name, params.data.source_file || null)
     } else {
       clearHighlight()
       graphNodeDetail.value = null
@@ -1038,15 +1189,18 @@ function clearHighlight() {
   }
 }
 
-// 加载选中实体的全部邻居（不受图可视化的 top-N 截断影响）
-async function loadNeighbors(name) {
+// 加载选中实体的全部邻居（不受图可视化的 top-N 截断影响；
+// source_file 给定 → 只查该文件内的同名实体，同名不同文件各自独立）
+async function loadNeighbors(name, sourceFile = null) {
   const kbId = activeKb.value?.id
   const detail = graphNodeDetail.value
   if (!kbId || !detail) return
   detail.neighborsLoading = true
   detail.neighborsError = ''
   try {
-    const res = await api.get(`/knowledge/bases/${kbId}/graph/neighbors`, { entity: name, limit: 50 })
+    const params = { entity: name, limit: 50 }
+    if (sourceFile) params.source_file = sourceFile
+    const res = await api.get(`/knowledge/bases/${kbId}/graph/neighbors`, params)
     detail.neighbors = res.neighbors || []
     detail.neighborTotal = res.total
   } catch (e) {
@@ -1067,15 +1221,16 @@ async function focusNeighbor(n) {
     label: n.name,
     type: n.entity_type || 'other',
     description: n.description || '',
+    source_file: n.source_file || null,
     neighbors: null,
     neighborTotal: 0,
     neighborsLoading: true,
     neighborsError: '',
   }
-  await loadNeighbors(n.name)
+  await loadNeighbors(n.name, n.source_file || null)
   if (graphChart) {
     const data = graphChart.getOption()?.series?.[0]?.data || []
-    const idx = data.findIndex((d) => d && d.name === n.name)
+    const idx = data.findIndex((d) => d && d.id === graphKey(n.source_file, n.name))
     if (idx >= 0) {
       lastHighlightedIndex = idx
       graphChart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: idx })
@@ -1114,7 +1269,7 @@ const saving = ref(false)
 const editError = ref('')
 
 const showUpload = ref(false)
-const uploadFile = ref(null)
+const uploadFiles = ref([])        // 待上传文件列表 [{ file, status, progress, message }]，支持一次选择/拖拽多个 + 并行上传
 const uploading = ref(false)
 const uploadMsg = ref('')
 const uploadOk = ref(false)
@@ -1128,7 +1283,8 @@ const uploadElapsedSeconds = ref(0)
 const uploadProgressIdleSeconds = ref(0)
 const uploadConnectionIssue = ref(false)
 const dragOver = ref(false)
-let pollTimer = null
+// 并行上传：每个文件独立的索引轮询 timer（fileId → timer），互不干扰
+const pollTimers = new Map()
 let uploadClockTimer = null
 let lastProgressSignature = ''
 let lastProgressChangedAt = 0
@@ -1204,25 +1360,29 @@ const totalChunks = computed(() => fileList.value.reduce((sum, file) => sum + Nu
 const totalCharacters = computed(() => fileList.value.reduce((sum, file) => sum + Number(file.char_count || 0), 0))
 
 const displayProgress = computed(() => {
-  if (uploadPhase.value === 'transferring') return transferProgress.value
-  if (uploadPhase.value === 'indexing') return Math.max(indexProgress.value, 5)
   if (uploadPhase.value === 'done' || uploadPhase.value === 'failed') return 100
-  return 0
+  const total = uploadFiles.value.length
+  if (!total) return 0
+  // 并行上传：整体进度 = 已完成（done/failed）文件占比
+  const doneN = uploadFiles.value.filter((it) => it.status === 'done' || it.status === 'failed').length
+  return Math.round((doneN / total) * 100)
 })
 
 const progressLabel = computed(() => {
-  if (uploadPhase.value === 'transferring') return '正在上传文件'
-  if (uploadPhase.value === 'indexing') {
-    if (uploadParser.value?.progress_message) return uploadParser.value.progress_message
-    if (!uploadParser.value?.parser_name) return '已上传，等待分配解析器'
-    const name = parserLabel(uploadParser.value)
-    return indexProgress.value < 30
-      ? `${name} 正在解析文档`
-      : `${name} 解析完成，正在建立索引`
-  }
+  const total = uploadFiles.value.length
+  const doneN = uploadFiles.value.filter((it) => it.status === 'done' || it.status === 'failed').length
+  const prefix = total > 1 ? `（已完成 ${doneN}/${total}）` : ''
   if (uploadPhase.value === 'done') return '处理完成'
   if (uploadPhase.value === 'failed') return '处理失败'
-  return ''
+  if (!uploading.value) return ''
+  // 并行：以文件列表状态为准（传输中/索引中/等待中），各文件明细见列表
+  const active = uploadFiles.value.find((it) => it.status === 'indexing')
+  if (active?.message) return `${active.message} ${prefix}`
+  if (active) return `正在建立索引 ${prefix}`
+  if (uploadFiles.value.some((it) => it.status === 'transferring' || it.status === 'pending')) {
+    return `正在上传文件 ${prefix}`
+  }
+  return `正在处理 ${prefix}`
 })
 
 const retrievalContract = computed(() => JSON.stringify({
@@ -1584,23 +1744,75 @@ function fileExtension(file) {
   return `.${file.name.split('.').pop().toLowerCase()}`
 }
 
-function parserOptionAvailable(parser, file = uploadFile.value) {
-  if (!file) return true
-  const extension = fileExtension(file)
-  if (parser === 'mineru') return MINERU_EXTS.has(extension)
-  if (parser === 'local') return LOCAL_PARSER_EXTS.has(extension)
-  return ACCEPT_EXTS.includes(extension)
+function parserOptionAvailable(parser) {
+  // 多文件：所选解析器必须对「全部」待传文件可用（否则选项禁用）
+  const items = uploadFiles.value
+  if (!items.length) return true
+  return items.every((it) => {
+    const extension = fileExtension(it.file)
+    if (parser === 'mineru') return MINERU_EXTS.has(extension)
+    if (parser === 'local') return LOCAL_PARSER_EXTS.has(extension)
+    return ACCEPT_EXTS.includes(extension)
+  })
 }
 
-function setUploadFile(file) {
-  uploadFile.value = file || null
-  if (!file || parserOptionAvailable(uploadParserChoice.value, file)) return
-  uploadParserChoice.value = MINERU_EXTS.has(fileExtension(file)) ? 'mineru' : 'local'
+function setUploadFiles(files) {
+  // 追加模式：新选择/拖拽的文件追加到现有列表（分批拖入累计），
+  // 同名文件替换旧项（避免重复）；上传中不接受新文件（onDrop/onFileSelect 已拦截）
+  const valid = []
+  const rejected = []
+  for (const file of files) {
+    const extension = fileExtension(file)
+    if (extension && ACCEPT_EXTS.includes(extension)) {
+      valid.push({ file, status: 'pending', progress: 0, message: '' })
+    } else {
+      rejected.push(file.name || '(无扩展名)')
+    }
+  }
+  for (const item of valid) {
+    const existingIndex = uploadFiles.value.findIndex((it) => it.file.name === item.file.name)
+    if (existingIndex >= 0) {
+      uploadFiles.value[existingIndex] = item  // 同名替换（保持列表位置）
+    } else {
+      uploadFiles.value.push(item)
+    }
+  }
+  if (rejected.length) {
+    uploadMsg.value = `已忽略不支持的文件：${rejected.join('、')}`
+    uploadOk.value = false
+  }
+  if (valid.length) {
+    uploadMsg.value = ''
+    uploadOk.value = false
+    // 解析器回退：所选解析器对全部文件不可用则自动切换到适用的
+    if (!parserOptionAvailable(uploadParserChoice.value)) {
+      uploadParserChoice.value = uploadFiles.value.every((it) => LOCAL_PARSER_EXTS.has(fileExtension(it.file))) ? 'local' : 'mineru'
+    }
+  }
+}
+
+function removeUploadFile(index) {
+  uploadFiles.value.splice(index, 1)
+  if (!uploadFiles.value.length) uploadMsg.value = ''
+}
+
+// 文件行状态标签（并行上传：每个文件独立进度）
+function uploadFileStatusLabel(item) {
+  switch (item.status) {
+    case 'pending': return '等待中'
+    case 'transferring': return `传输中 ${item.progress}%`
+    case 'indexing': return item.message || '索引中…'
+    case 'done': return '索引完成'
+    case 'failed': return item.message || '失败'
+    default: return ''
+  }
 }
 
 function onFileSelect(event) {
-  setUploadFile(event.target.files?.[0] || null)
-  uploadMsg.value = ''
+  const files = Array.from(event.target.files || [])
+  // 清空 input value：允许连续选择同一批文件
+  event.target.value = ''
+  setUploadFiles(files)
 }
 
 function onDragOver(event) {
@@ -1616,38 +1828,38 @@ function onDragLeave() {
 function onDrop(event) {
   dragOver.value = false
   if (uploading.value) return
-  const file = event.dataTransfer?.files?.[0]
-  if (!file) return
-  const extension = `.${(file.name.split('.').pop() || '').toLowerCase()}`
-  if (!ACCEPT_EXTS.includes(extension)) {
-    uploadMsg.value = `不支持 ${extension} 文件，请选择：${ACCEPT_EXTS.join(' ')}`
-    uploadOk.value = false
-    return
-  }
-  setUploadFile(file)
-  uploadMsg.value = ''
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (!files.length) return
+  setUploadFiles(files)
 }
 
 function closeUpload() {
-  if (uploading.value && uploadPhase.value === 'transferring') return
   showUpload.value = false
   dragOver.value = false
-  if (!uploading.value) {
-    uploadFile.value = null
-    uploadMsg.value = ''
-    uploadPhase.value = 'idle'
-    transferProgress.value = 0
-    indexProgress.value = 0
-    uploadParser.value = null
-    uploadParserChoice.value = 'mineru'
-  }
+  // 上传进行中：允许关闭（后台继续执行——doUpload 循环与索引轮询不依赖弹窗，
+  // 状态照常更新，全部完成时走 notify 通知）
+  if (uploading.value) return
+  uploadFiles.value = []
+  uploadMsg.value = ''
+  uploadPhase.value = 'idle'
+  transferProgress.value = 0
+  indexProgress.value = 0
+  uploadParser.value = null
+  uploadParserChoice.value = 'mineru'
 }
 
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
+function stopPolling(fileId) {
+  // 指定 fileId → 只停该文件的轮询；无参 → 停全部（页面卸载/切换知识库）
+  if (fileId) {
+    const timer = pollTimers.get(fileId)
+    if (timer) {
+      clearInterval(timer)
+      pollTimers.delete(fileId)
+    }
+    return
   }
+  pollTimers.forEach((timer) => clearInterval(timer))
+  pollTimers.clear()
 }
 
 function startUploadClock() {
@@ -1669,41 +1881,64 @@ function stopUploadClock() {
 }
 
 async function doUpload() {
-  if (!uploadFile.value || !activeKb.value) return
+  if (!uploadFiles.value.length || !activeKb.value) return
+  const kbId = activeKb.value.id
+  uploadSourceKbName.value = activeKb.value.name || '原知识库'
+  const items = uploadFiles.value
   uploading.value = true
   uploadMsg.value = ''
   uploadOk.value = false
-  uploadPhase.value = 'transferring'
-  transferProgress.value = 0
-  indexProgress.value = 0
-  uploadParser.value = null
   uploadConnectionIssue.value = false
-  lastProgressSignature = ''
   startUploadClock()
-  const kbId = activeKb.value.id
-  uploadSourceKbName.value = activeKb.value.name || '原知识库'
-  try {
-    const formData = new FormData()
-    formData.append('file', uploadFile.value)
-    formData.append('parser', uploadParserChoice.value)
-    const uploadResult = await api.upload(`/knowledge/bases/${kbId}/upload`, formData, (event) => {
-      if (event.total) transferProgress.value = Math.round((event.loaded / event.total) * 100)
-    })
-    uploadPhase.value = 'indexing'
-    await pollIndexing(kbId, uploadResult.file_id)
-  } catch (error) {
-    uploadPhase.value = 'failed'
-    uploadMsg.value = error.response?.data?.detail || '上传失败，请稍后重试。'
-    uploadOk.value = false
-    uploading.value = false
-    stopUploadClock()
+  // 全部置为待上传
+  items.forEach((it) => { it.status = 'pending'; it.progress = 0; it.message = '' })
+  // 并行上传：每个文件独立任务（后端单文件接口；MinerU 服务端有任务队列限流、
+  // embedding 已加锁串行——并行提交安全，各文件进度独立跟踪）
+  const results = await Promise.all(items.map(async (it) => {
+    it.status = 'transferring'
+    try {
+      const formData = new FormData()
+      formData.append('file', it.file)
+      formData.append('parser', uploadParserChoice.value)
+      const uploadResult = await api.upload(`/knowledge/bases/${kbId}/upload`, formData, (event) => {
+        if (event.total) it.progress = Math.round((event.loaded / event.total) * 100)
+      })
+      it.status = 'indexing'
+      it.progress = 0
+      it.message = ''
+      const r = await pollIndexing(kbId, uploadResult.file_id, it)
+      it.status = r.ok ? 'done' : 'failed'
+      it.message = r.message
+      return { name: it.file.name, ...r }
+    } catch (error) {
+      it.status = 'failed'
+      it.message = error.response?.data?.detail || '上传失败，请稍后重试。'
+      return { name: it.file.name, ok: false, message: it.message }
+    }
+  }))
+  stopUploadClock()
+  uploading.value = false
+  const okN = results.filter((r) => r.ok).length
+  const total = results.length
+  uploadPhase.value = okN > 0 ? 'done' : 'failed'
+  if (okN === total) {
+    uploadMsg.value = `全部 ${total} 个文件上传并索引完成。`
+    uploadOk.value = true
+    uploadFiles.value = []
+  } else {
+    const failed = results.filter((r) => !r.ok)
+    uploadMsg.value = `${okN}/${total} 个文件成功；失败：${failed.map((r) => r.name).join('、')}（原因见文件列表）`
+    uploadOk.value = okN > 0
+    // 失败的留在列表供重试；成功的从列表移除
+    uploadFiles.value = uploadFiles.value.filter((it) => it.status !== 'done')
   }
+  if (okN > 0) notify(`「${uploadSourceKbName.value}」中 ${okN} 个文件索引完成。`)
 }
 
-async function pollIndexing(kbId, fileId) {
-  stopPolling()
+function pollIndexing(kbId, fileId, item) {
+  stopPolling(fileId)
   return new Promise((resolve) => {
-    pollTimer = setInterval(async () => {
+    const timer = setInterval(async () => {
       try {
         const files = await api.get(`/knowledge/bases/${kbId}/files`)
         if (String(activeKb.value?.id || '') === String(kbId)) {
@@ -1712,46 +1947,30 @@ async function pollIndexing(kbId, fileId) {
         const target = files.find((file) => file.id === fileId)
         if (!target) return
         uploadConnectionIssue.value = false
-        uploadParser.value = target
-        const progressSignature = [
-          target.progress,
-          target.processing_stage,
-          target.progress_current,
-          target.progress_total,
-          target.progress_message,
-        ].join('|')
-        if (progressSignature !== lastProgressSignature) {
-          lastProgressSignature = progressSignature
-          lastProgressChangedAt = Date.now()
-          uploadProgressIdleSeconds.value = 0
+        // 并行：只更新本文件的进度/消息（互不干扰）
+        if (item) {
+          item.message = target.progress_message || ''
+          item.progress = target.progress ?? 0
         }
         if (target.status === 'processing' || target.status === 'pending') {
-          indexProgress.value = target.progress ?? 0
           return
         }
-        stopPolling()
+        clearInterval(timer)
+        pollTimers.delete(fileId)
         const latest = target
         if (latest?.status === 'failed') {
-          uploadPhase.value = 'failed'
-          uploadMsg.value = `索引失败：${latest.error_message || '未知错误'}`
-          uploadOk.value = false
+          resolve({ ok: false, message: `索引失败：${latest.error_message || '未知错误'}` })
         } else {
-          uploadPhase.value = 'done'
           const parser = parserLabel(latest)
           const version = latest?.parser_version ? ` ${latest.parser_version}` : ''
-          uploadMsg.value = `上传完成，${parser}${version} 已解析并建立 ${latest?.chunk_count ?? 0} 个分块。`
-          uploadOk.value = true
-          uploadFile.value = null
-          notify(`「${uploadSourceKbName.value}」中的文件索引已完成。`)
+          resolve({ ok: true, message: `${parser}${version} 已解析并建立 ${latest?.chunk_count ?? 0} 个分块。` })
         }
-        uploading.value = false
-        stopUploadClock()
-        resolve()
       } catch {
         uploadConnectionIssue.value = true
         // 短暂网络抖动时保留轮询，下一轮继续尝试。
       }
     }, 1000)
+    pollTimers.set(fileId, timer)
   })
 }
 

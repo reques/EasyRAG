@@ -132,6 +132,9 @@ class KnowledgeEntity(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # 来源 chunk（逗号分隔的 chunk 标识，用于溯源）
     source_chunks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 所属文件（命名空间维度，2026-08-25 新增）：实体身份 = (kb_id, source_file, name)。
+    # 两个文件包含同名实体时各自独立成节点，避免跨文档同名污染；NULL = 老数据未回填。
+    source_file: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -155,6 +158,9 @@ class KnowledgeRelation(Base):
     relation_type: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     weight: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    # 所属文件（2026-08-25 新增）：抽取时关系两端同属一个文件，删除/隔离按此列精确匹配，
+    # 替代旧的「按实体名反查删除」（会误删其他文件同名实体的关系）。NULL = 老数据。
+    source_file: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
