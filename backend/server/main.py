@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -140,7 +141,33 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         except Exception as exc:
             logger.warning("[lifespan] deepagents roster unavailable: %s", exc)
 
+    # 文件索引 worker（内嵌进程，2026-08-27）：消费 Redis Stream 处理上传任务。
+    # 与 API 同进程运行（uvicorn 重启即 worker 重启；消息在 Redis 中持久化不丢，
+    # 重启后 XAUTOCLAIM 认领上次未完成的任务）。失败不阻塞应用启动。
+    ingestion_worker_task: Optional[asyncio.Task] = None
+    try:
+        from backend.worker.ingestion_worker import start_worker
+
+        ingestion_worker_task = start_worker(cfg.INGESTION_CONCURRENCY)
+        logger.info("[lifespan] ingestion worker started (concurrency=%d)", cfg.INGESTION_CONCURRENCY)
+    except Exception as exc:
+        logger.warning("[lifespan] ingestion worker start skipped: %s", exc)
+
     yield
+
+    # 停止文件索引 worker（先停消费再关 Redis；存量任务排空后返回）
+    if ingestion_worker_task is not None:
+        try:
+            from backend.worker.ingestion_worker import stop_worker
+
+            stop_worker()
+            await asyncio.wait_for(ingestion_worker_task, timeout=60)
+            logger.info("[lifespan] ingestion worker stopped")
+        except asyncio.TimeoutError:
+            logger.warning("[lifespan] ingestion worker drain timed out, cancelling")
+            ingestion_worker_task.cancel()
+        except Exception as exc:
+            logger.warning("[lifespan] ingestion worker stop skipped: %s", exc)
 
     # 清理资源
     try:

@@ -130,12 +130,13 @@ async def test_upload_reports_transient_parser_failure_as_503(monkeypatch):
 
 
 def test_primary_background_ingestion_no_longer_calls_legacy_parse_and_chunk():
+    # 2026-08-27: 索引主链路从 knowledge_router._run_ingestion 迁至
+    # backend/services/ingestion_service.py 的 run_ingestion（Redis Stream worker 消费）。
     source = (
         Path(__file__).parents[1]
-        / "backend/server/routers/knowledge_router.py"
+        / "backend/services/ingestion_service.py"
     ).read_text(encoding="utf-8")
-    ingestion = source.split("async def _run_ingestion", 1)[1]
-    ingestion = ingestion.split("@router.get", 1)[0]
+    ingestion = source.split("async def run_ingestion", 1)[1]
 
     assert "preferred_parser=preferred_parser" in ingestion
     assert "parsed_document = await parser_router.parse" in ingestion

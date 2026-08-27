@@ -31,9 +31,9 @@ def _ensure_root_handler(level: int) -> None:
 def get_logger(name: str = _ROOT) -> logging.Logger:
     """Return a child logger under the 'all_in_rag' hierarchy.
 
-    Example::
-
-        logger = get_logger(__name__)
+    任何模块名（如 backend.worker.xxx）都会挂在 all_in_rag 树内——否则
+    logger 的父链是 RootLogger（默认 WARNING），INFO 级日志会被静默吞掉
+    （API 进程因 uvicorn 配置了 root 而掩盖此问题，独立 worker 进程必现）。
     """
     # Resolve log level lazily so .env is already loaded
     from app.core.config import get_settings  # local import avoids circular dep
@@ -41,7 +41,9 @@ def get_logger(name: str = _ROOT) -> logging.Logger:
     level = getattr(logging, cfg.LOG_LEVEL.upper(), logging.INFO)
     _ensure_root_handler(level)
 
-    log = logging.getLogger(name if name != _ROOT else _ROOT)
+    if name != _ROOT and not name.startswith(_ROOT + "."):
+        name = f"{_ROOT}.{name}"
+    log = logging.getLogger(name)
     log.setLevel(level)
     return log
 
