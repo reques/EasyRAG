@@ -781,6 +781,8 @@ async def send_message_stream(
 
             status_queue: "_q.Queue" = _q.Queue()
             deep_progress_summaries: list[dict] = []
+            # 阶段 6：收集本轮 status（思考/工具/委派步骤），随 done + meta 持久化
+            collected_steps: list[dict] = []
             progress_projector = ProgressProjector()
 
             def _deep_status(step: str, detail: str = ""):
@@ -803,6 +805,12 @@ async def send_message_stream(
             def _bridge_event(ev: dict) -> None:
                 try:
                     for payload in bridge_delegation_event(ev):
+                        if payload["type"] == "status":
+                            collected_steps.append({
+                                "step": payload.get("step", ""),
+                                "detail": payload.get("detail", ""),
+                                "task_id": payload.get("task_id", ""),
+                            })
                         if payload["type"] == "sub_tasks":
                             _panel_sent["v"] = True
                         elif (
@@ -835,9 +843,9 @@ async def send_message_stream(
                         knowledge_base_ids=knowledge_base_ids,
                         knowledge_catalog=knowledge_catalog,
                         on_step=_deep_status,
-                        # Deep research exposes only projected progress notes;
-                        # raw thoughts, tool arguments, and result bodies stay
-                        # inside the server-side execution context.
+                        # 阶段 6：artifact（推理 / 工具调用 / 工具返回 / 检索片段）
+                        # 经统一事件流 sink（_bridge_event → bridge_delegation_event）
+                        # 实时下发到当前会话，无需 on_artifact 回调二次透传。
                         on_artifact=None,
                     )
 
@@ -895,9 +903,10 @@ async def send_message_stream(
                     ) or ""
                 except Exception as exc:
                     logger.warning("[chat/stream] delegation persist failed: %s", exc)
-            # DeepAgents 的详细 steps 可能含模型推理、工具参数和结果片段；
-            # 客户端只保存 progress_summaries，不再下发原始执行轨迹。
-            step_objs: list[dict] = []
+            # 阶段 6：把本轮实时收到的 status（思考/工具/委派步骤）与 artifact
+            # 交付物随 done 事件与 meta 持久化，刷新会话后仍可恢复完整轨迹。
+            step_objs: list[dict] = collected_steps
+            deep_artifacts: list[dict] = deep_result.get("artifacts") or []
             elapsed = round(time.perf_counter() - deep_start, 3)
 
             # 落库（与单 Agent 分支一致的 metadata 结构）
@@ -907,7 +916,7 @@ async def send_message_stream(
                         "intent": "deepagents",
                         "agent_mode": agent_mode,
                         "steps": step_objs,
-                        "artifacts": [],
+                        "artifacts": deep_artifacts,
                         "progress_summaries": deep_progress_summaries,
                         "model_id": selected_model.id,
                         "model_name": selected_model.name,
@@ -929,7 +938,7 @@ async def send_message_stream(
                 "agent_mode": agent_mode,
                 "run_id": delegation_run_id,
                 "steps": step_objs,
-                "artifacts": [],
+                "artifacts": deep_artifacts,
                 "progress_summaries": deep_progress_summaries,
                 "elapsed_seconds": elapsed,
                 "model_id": selected_model.id,
