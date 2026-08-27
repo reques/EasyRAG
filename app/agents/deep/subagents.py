@@ -363,15 +363,15 @@ def run_subagent(
             _thought = " ".join(thought.split())[:200]
             if len(thought) > 200:
                 _thought += "…"
+            _args = tc[0].get("args") or {}
+            try:
+                import json
+                _args_text = json.dumps(_args, ensure_ascii=False)
+            except Exception:
+                _args_text = str(_args)
             if on_step:
                 if _thought:
                     on_step(f"{config.name}/reason", _thought)
-                _args = tc[0].get("args") or {}
-                try:
-                    import json
-                    _args_text = json.dumps(_args, ensure_ascii=False)
-                except Exception:
-                    _args_text = str(_args)
                 _args_short = " ".join(_args_text.split())[:120]
                 if len(_args_text) > 120:
                     _args_short += "…"
@@ -380,13 +380,24 @@ def run_subagent(
                     f"调用 {tool_name} {_args_short}".rstrip(),
                 )
             if on_artifact:
+                # 阶段 6：子智能体的工具调用（含参数）与推理一并实时透传，
+                # 前端在同一会话内可见子 Agent 的完整动作链。
                 on_artifact(
                     "thought", f"{config.name}/reason", "子智能体推理", _thought
+                )
+                on_artifact(
+                    "tool", f"{config.name}/tool",
+                    f"调用 {tool_name}", _args_text[:800],
                 )
         elif mtype == "tool":
             t_content = str(getattr(last, "content", "") or "")
             if on_step:
                 on_step(f"{config.name}/tool_done", f"工具返回: {t_content[:120]}")
+            if on_artifact:
+                on_artifact(
+                    "tool_result", f"{config.name}/tool", "工具返回",
+                    " ".join(t_content.split())[:300],
+                )
         elif mtype == "ai" and getattr(last, "content", ""):
             if on_step:
                 on_step(f"{config.name}/generate", "子智能体生成回答中...")

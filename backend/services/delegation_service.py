@@ -194,6 +194,10 @@ def bridge_delegation_event(event: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     单任务委派（task 工具）无 spawn_start：调用方在首次收到 task_start
     时应自造单任务 ``sub_tasks`` 清单（面板状态在调用方维护）。
+
+    artifact 族（阶段 6，2026-08-27）：推理 / 工具调用 / 工具返回 / 检索片段
+    以 ``artifact`` SSE 载荷实时下发到当前会话；若事件发生在子任务 span
+    内且属于工具动作，则同时追加 ``tool_call`` 载荷，供任务面板工具时间线消费。
     """
     kind = event.get("kind", "")
     stage = event.get("stage", "")
@@ -251,4 +255,26 @@ def bridge_delegation_event(event: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "phase": "tool", "status": "running",
                 "text": event.get("title", ""),
             }]
+
+    if kind == "artifact":
+        artifact_kind = event.get("artifact_kind") or "info"
+        title = str(event.get("title", "") or "")[:80]
+        content = str(event.get("content", "") or "")
+        payloads: List[Dict[str, Any]] = [{
+            "type": "artifact",
+            "kind": artifact_kind,
+            "stage": event.get("stage", ""),
+            "title": title,
+            "content": content,
+            "streaming": False,
+        }]
+        # 子任务内部的工具调用 → 任务面板工具时间线（与 worker_output 卡互补）
+        if artifact_kind in ("tool", "tool_result", "delegate") and span_task:
+            detail = " ".join((content or title).split())[:120]
+            payloads.append({
+                "type": "tool_call",
+                "task_id": span_task,
+                "detail": detail,
+            })
+        return payloads
     return []

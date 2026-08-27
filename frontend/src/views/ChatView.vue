@@ -61,7 +61,7 @@
               :stopped="!!msg.stopped"
             />
             <AgentActivity
-              v-if="msg.steps && msg.steps.length"
+              v-if="(msg.steps && msg.steps.length) || (msg.artifacts && msg.artifacts.length)"
               :steps="msg.steps"
               :artifacts="msg.artifacts"
               :running="msg.stepsLoading"

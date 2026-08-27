@@ -269,6 +269,35 @@ def test_bridge_tool_events_map_to_status_timeline():
     assert prog["type"] == "progress_summary" and prog["phase"] == "tool"
 
 
+def test_bridge_artifact_events_map_to_artifact_and_tool_call():
+    # 子任务 span 内的工具动作：artifact 载荷 + 任务面板 tool_call 时间线
+    payloads = bridge_delegation_event(_ev(
+        "artifact", "research-agent/tool", artifact_kind="tool",
+        content='{"query": "x"}', span="subagent/research-agent",
+    ))
+    assert [p["type"] for p in payloads] == ["artifact", "tool_call"]
+    assert payloads[0]["kind"] == "tool"
+    assert payloads[0]["streaming"] is False
+    assert payloads[1]["task_id"] == "research-agent"
+    assert '{"query": "x"}' in payloads[1]["detail"]
+
+    # spawn span 内的工具返回：tool_call 落到对应任务键
+    ret = bridge_delegation_event(_ev(
+        "artifact", "task-b/tool", artifact_kind="tool_result",
+        content="tool result body", span="spawn/task-b",
+    ))
+    assert ret[0]["kind"] == "tool_result"
+    assert ret[1]["task_id"] == "task-b"
+
+    # 主 span 的推理/检索 artifact：仅 artifact 载荷，不追加 tool_call
+    plain = bridge_delegation_event(_ev(
+        "artifact", "reason", artifact_kind="thought",
+        content="thinking", span="main",
+    ))
+    assert len(plain) == 1
+    assert plain[0]["type"] == "artifact" and plain[0]["kind"] == "thought"
+
+
 def test_bridge_ignores_unrelated_events():
     assert bridge_delegation_event(_ev("step", "reasoning")) == []
     assert bridge_delegation_event(_ev("blackboard", "post")) == []
