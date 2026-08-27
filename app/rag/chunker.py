@@ -191,10 +191,127 @@ def split_recursive(text: str, chunk_size: int | None = None) -> List[str]:
     return _recursive_split(text.strip(), size, _RECURSIVE_SEPARATORS)
 
 
+# ── 阶段 2A: structured 通用结构感知切分（2026-08-27）────────────────────────
+# 通用、不绑领域：识别任意文档的标题/编号条目/章节词边界做一级切分，
+# section 超过 chunk_size 再滑动窗口（带 overlap）二级切分。
+# 领域特定结构（如法律条文）可基于本切分器的 section 结果扩展，不走专用路径。
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")  # markdown 标题 #~######
+_ITEM_RE = re.compile(
+    r"^(?:"
+    r"(第[零一二三四五六七八九十百千〇0-9]+[章节条款项])"  # 章节词：第X章/节/条/款/项
+    r"|([一二三四五六七八九十]+[、．.])"                  # 中文编号：一、 二、
+    r"|(\d+[、．.])"                                     # 数字编号：1. 1、
+    r"|([（(]\d+[）)])"                                  # 括号编号：（1） (1)
+    r"|([A-Za-z]\s*[、．.])"                             # 字母编号：A. a、
+    r")\s*(.*)$"
+)
+# 章节词的层级深度（章>节>条>款>项）；普通编号条目是平级叶子
+_ITEM_DEPTH = {"章": 1, "节": 2, "条": 3, "款": 4, "项": 5}
+
+
+def _match_structure_line(line: str):
+    """检测行首结构边界。返回 (kind, level, title, rest) 或 None。
+
+    kind: 'h' = markdown 标题（level 1-6，rest 恒空）；
+          'item' = 编号条目/章节词（level 0，title=编号部分，rest=编号后正文）。
+    """
+    s = line.strip()
+    if not s:
+        return None
+    m = _HEADING_RE.match(s)
+    if m:
+        return ("h", len(m.group(1)), m.group(2).strip(), "")
+    m = _ITEM_RE.match(s)
+    if m:
+        groups = m.groups()
+        title = next(g for g in groups[:5] if g)
+        return ("item", 0, title.strip(), (groups[5] or "").strip())
+    return None
+
+
+def _item_depth(title: str) -> int:
+    """编号条目的层级深度：第X章=1 … 第X项=5；普通编号（一、1. (1) A.）=0（平级）。"""
+    m = re.match(r"^第[零一二三四五六七八九十百千〇0-9]+([章节条款项])", title)
+    return _ITEM_DEPTH.get(m.group(1), 0) if m else 0
+
+
+def _split_long_section(body: str, prefix: str, size: int, overlap: int) -> List[str]:
+    """超长 section 的滑动窗口二级切分：每块保留标题前缀，带 overlap。"""
+    subs = split_text(body, chunk_size=size, chunk_overlap=overlap)
+    return [f"{prefix}{sub}" if prefix else sub for sub in subs]
+
+
+def split_structured(
+    text: str,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+) -> List[str]:
+    """通用结构化切分：标题/编号条目/章节词一级切分，超长 section 滑动窗口。
+
+    - 一级：行首出现结构边界（# 标题、第X章/节/条/款/项、一、/1./(1)/A. 等）
+      即开启新 section，标题路径（如 ``[第三章 > 第二节]``）作为前缀注入；
+    - 二级：section 超过 chunk_size → 滑动窗口（chunk_overlap）切分，
+      每块保留前缀，长 section 内不丢上下文；
+    - 适用任何领域文本（法律条文、规章制度、技术文档、Markdown 等），
+      不预设领域关键词。
+    """
+    size = chunk_size or cfg.CHUNK_SIZE
+    overlap = cfg.CHUNK_OVERLAP if chunk_overlap is None else chunk_overlap
+    text = text.strip()
+    if not text:
+        return []
+
+    chunks: List[str] = []
+    title_stack: List[tuple] = []  # (level, title)
+    body: List[str] = []
+
+    def flush() -> None:
+        nonlocal body
+        content = "\n".join(body).strip()
+        body = []
+        if not content:
+            return
+        prefix = f"[{' > '.join(t for _, t in title_stack)}]\n" if title_stack else ""
+        if len(prefix) + len(content) <= size:
+            chunks.append(prefix + content)
+        else:
+            chunks.extend(_split_long_section(content, prefix, size, overlap))
+
+    for line in text.split("\n"):
+        hit = _match_structure_line(line)
+        if hit is None:
+            body.append(line)
+            continue
+        kind, level, title, rest = hit
+        flush()
+        if kind == "h":
+            # markdown 标题：清掉栈中平级条目(item, level=0)，保留更浅的 h 层级
+            title_stack = [(lv, t) for lv, t in title_stack if lv != 0 and lv < level]
+            title_stack.append((level, title))
+        else:  # item
+            depth = _item_depth(title)
+            if depth:
+                # 章节词（第X章/节/条）：保留更浅的 h 与更浅的章节词，清平级条目；
+                # 以 depth 作为栈层级，后续更深的章节词/标题可正确截断
+                title_stack = [(lv, t) for lv, t in title_stack if lv != 0 and lv < depth]
+                title_stack.append((depth, title))
+            else:
+                # 平级条目（一、/1./(1)）：移除栈尾的平级条目（保留更高层标题）
+                while title_stack and title_stack[-1][0] == 0:
+                    title_stack.pop()
+                title_stack.append((0, title))
+        if rest:
+            # 条目行「第X条 正文」：编号进标题路径，正文进 section 内容
+            body.append(rest)
+    flush()
+    return chunks
+
+
 # ── 阶段 2A: markdown 结构感知切分 ───────────────────────────────────────────
 
 def _flush_section(chunks: List[str], title_path: List[str], body: List[str], size: int) -> None:
-    """把一个标题区块落盘为若干 chunk；超长区块退回 recursive 拆分。"""
+    """把一个标题区块落盘为若干 chunk；超长区块滑动窗口拆分（带 overlap）。"""
     text = "\n".join(body).strip()
     if not text:
         return
@@ -203,8 +320,8 @@ def _flush_section(chunks: List[str], title_path: List[str], body: List[str], si
     if len(prefixed) <= size:
         chunks.append(prefixed)
     else:
-        for sub in split_recursive(text, size):
-            chunks.append(f"[{header}]\n{sub}" if header else sub)
+        prefix = f"[{header}]\n" if header else ""
+        chunks.extend(_split_long_section(text, prefix, size, cfg.CHUNK_OVERLAP))
 
 
 def split_markdown(text: str, chunk_size: int | None = None) -> List[str]:
@@ -309,9 +426,10 @@ def split_legal(text: str, chunk_size: int | None = None) -> List[str]:
             if len(body) <= size:
                 chunks.append(body)
             else:
-                # 超长条文（罕见）：递归切分，保留条文编号与章节前缀
+                # 超长条文（罕见）：滑动窗口二级切分（带 overlap），
+                # 保留条文编号与章节前缀——长条文内部不丢上下文
                 prefix = f"[{current_section}]\n" if current_section else ""
-                for sub in split_recursive(seg, size):
+                for sub in _split_long_section(seg, "", size, cfg.CHUNK_OVERLAP):
                     chunks.append(
                         prefix + (sub if sub.startswith(token) else f"{token} {sub}")
                     )
@@ -376,6 +494,19 @@ def parse_and_chunk(
                 section = c[1:c.index("]\n")]
             result.append((c, {**base_meta, "chunk_index": i, "section_path": section}))
 
+    elif strategy == "structured":
+        raw_chunks = split_structured(
+            full_text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+        result = []
+        for i, c in enumerate(raw_chunks):
+            section = ""
+            if c.startswith("[") and "]\n" in c:
+                section = c[1:c.index("]\n")]
+            result.append((c, {**base_meta, "chunk_index": i, "section_path": section}))
+
     elif strategy == "parent_child":
         pairs = split_parent_child(full_text, chunk_size=chunk_size)
         result = [
@@ -428,6 +559,7 @@ def chunk_parsed_document(
         result = _chunk_structured_document(
             document,
             chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
             base_meta=base_meta,
         )
     else:
@@ -526,6 +658,29 @@ def _chunk_parsed_text(
                 )
             )
         return chunks
+    if strategy == "structured":
+        texts = split_structured(
+            text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+        chunks: List[Chunk] = []
+        for index, value in enumerate(texts):
+            section = ""
+            if value.startswith("[") and "]\n" in value:
+                section = value[1:value.index("]\n")]
+            chunks.append(
+                (
+                    value,
+                    {
+                        **base_meta,
+                        "strategy": strategy,
+                        "chunk_index": index,
+                        "section_path": section,
+                    },
+                )
+            )
+        return chunks
     if strategy == "parent_child":
         pairs = split_parent_child(text, chunk_size=chunk_size)
         return [
@@ -547,11 +702,13 @@ def _chunk_structured_document(
     document,
     *,
     chunk_size: int | None,
+    chunk_overlap: int | None = None,
     base_meta: dict,
 ) -> List[Chunk]:
     from app.rag.parsers.models import ParsedBlockType
 
     size = chunk_size or cfg.CHUNK_SIZE
+    overlap = cfg.CHUNK_OVERLAP if chunk_overlap is None else chunk_overlap
     ignored_types = {
         ParsedBlockType.HEADER,
         ParsedBlockType.FOOTER,
@@ -620,7 +777,12 @@ def _chunk_structured_document(
             emit([content], pages, block_types, section)
             continue
 
-        pieces = split_recursive(content, chunk_size=size)
+        # 超长文本块（如整页正文）滑动窗口二级切分（带 overlap），
+        # 避免长块在聚合缓冲时被截断丢失上下文
+        if len(content) > size:
+            pieces = split_text(content, chunk_size=size, chunk_overlap=overlap)
+        else:
+            pieces = [content]
         for piece in pieces:
             candidate_length = len("\n\n".join((*buffer, piece)))
             if buffer and (section != buffer_section or candidate_length > size):
