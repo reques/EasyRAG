@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.services import graph_service as gs
 
@@ -42,14 +42,16 @@ def test_legal_chunks_extract_concepts_and_structure(monkeypatch):
 
     llm_calls = []
 
-    async def fake_llm(s, kb_id, chunks, sn, progress_callback=None):
+    async def fake_llm(s, kb_id, chunks, sn, progress_callback=None, existing_entities=None, existing_relations=None):
         llm_calls.append(sn)
         # LLM 语义抽取：概念实体 + 语义关系
         return {"entities": 2, "relations": 1}
 
     monkeypatch.setattr(gs, "_extract_graph_llm", fake_llm)
 
-    result = asyncio.run(gs.extract_graph_from_chunks(MagicMock(), KB_ID, chunks, "law.txt"))
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])  # 库级去重预查：无已有数据
+    result = asyncio.run(gs.extract_graph_from_chunks(session, KB_ID, chunks, "law.txt"))
     # 双层抽取：LLM 概念(2+1) + 规则结构(3 条文 + 1 章节 = 4 实体；3 归属 = 3 关系)
     assert llm_calls == ["law.txt"]
     assert result == {"entities": 2 + 4, "relations": 1 + 3}
@@ -58,13 +60,15 @@ def test_legal_chunks_extract_concepts_and_structure(monkeypatch):
 def test_generic_chunks_extract_llm_concepts(monkeypatch):
     calls = []
 
-    async def fake_llm(s, kb_id, chunks, sn, progress_callback=None):
+    async def fake_llm(s, kb_id, chunks, sn, progress_callback=None, existing_entities=None, existing_relations=None):
         calls.append(sn)
         return {"entities": 1, "relations": 0}
 
     monkeypatch.setattr(gs, "_extract_graph_llm", fake_llm)
 
     chunks = [("Machine Learning uses neural networks for training.", {"chunk_index": 0})]
-    asyncio.run(gs.extract_graph_from_chunks(MagicMock(), KB_ID, chunks, "doc.txt"))
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    asyncio.run(gs.extract_graph_from_chunks(session, KB_ID, chunks, "doc.txt"))
     # 双层抽取：LLM 概念抽取总是被调用
     assert calls == ["doc.txt"]

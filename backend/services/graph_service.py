@@ -78,6 +78,8 @@ async def _extract_graph_rule_based(
     progress_callback: Optional[
         Callable[[int, int, str], Awaitable[None]]
     ] = None,
+    existing_entities: Optional[set] = None,
+    existing_relations: Optional[set] = None,
 ) -> Dict[str, int]:
     """规则抽取法律条文图谱：条文/章节实体 + 归属/引用关系（毫秒级、免费）。
 
@@ -86,8 +88,9 @@ async def _extract_graph_rule_based(
     """
     total_entities = 0
     total_relations = 0
-    seen_entities: set = set()   # (name, type, source_file)
-    seen_relations: set = set()  # (source, relation, target)
+    # 库级 + 批内去重（实体按 (name, source_file)，关系按 (source, type, target, source_file)）
+    seen_entities: set = set(existing_entities or ())
+    seen_relations: set = set(existing_relations or ())
 
     total = len(chunks)
     if progress_callback:
@@ -120,7 +123,7 @@ async def _extract_graph_rule_based(
         ).strip()
         article_desc = (f"{title}；{body[:150]}" if title else body[:150]).strip()[:1024]
 
-        ent_key = (article_name, "article", source_name)
+        ent_key = (article_name, source_name)
         if ent_key not in seen_entities:
             seen_entities.add(ent_key)
             session.add(KnowledgeEntity(
@@ -142,7 +145,7 @@ async def _extract_graph_rule_based(
 
         # 章节实体 + 归属关系
         if section:
-            sec_key = (section, "chapter", source_name)
+            sec_key = (section, source_name)
             if sec_key not in seen_entities:
                 seen_entities.add(sec_key)
                 session.add(KnowledgeEntity(
@@ -162,7 +165,7 @@ async def _extract_graph_rule_based(
                 )
                 total_entities += 1
 
-            rel_key = (article_name, "属于", section)
+            rel_key = (article_name, "属于", section, source_name)
             if rel_key not in seen_relations:
                 seen_relations.add(rel_key)
                 session.add(KnowledgeRelation(
@@ -188,7 +191,7 @@ async def _extract_graph_rule_based(
             ref = "第" + ref_no + "条"
             if ref == article_no:
                 continue
-            rel_key = (article_name, "引用", ref)
+            rel_key = (article_name, "引用", ref, source_name)
             if rel_key not in seen_relations:
                 seen_relations.add(rel_key)
                 session.add(KnowledgeRelation(
@@ -328,6 +331,8 @@ async def _extract_graph_generic(
     progress_callback: Optional[
         Callable[[int, int, str], Awaitable[None]]
     ] = None,
+    existing_entities: Optional[set] = None,
+    existing_relations: Optional[set] = None,
 ) -> Dict[str, int]:
     """通用 NER 抽取（中英文）：jieba/正则抽实体 + 同 chunk 共现关系。
 
@@ -336,8 +341,9 @@ async def _extract_graph_generic(
     """
     total_entities = 0
     total_relations = 0
-    seen_entities = set()
-    seen_relations = set()
+    # 库级 + 批内去重（实体按 (name, source_file)，关系按 (source, type, target, source_file)）
+    seen_entities = set(existing_entities or ())
+    seen_relations = set(existing_relations or ())
 
     total = len(chunks)
     for i, (text, meta) in enumerate(chunks):
@@ -355,7 +361,7 @@ async def _extract_graph_generic(
 
         # 实体入库
         for name, etype, desc in entities[:6]:
-            ent_key = (name, etype, source_name)
+            ent_key = (name, source_name)
             if ent_key in seen_entities:
                 continue
             seen_entities.add(ent_key)
@@ -381,7 +387,7 @@ async def _extract_graph_generic(
         for a in range(len(top)):
             for b in range(a + 1, len(top)):
                 src, tgt = top[a], top[b]
-                rel_key = (src, "相关", tgt)
+                rel_key = (src, "相关", tgt, source_name)
                 if rel_key in seen_relations:
                     continue
                 seen_relations.add(rel_key)
@@ -432,16 +438,44 @@ async def extract_graph_from_chunks(
        正文，用于检索命中正文（不针对特定领域，是通用结构归属）。
     两者结果合并入库，互不覆盖。
     """
+    # 库级去重（2026-08-27）：查该知识库已存在的实体/关系 key，防止同文件
+    # 重复处理/多次抽取时插入重复行（与图谱查询接口的去重口径一致：
+    # 实体=(name, source_file)，关系=(source, relation_type, target, source_file)）。
+    from sqlalchemy import select as _select
+
+    existing_entities = set()
+    existing_relations = set()
+    rows = await session.execute(
+        _select(KnowledgeEntity.name, KnowledgeEntity.source_file).where(
+            KnowledgeEntity.knowledge_base_id == kb_id
+        )
+    )
+    for name, sf in rows:
+        existing_entities.add((name, sf or ""))
+    rows = await session.execute(
+        _select(
+            KnowledgeRelation.source_entity,
+            KnowledgeRelation.relation_type,
+            KnowledgeRelation.target_entity,
+            KnowledgeRelation.source_file,
+        ).where(KnowledgeRelation.knowledge_base_id == kb_id)
+    )
+    for s, rel, t, sf in rows:
+        existing_relations.add((s, rel, t, sf or ""))
+
     llm_result = await _extract_graph_llm(
-        session, kb_id, chunks, source_name, progress_callback
+        session, kb_id, chunks, source_name, progress_callback,
+        existing_entities, existing_relations,
     )
     if _looks_like_legal_chunks(chunks):
         structural = await _extract_graph_rule_based(
-            session, kb_id, chunks, source_name, progress_callback
+            session, kb_id, chunks, source_name, progress_callback,
+            existing_entities, existing_relations,
         )
     else:
         structural = await _extract_graph_generic(
-            session, kb_id, chunks, source_name, progress_callback
+            session, kb_id, chunks, source_name, progress_callback,
+            existing_entities, existing_relations,
         )
     return {
         "entities": llm_result["entities"] + structural["entities"],
@@ -457,6 +491,8 @@ async def _extract_graph_llm(
     progress_callback: Optional[
         Callable[[int, int, str], Awaitable[None]]
     ] = None,
+    existing_entities: Optional[set] = None,
+    existing_relations: Optional[set] = None,
 ) -> Dict[str, int]:
     """LLM 并发抽取：入库串行（AsyncSession 非并发安全），单 chunk 失败只记日志。"""
     from app.llm.client import get_llm_client
@@ -505,8 +541,9 @@ async def _extract_graph_llm(
     # 串行入库（AsyncSession 非并发安全）
     total_entities = 0
     total_relations = 0
-    seen_entities: set = set()   # (name, source_file) 跨 chunk 去重（同文件内同名合并为一个节点）
-    seen_relations: set = set()  # (source, relation, target) 跨 chunk 去重
+    # 库级 + 批内去重（实体 (name, source_file)；关系 (source, type, target, source_file)）
+    seen_entities: set = set(existing_entities or ())
+    seen_relations: set = set(existing_relations or ())
     for i, text, meta in valid:
         raw = extracted.get(i) or {}
         entities = raw.get("entities") or []
@@ -544,7 +581,7 @@ async def _extract_graph_llm(
             rel = (r.get("relation") or "").strip()
             if not (src and tgt and rel):
                 continue
-            rel_key = (src, rel, tgt)
+            rel_key = (src, rel, tgt, source_name)
             if rel_key in seen_relations:
                 continue
             seen_relations.add(rel_key)

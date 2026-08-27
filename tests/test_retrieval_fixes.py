@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.rag import enhanced_retriever as er
 from app.rag.graph_cache import graph_cache
@@ -15,6 +15,7 @@ from backend.storage.postgres.models_knowledge import KnowledgeEntity
 def _extract(chunks) -> tuple[MagicMock, uuid.UUID]:
     kb = uuid.uuid4()
     session = MagicMock()
+    session.execute = AsyncMock(return_value=[])  # 库级去重预查：无已有数据
     asyncio.run(gs.extract_graph_from_chunks(session, kb, chunks, "doc.txt"))
     return session, kb
 
