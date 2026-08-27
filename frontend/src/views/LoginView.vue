@@ -1,7 +1,7 @@
 <template>
   <div class="auth-page">
     <aside class="auth-intro">
-      <div class="auth-intro-brand"><span><Waypoints :size="20" /></span> EasyRAG</div>
+      <div class="auth-intro-brand"><span><Asterisk :size="22" :stroke-width="2.1" /></span> EasyRAG</div>
       <div class="auth-intro-copy">
         <span class="auth-kicker">YOUR KNOWLEDGE, IN MOTION</span>
         <h2>让分散的知识，<br />成为可靠的答案。</h2>
@@ -11,7 +11,7 @@
     </aside>
     <div class="auth-card">
       <div class="auth-header">
-        <span class="auth-logo"><Waypoints :size="23" /></span>
+        <span class="auth-logo"><Asterisk :size="24" :stroke-width="2.1" /></span>
         <span class="auth-eyebrow">WELCOME BACK</span>
         <h1>欢迎回来</h1>
         <p>登录后继续探索你的知识空间</p>
@@ -40,7 +40,7 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { ShieldCheck, Waypoints } from 'lucide-vue-next'
+import { Asterisk, ShieldCheck } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()

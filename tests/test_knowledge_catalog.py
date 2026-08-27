@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.agents.workers.base import TaskBrief
-from app.agents.workers.rag_worker import RagWorker
 from app.graph import nodes
 from app.services.agent_service import AgentService
 from app.services.knowledge_catalog import (
@@ -35,11 +33,6 @@ class CapturingLLM:
     def chat_sync(self, messages, **_kwargs):
         self.messages = messages
         return "catalog-aware answer"
-
-
-class EmptyRetriever:
-    def retrieve(self, _query, top_k=4, knowledge_base_ids=None):
-        return []
 
 
 def test_catalog_formatter_exposes_names_and_treats_metadata_as_data():
@@ -118,19 +111,38 @@ def test_stream_context_receives_catalog(monkeypatch):
     assert "SkelHCC.pdf" in context["messages"][0]["content"]
 
 
-def test_multi_agent_rag_worker_receives_catalog():
-    llm = CapturingLLM()
-    worker = RagWorker()
-    worker._retriever = EmptyRetriever()
-    worker.llm = llm
+def test_deep_agent_receives_catalog(monkeypatch):
+    """Deep 路径等价物（取代 RagWorker）：_run_deep 把知识目录注入 system 消息。"""
+    from langchain_core.messages import AIMessage
 
-    report = worker.run(TaskBrief(
-        task_id="task-1",
-        goal="当前知识库有什么文件",
-        knowledge_base_ids=[KB_ID],
+    from app.services.agent_service import AgentService, SessionStore
+
+    captured: dict = {}
+
+    class _FakeAgent:
+        def stream(self, inputs, config=None, stream_mode="values"):
+            captured["messages"] = inputs["messages"]
+            yield {"messages": [AIMessage(content="catalog-aware answer")]}
+
+    monkeypatch.setattr("app.agents.deep.agent.get_main_agent", lambda: _FakeAgent())
+
+    service = AgentService.__new__(AgentService)
+    service._sessions = SessionStore(ttl=3600)
+    result = service._run_deep(
+        "当前知识库有什么文件",
+        history=[],
+        user_id=None,
+        knowledge_base_ids=None,
         knowledge_catalog=CATALOG,
-    ))
+    )
 
-    assert report.ok()
-    assert "动作识别论文库" in llm.messages[1]["content"]
-    assert "SkelHCC.pdf" in llm.messages[1]["content"]
+    assert result["final_answer"] == "catalog-aware answer"
+    sys_contents = [
+        m.get("content", "")
+        for m in captured["messages"]
+        if m.get("role") == "system"
+    ]
+    assert any(
+        "动作识别论文库" in content and "SkelHCC.pdf" in content
+        for content in sys_contents
+    )

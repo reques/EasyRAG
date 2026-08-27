@@ -75,6 +75,12 @@ def test_run_subagent_passes_through_steps(monkeypatch):
     assert ("research-agent/generate", "子智能体生成回答中...") in steps
     thought_artifacts = [a for a in artifacts if a[0] == "thought"]
     assert thought_artifacts and thought_artifacts[0][1] == "research-agent/reason"
+    tool_artifacts = [a for a in artifacts if a[0] == "tool"]
+    assert tool_artifacts and tool_artifacts[0][1] == "research-agent/tool"
+    assert '{"query": "x"}' in tool_artifacts[0][3]
+    tool_result_artifacts = [a for a in artifacts if a[0] == "tool_result"]
+    assert tool_result_artifacts and tool_result_artifacts[0][2] == "工具返回"
+    assert "检索结果" in tool_result_artifacts[0][3]
 
 
 def test_run_subagent_without_observers_unchanged(monkeypatch):

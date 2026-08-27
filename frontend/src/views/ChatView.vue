@@ -24,7 +24,7 @@
       <div class="chat-column">
         <!-- 空状态 -->
         <div v-if="messages.length === 0 && !sending" class="chat-empty">
-          <div class="chat-empty-mark"><Sparkles :size="22" /></div>
+          <div class="chat-empty-mark"><Asterisk :size="26" :stroke-width="1.9" /></div>
           <span class="chat-empty-eyebrow"><i></i> KNOWLEDGE ASSISTANT</span>
           <h3>从一个好问题开始</h3>
           <p>连接知识库、联网搜索与多智能体，为你梳理复杂信息。</p>
@@ -61,7 +61,7 @@
               :stopped="!!msg.stopped"
             />
             <AgentActivity
-              v-if="msg.steps && msg.steps.length"
+              v-if="(msg.steps && msg.steps.length) || (msg.artifacts && msg.artifacts.length)"
               :steps="msg.steps"
               :artifacts="msg.artifacts"
               :running="msg.stepsLoading"
@@ -161,6 +161,7 @@
           v-model="input"
           @keydown.enter.exact.prevent="send"
           @paste="onPaste"
+          placeholder="和 EasyRAG 一起思考…"
           rows="1"
           ref="inputEl"
           @input="autoResize"
@@ -350,6 +351,7 @@
             <span class="task-status-icon">
               <CheckCircle2 v-if="t.status === 'done'" :size="14" />
               <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
+              <span v-else-if="t.status === 'skipped'" class="task-skip-mark" title="已跳过">⏭</span>
               <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
               <span v-else class="task-pending-dot"></span>
             </span>
@@ -378,6 +380,7 @@
               <span class="agent-state">
                 <CheckCircle2 v-if="t.status === 'done'" :size="14" />
                 <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
+                <span v-else-if="t.status === 'skipped'" class="task-skip-mark" title="已跳过">⏭</span>
                 <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
                 <span v-else class="task-pending-dot"></span>
                 <ChevronDown v-if="t.expanded" :size="14" />
@@ -396,6 +399,7 @@
                 <div class="agent-output-content" v-html="renderContent(t.output)"></div>
               </div>
               <div v-else-if="t.status === 'running'" class="agent-waiting">正在执行并回传结果…</div>
+              <div v-else-if="t.status === 'skipped'" class="agent-waiting">已跳过（{{ t.error || '依赖任务未成功' }}）</div>
               <div v-else-if="t.status === 'pending'" class="agent-waiting">等待调度</div>
             </div>
           </article>
@@ -599,6 +603,7 @@ import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
 import {
+  Asterisk,
   ArrowUp,
   ArrowUpRight,
   Bot,
@@ -1214,6 +1219,7 @@ function frontendTaskStatus(status) {
   if (status === 'completed' || status === 'done' || status === 'done_with_concerns') return 'done'
   if (status === 'failed' || status === 'error' || status === 'blocked') return 'error'
   if (status === 'running') return 'running'
+  if (status === 'skipped') return 'skipped'
   return 'pending'
 }
 
@@ -1481,7 +1487,9 @@ async function send() {
         const task = findTask(ev.task_id)
         if (task) {
           task.output = ev.content || ''
-          task.error = ev.status === 'error' ? ev.content : ''
+          task.error = (ev.status === 'error' || ev.status === 'skipped')
+            ? (ev.error || ev.content)
+            : ''
           task.status = frontendTaskStatus(ev.status)
         }
         const wm = messages.value[msgIndex]
@@ -1554,6 +1562,15 @@ async function send() {
         taskPanel.value.status = taskPanel.value.tasks.some(t => t.status === 'error')
           ? 'failed'
           : 'completed'
+        // DeepAgents 委派落库在流结束后才创建 run：done 携带 run_id 时回填面板/消息元数据
+        if (ev.run_id) {
+          taskPanel.value.run_id = ev.run_id
+          const dm = messages.value[msgIndex]
+          messages.value[msgIndex] = {
+            ...dm,
+            meta: { ...(dm.meta || {}), runId: ev.run_id },
+          }
+        }
       } else if (ev.type === 'error') {
         gotError = ev.detail || '生成失败'
         const em = messages.value[msgIndex]

@@ -36,6 +36,24 @@ def _mcp_tool_name(server_name: str, tool_name: str) -> str:
     return f"mcp_{server_name}_{tool_name}"
 
 
+def _mcp_tool_metadata(tool_name: str, description: str) -> Dict[str, Any]:
+    """注册时从工具名/描述提取发现元数据（阶段 2，v1 轻量规则）。
+
+    tags 取自工具名的单词段（供 ``@tag`` 绑定与词匹配）；scenarios 取
+    description 的首两个短句（供任务描述子串匹配）。"""
+    import re as _re
+
+    tags = [
+        w for w in _re.split(r"[^a-z0-9]+", tool_name.lower()) if len(w) > 2
+    ]
+    scenarios = [
+        seg.strip()[:60]
+        for seg in _re.split(r"[。.;；\n]", description or "")
+        if seg.strip()
+    ][:2]
+    return {"scenarios": scenarios, "tags": tags}
+
+
 class MCPServerHandle:
     """单个 MCP server 的运行句柄：常驻 loop 线程 + 连接会话 + 已注册工具。"""
 
@@ -198,6 +216,13 @@ class MCPServerHandle:
             arg_schema: Dict[str, Any] = {}
             props = getattr(t, "inputSchema", {}) or {}
             for arg_name, meta in (props.get("properties") or {}).items():
+                # 跳过下划线开头的参数（不符合 Pydantic/JSON Schema 规范）
+                if arg_name.startswith("_"):
+                    logger.debug(
+                        "[mcp:%s] skip parameter %r in tool %r (leading underscore)",
+                        cfg.name, arg_name, t.name
+                    )
+                    continue
                 arg_schema[arg_name] = (
                     str(meta.get("type", "string")),
                     str(meta.get("description", "")),
@@ -217,6 +242,11 @@ class MCPServerHandle:
                     fn=make_fn(t.name, self),
                     arg_schema=arg_schema,
                     check_fn=lambda: self.session is not None,
+                    # MCP 桥接工具自带 120s 超时（call_tool_sync），外层不再包裹
+                    timeout_s=0,
+                    metadata=_mcp_tool_metadata(
+                        t.name, getattr(t, "description", "") or ""
+                    ),
                 )
             )
             self.registered_tools.append(full_name)

@@ -7,11 +7,17 @@
 SubAgent 用 langgraph ``create_react_agent`` 构建（DeepAgents 底层同款
 harness），每次 invoke 独立 state —— 子 Agent 上下文天然与主 Agent 隔离，
 结果以纯文本返回，不污染主 Agent state。
+
+tools 声明语法（2026-08-26 阶段 2 扩展，见 ``resolve_tool_spec``）：
+  - 普通名称 ``"web_search"``；  - ``"*"`` 全量；
+  - ``"except:<name>"`` 排除；   - ``"@tag"`` 按 metadata 能力标签。
+权限硬边界不变：候选池始终是 registry.list_all()（已过 check_fn + skills
+白名单 + KB 授权 ContextVar），动态绑定只能收窄不能放大。
 """
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,7 +34,44 @@ class SubAgentConfig:
     name: str                    # 唯一标识（task 工具的 subagent_type）
     description: str             # 能力描述（供主 Agent 选择）
     system_prompt: str           # 子 Agent 系统提示
-    tools: Tuple[str, ...] = ()  # 工具白名单（注册表内名称；tuple 保证 hashable）
+    # 工具白名单声明：普通名 / "*" / "except:<name>" / "@tag"（tuple 保证 hashable）
+    tools: Tuple[str, ...] = ()
+
+
+def resolve_tool_spec(specs: Tuple[str, ...]) -> Tuple[str, ...]:
+    """把 SubAgentConfig.tools 声明解析为实际工具名列表（阶段 2）。
+
+    语义：
+      - ``"*"``        → 全量可用工具；
+      - ``"@tag"``     → metadata["tags"] 含该标签的工具；
+      - ``"except:x"`` → 从结果中剔除（可与任意包含语法组合）；
+      - 普通名       → 已注册且可用则保留，未注册静默忽略（与旧行为一致）。
+    候选池为 ``registry.list_all()``——已过 check_fn / skills 白名单过滤，
+    解析结果只能收窄权限，不能放大。返回按名称排序的 tuple（可作缓存指纹）。"""
+    from app.tools.registry import get_tool_registry
+
+    available = get_tool_registry().list_all()
+    names = {t.name for t in available}
+    include: set = set()
+    exclude: set = set()
+    for raw in specs:
+        item = str(raw).strip()
+        if not item:
+            continue
+        if item.startswith("except:"):
+            exclude.add(item[len("except:"):].strip())
+        elif item == "*":
+            include |= names
+        elif item.startswith("@"):
+            tag = item[1:].lower()
+            include |= {
+                t.name
+                for t in available
+                if tag in {str(x).lower() for x in (t.metadata or {}).get("tags", [])}
+            }
+        elif item in names:
+            include.add(item)
+    return tuple(sorted(include - exclude))
 
 
 # ── 内置默认 SubAgent（可被 DEEP_SUBAGENTS_FILE 覆盖）────────────────────────
@@ -163,14 +206,18 @@ def subagents_prompt() -> str:
     return "\n".join(lines) or "（无可用子智能体）"
 
 
-# 生产路径缓存（按 subagent name；测试注入 mock 时绕过缓存）
-_subagent_cache: Dict[str, Any] = {}
+# 生产路径缓存：key = (subagent 名, 解析后工具集指纹)——工具集变化时重建；
+# 测试注入 mock 时绕过缓存（model 非 None）
+_subagent_cache: Dict[Tuple[str, Tuple[str, ...]], Any] = {}
 
 
 def build_subagent(config: SubAgentConfig, model=None):
     """构建 SubAgent 的 langgraph compiled graph（create_react_agent）。
 
-    - 工具子集 = 配置的 tools 白名单（经注册表转换，技能/可用性检查生效）
+    - 工具子集 = ``resolve_tool_spec(config.tools)`` 解析结果（经注册表转换，
+      技能/可用性检查生效）
+    - 缓存 key 含解析后的工具集指纹：工具集变化（配置改动 / 技能白名单 /
+      MCP 动态注册）时自动重建（阶段 2）
     - 每次 invoke 独立 state → 子 Agent 上下文隔离
     - model: 测试可注入 mock（此时不缓存）；None = 项目配置的真实模型
     """
@@ -179,23 +226,94 @@ def build_subagent(config: SubAgentConfig, model=None):
     from app.agents.deep.llm import get_langchain_model
     from app.agents.deep.tools import registry_to_langchain_tools
 
-    if model is None and config.name in _subagent_cache:
-        return _subagent_cache[config.name]
+    tool_names = resolve_tool_spec(config.tools)
+    cache_key = (config.name, tool_names)
+    cacheable = model is None  # 修复（2026-08-26 阶段 2）：model 随后会被重赋值，
+    # 旧版 `if model is None:` 存入分支恒不成立——缓存从不生效（每次重建）
+    if cacheable and cache_key in _subagent_cache:
+        return _subagent_cache[cache_key]
     if model is None:
         model = get_langchain_model()
-    tools = registry_to_langchain_tools(config.tools)
+    tools = registry_to_langchain_tools(list(tool_names))
     logger.info(
-        "[deepagents] build subagent %s: %d tools", config.name, len(tools)
+        "[deepagents] build subagent %s: %d tools %s",
+        config.name, len(tools), list(tool_names),
     )
     agent = create_react_agent(
         model=model,
         tools=tools,
-        prompt=config.system_prompt,
+        # 阶段 4：统一追加结构化尾部约定（外部配置文件也自动生效）
+        prompt=config.system_prompt + RESULT_TAIL_PROMPT,
         name=f"subagent_{config.name}",
     )
-    if model is None:
-        _subagent_cache[config.name] = agent
+    if cacheable:
+        _subagent_cache[cache_key] = agent
     return agent
+
+
+def _maybe_narrow_tools_by_task(
+    config: SubAgentConfig, task_description: str
+) -> SubAgentConfig:
+    """执行时动态收窄工具集（阶段 2，DEEP_DYNAMIC_TOOLS 开关，默认关闭）。
+
+    按任务描述 ``discover()`` 出相关工具，与配置解析结果取交集（只收窄）；
+    discover 无命中或交集为空时保留原配置（避免子智能体无工具可用）。"""
+    if not get_settings().DEEP_DYNAMIC_TOOLS:
+        return config
+    from app.tools.registry import get_tool_registry
+
+    static_names = set(resolve_tool_spec(config.tools))
+    discovered = {t.name for t in get_tool_registry().discover(task_description)}
+    if not discovered:
+        return config
+    narrowed = tuple(sorted(static_names & discovered))
+    if not narrowed:
+        return config
+    if tuple(narrowed) == tuple(sorted(static_names)):
+        return config
+    logger.info(
+        "[deepagents] dynamic tool binding for %s: %s -> %s",
+        config.name, sorted(static_names), list(narrowed),
+    )
+    return replace(config, tools=narrowed)
+
+
+# ── 结构化尾部（2026-08-26 阶段 4）：供主 Agent 决策 replan ─────────────
+
+RESULT_TAIL_PROMPT = """
+
+输出约定：回答正文结束后，另起一行追加一个 JSON 尾块（不要包在代码块里）：
+{"status": "completed|partial|failed", "concerns": "遗留问题/不确定点，无则空字符串", "suggested_followup": "建议的后续动作，无则空字符串"}
+"""
+
+
+def parse_result_tail(text: str) -> Dict[str, Any]:
+    """解析子智能体回答的结构化 JSON 尾块（阶段 4）。
+
+    约定：回答末尾追加 ``{"status": ..., "concerns": ..., "suggested_followup": ...}``。
+    解析失败回退纯文本（不阻断主流程）：status="unknown"，raw 携带尾部原文。"""
+    import json as _json
+    import re as _re
+
+    tail = (text or "").strip()
+    if not tail:
+        return {"status": "unknown", "concerns": "", "suggested_followup": "", "raw": ""}
+    # 取最后一个以 } 结尾的 {...} 片段（容忍尾块前有多余文本）
+    candidates = _re.findall(r"\{[^{}]*\"status\"[^{}]*\}", tail, flags=_re.DOTALL)
+    for cand in reversed(candidates):
+        try:
+            parsed = _json.loads(cand)
+        except Exception:
+            continue
+        if isinstance(parsed, dict) and "status" in parsed:
+            return {
+                "status": str(parsed.get("status", "unknown")),
+                "concerns": str(parsed.get("concerns", "") or ""),
+                "suggested_followup": str(parsed.get("suggested_followup", "") or ""),
+                "raw": cand,
+            }
+    return {"status": "unknown", "concerns": "", "suggested_followup": "",
+            "raw": tail[-300:]}
 
 
 def run_subagent(
@@ -219,6 +337,8 @@ def run_subagent(
     """
     from app.agents.deep.observe import get_subagent_observers
 
+    # 阶段 2：执行时动态收窄工具集（开关默认关闭；只收窄不放大）
+    config = _maybe_narrow_tools_by_task(config, task_description)
     agent = build_subagent(config, model=model)
     on_step, on_artifact = get_subagent_observers() or (None, None)
     final_state = None
@@ -243,15 +363,15 @@ def run_subagent(
             _thought = " ".join(thought.split())[:200]
             if len(thought) > 200:
                 _thought += "…"
+            _args = tc[0].get("args") or {}
+            try:
+                import json
+                _args_text = json.dumps(_args, ensure_ascii=False)
+            except Exception:
+                _args_text = str(_args)
             if on_step:
                 if _thought:
                     on_step(f"{config.name}/reason", _thought)
-                _args = tc[0].get("args") or {}
-                try:
-                    import json
-                    _args_text = json.dumps(_args, ensure_ascii=False)
-                except Exception:
-                    _args_text = str(_args)
                 _args_short = " ".join(_args_text.split())[:120]
                 if len(_args_text) > 120:
                     _args_short += "…"
@@ -260,13 +380,24 @@ def run_subagent(
                     f"调用 {tool_name} {_args_short}".rstrip(),
                 )
             if on_artifact:
+                # 阶段 6：子智能体的工具调用（含参数）与推理一并实时透传，
+                # 前端在同一会话内可见子 Agent 的完整动作链。
                 on_artifact(
                     "thought", f"{config.name}/reason", "子智能体推理", _thought
+                )
+                on_artifact(
+                    "tool", f"{config.name}/tool",
+                    f"调用 {tool_name}", _args_text[:800],
                 )
         elif mtype == "tool":
             t_content = str(getattr(last, "content", "") or "")
             if on_step:
                 on_step(f"{config.name}/tool_done", f"工具返回: {t_content[:120]}")
+            if on_artifact:
+                on_artifact(
+                    "tool_result", f"{config.name}/tool", "工具返回",
+                    " ".join(t_content.split())[:300],
+                )
         elif mtype == "ai" and getattr(last, "content", ""):
             if on_step:
                 on_step(f"{config.name}/generate", "子智能体生成回答中...")

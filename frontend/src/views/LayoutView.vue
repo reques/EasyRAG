@@ -3,7 +3,7 @@
     <!-- 侧边栏 -->
     <aside class="sidebar">
       <div class="sidebar-brand" title="EasyRAG 首页" @click="$router.push('/')">
-        <span class="brand-logo"><Waypoints :size="17" /></span>
+        <span class="brand-logo"><Asterisk :size="20" :stroke-width="2.1" /></span>
         <span class="brand-copy">
           <span class="brand-name">EasyRAG</span>
           <small>KNOWLEDGE OS</small>
@@ -123,7 +123,7 @@
 <script setup>
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Clock3, LibraryBig, LogOut, MessagesSquare, MoreHorizontal, Plus, Sparkles, Trash2, Waypoints } from 'lucide-vue-next'
+import { Asterisk, Clock3, LibraryBig, LogOut, MessagesSquare, MoreHorizontal, Plus, Sparkles, Trash2 } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
 import api from '../api'

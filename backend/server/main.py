@@ -179,6 +179,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # OpenTelemetry 请求根 span（阶段 5：可选依赖，未安装时 no-op 原样返回；
+    # 需在 CORS 之后 add，保证根 span 位于最外层）
+    from app.observability.tracing import instrument_app
+    instrument_app(application)
+
     # =========================================================================
     # 阶段 1 新路由
     # =========================================================================

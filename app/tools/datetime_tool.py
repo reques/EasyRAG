@@ -87,4 +87,9 @@ TOOL = ToolDefinition(
         "timestamp": ("number", "Unix timestamp in seconds (optional)", False),
     },
     check_fn=_check,
+    # 阶段 2：工具发现元数据（适用场景关键词 + 能力标签）
+    metadata={
+        "scenarios": ["当前时间", "今天", "现在几点", "日期", "时间戳", "date", "time", "today"],
+        "tags": ["time", "datetime"],
+    },
 )

@@ -97,4 +97,9 @@ TOOL = ToolDefinition(
         "text": ("string", "Input text to process", True),
     },
     check_fn=_check,
+    # 阶段 2：工具发现元数据（适用场景关键词 + 能力标签）
+    metadata={
+        "scenarios": ["字数", "字符数", "单词数", "句子数", "文本处理", "文本统计", "大写", "小写", "反转", "提取数字"],
+        "tags": ["text", "processing"],
+    },
 )
