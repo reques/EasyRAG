@@ -140,7 +140,7 @@ class Settings(BaseSettings):
     #   recursive    递归分隔符切分（段落→句子→词，尽量在语义边界断开）
     #   markdown     Markdown 结构感知（按标题层级聚合，代码块不拆）
     #   parent_child 父子分块（小块索引用于检索，返回所属大块作为上下文）
-    CHUNK_STRATEGY: Literal["fixed", "recursive", "markdown", "parent_child", "legal"] = "recursive"
+    CHUNK_STRATEGY: Literal["fixed", "recursive", "markdown", "parent_child", "legal", "structured"] = "recursive"
     PARENT_CHUNK_SIZE: int = 1500   # parent_child 策略下父块（上下文块）大小
 
     # Document parsing / MinerU
