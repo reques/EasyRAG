@@ -11,6 +11,9 @@ class FakeSession:
     def add(self, _item) -> None:
         pass
 
+    async def execute(self, *_args, **_kwargs):
+        return []  # 库级去重预查：无已有数据
+
 
 @pytest.mark.asyncio
 async def test_graph_extraction_reports_before_and_after_each_chunk(monkeypatch):

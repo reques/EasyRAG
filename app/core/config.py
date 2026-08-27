@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     GRAPH_MAX_CHUNKS_PER_FILE: int = 30    # 单文件最多送入抽取的 chunk 数（成本控制）
     GRAPH_LLM_CONCURRENCY: int = 6          # 图谱抽取并发调用 LLM 的并发数（串行 30 次太慢，并发提速）
     GRAPH_QUERY_TOP_ENTITIES: int = 3      # 检索增强时最多展开的实体数
+    # 文件索引消息队列（Redis Stream，2026-08-27）
+    INGESTION_CONCURRENCY: int = 3          # 索引 worker 同时处理的最大文件数（全局闸门）
+    INGESTION_PENDING_CLAIM_MS: int = 1800000  # pending 消息认领超时（毫秒，默认 30 分钟；
+    #   必须大于单文件处理时长，否则处理中的消息会被 XAUTOCLAIM 误认领重跑）
+    INGESTION_LOCK_TTL: int = 1800          # 单文件处理锁 TTL（秒，默认 30 分钟）
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
     # 阶段 2A: 分块策略

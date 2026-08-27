@@ -92,6 +92,36 @@ class GraphCache:
             self._entity_relations[_ek(kb_id, source_file, source)].append(idx)
             self._entity_relations[_ek(kb_id, source_file, target)].append(idx)
 
+    def delete_by_source(self, kb_id: str, source_file: Optional[str]) -> int:
+        """删除某文件（source_file）的全部实体与关系（文件删除时同步清理）。
+
+        与实体身份命名空间一致：只清 (kb_id, source_file, *) 的数据，
+        不影响其他文件。返回删除的实体数。
+        """
+        sf = source_file or ""
+        with self._lock:
+            # 1. 实体 + 实体关系索引
+            removed = 0
+            for key in [k for k in self._entities if k[0] == kb_id and k[1] == sf]:
+                del self._entities[key]
+                self._entity_relations.pop(key, None)
+                removed += 1
+            # 2. 关系（source_file 归属该文件的）
+            keep_idx = [
+                idx for idx, rel in enumerate(self._relations)
+                if not (rel.get("kb_id") == kb_id and (rel.get("source_file") or "") == sf)
+            ]
+            if len(keep_idx) != len(self._relations):
+                self._relations = [self._relations[i] for i in keep_idx]
+                # 索引随关系列表重建（原 idx 已失效）
+                self._entity_relations = defaultdict(list)
+                for i, rel in enumerate(self._relations):
+                    self._entity_relations[_ek(rel["kb_id"], rel.get("source_file"), rel["source"])].append(i)
+                    self._entity_relations[_ek(rel["kb_id"], rel.get("source_file"), rel["target"])].append(i)
+            if removed:
+                logger.info("[graph_cache] deleted %d entities of '%s' (kb=%s)", removed, sf, kb_id)
+            return removed
+
     def match_entities(
         self,
         keywords: List[str],

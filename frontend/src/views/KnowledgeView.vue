@@ -483,7 +483,7 @@
               <p>实体与关系网络：颜色区分实体类型，节点大小代表连接度，点击节点查看详情。</p>
             </div>
             <div class="kbw-heading-actions">
-              <span v-if="graphData" class="kbw-module-status"><CheckCircle2 :size="14" /> {{ graphData.entities.length }} 实体 · {{ graphData.relations.length }} 关系</span>
+              <span v-if="filteredGraphData" class="kbw-module-status"><CheckCircle2 :size="14" /> {{ filteredGraphData.entities.length }} 实体 · {{ filteredGraphData.relations.length }} 关系</span>
               <button type="button" class="kbw-secondary-button" @click="loadGraph"><RefreshCw :size="14" /> 刷新</button>
             </div>
           </div>
@@ -956,15 +956,19 @@ function fileColor(sourceFile) {
 }
 
 // ── 按文件筛选（2026-08-25）：勾选 = 图中展示该文件的实体与关系 ──────────
-// 文件列表从图谱数据的 source_file 动态生成（含 ''=未知文件，老数据无来源）；
+// 文件列表从图谱数据的 source_file 动态生成（实体+关系双向收集，保证即使
+// 结构类实体被后端过滤，有关系的文件仍出现在选项里）；无 source_file 的数据
+// 不产生选项且永远不展示（2026-08-27：老数据已回填归属，剩余 NULL 直接隐藏）。
 // 过滤在前端完成（数据已全量返回），切换勾选只重渲染 echarts，不重新请求。
 const fileOptions = computed(() => {
   const files = []
   const seen = new Set()
-  for (const e of (graphData.value?.entities || [])) {
-    const f = e.source_file || ''
-    if (!seen.has(f)) { seen.add(f); files.push(f) }
+  const push = (f) => {
+    const key = f || ''
+    if (key && !seen.has(key)) { seen.add(key); files.push(key) }
   }
+  for (const e of (graphData.value?.entities || [])) push(e.source_file)
+  for (const r of (graphData.value?.relations || [])) push(r.source_file)
   return files
 })
 const selectedFiles = ref([])
@@ -981,15 +985,34 @@ function toggleAllFiles() {
   selectedFiles.value = allFilesSelected.value ? [] : [...fileOptions.value]
 }
 // 过滤后的图谱数据（实体/关系按 source_file 归属过滤）。
-// 老数据 source_file 为空的无法归属 → 始终保留（不参与文件筛选，防止关系被误杀）；
-// 渲染时 resolveEdgeKey 会自动丢弃端点不在图中的边。
+// 全不选 = 明确不想看任何文件 → 空图（配合「未勾选任何文件」空态提示，数量归零）。
+// 无 source_file 的数据（无法归属）一律过滤，不进入图与统计。
+// 同 key 去重（实体=文件+名，关系=文件+源+类型+目标）：数据层如有残留重复，
+// 统计与渲染仍保持一致（2026-08-27，与后端抽取去重口径一致）。
 const filteredGraphData = computed(() => {
   const data = graphData.value
   if (!data) return null
+  if (selectedFiles.value.length === 0) {
+    return { entities: [], relations: [] }
+  }
   const sel = new Set(selectedFiles.value)
+  const seenE = new Set()
+  const seenR = new Set()
   return {
-    entities: data.entities.filter((e) => !e.source_file || sel.has(e.source_file)),
-    relations: data.relations.filter((r) => !r.source_file || sel.has(r.source_file)),
+    entities: data.entities.filter((e) => {
+      if (!e.source_file || !sel.has(e.source_file)) return false
+      const k = JSON.stringify([e.source_file, e.name])
+      if (seenE.has(k)) return false
+      seenE.add(k)
+      return true
+    }),
+    relations: data.relations.filter((r) => {
+      if (!r.source_file || !sel.has(r.source_file)) return false
+      const k = JSON.stringify([r.source_file, r.source_entity, r.relation_type, r.target_entity])
+      if (seenR.has(k)) return false
+      seenR.add(k)
+      return true
+    }),
   }
 })
 watch(selectedFiles, () => {
