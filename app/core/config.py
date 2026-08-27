@@ -189,7 +189,7 @@ class Settings(BaseSettings):
     MAX_PLAN_STEPS: int = 5          # max sub-tasks per plan
     SESSION_TTL: int = 3600          # seconds to keep session state
     # 执行路径: auto=智能路由(单 Agent/多智能体按规则分流) | single=仅单 Agent |
-    # multi=无条件多智能体(Orchestrator-Worker) | deepagents=DeepAgents 主 Agent+SubAgent
+    # multi=deepagents 的兼容别名(已废弃) | deepagents=DeepAgents 主 Agent+SubAgent
     AGENT_MODE: Literal["auto", "single", "multi", "deepagents"] = "auto"
 
     # ── DeepAgents (AGENT_MODE=deepagents) ────────────────────────────────
@@ -199,6 +199,9 @@ class Settings(BaseSettings):
     # 主 Agent 与 task 委派 SubAgent 的 LangGraph recursion_limit
     DEEP_MAIN_RECURSION_LIMIT: int = 20
     DEEP_SUBAGENT_RECURSION_LIMIT: int = 20
+    # 阶段 2：委派时按任务描述 discover() 动态收窄子智能体工具集（默认关闭；
+    # 只能收窄不能放大——仍需通过配置白名单与请求级权限裁决）
+    DEEP_DYNAMIC_TOOLS: bool = False
 
     # ── Answer quality ───────────────────────────────────────────────────
     ANSWER_VALIDATION_ENABLED: bool = True

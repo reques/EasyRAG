@@ -11,7 +11,7 @@ EasyRAG 是一个面向真实业务场景的**企业知识库智能问答平台*
 
 与"跑通 demo 即止"的玩具项目的区别：多用户 JWT 认证、文档管理、SSE 流式对话、知识图谱可视化、检索评估（确定性指标 + 可选 Ragas）、可配置 Skill 系统、MCP 外部工具接入、旁路部署的 MinerU 文档解析服务。
 
-**一句话概括全链路**：用户提问 → FastAPI 路由（JWT 鉴权）→ AgentService 三选一（LangGraph 单 Agent / Orchestrator 多智能体 / DeepAgents）→ 意图识别分流 → 检索（增强五步流水线或传统向量检索）→ LLM 生成 → 校验 → SSE 逐 token 推给前端。
+**一句话概括全链路**：用户提问 → FastAPI 路由（JWT 鉴权）→ AgentService 分流（LangGraph 单 Agent / DeepAgents 多智能体）→ 意图识别分流 → 检索（增强五步流水线或传统向量检索）→ LLM 生成 → 校验 → SSE 逐 token 推给前端。
 
 ---
 
@@ -21,7 +21,7 @@ EasyRAG 是一个面向真实业务场景的**企业知识库智能问答平台*
 |----|------|
 | 前端 | Vue 3.5 · Vite 6 · Pinia · Axios · lucide 图标 · ECharts 5（图谱） |
 | 后端 | FastAPI（async）· SQLAlchemy 2.0 async · LangGraph 工作流 |
-| Agent | LangGraph StateGraph（意图分流 / ReAct 循环 / 校验重试）· Orchestrator + Worker + Blackboard · DeepAgents 主 Agent + SubAgent |
+| Agent | LangGraph StateGraph（意图分流 / ReAct 循环 / 校验重试）· DeepAgents 统一多智能体（主 Agent + SubAgent + DAG 委派 + 结构化黑板） |
 | 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 配置）· Redis · MinIO |
 | 向量 | Milvus 2.5（etcd + MinIO 依赖）· BGE-M3 embedding（本地 / Ollama / API） |
 | LLM | DeepSeek / MiniMax / Qwen(DashScope) / GLM / 任意 OpenAI 兼容 API（自定义 base_url + 加密 API Key） |
@@ -52,9 +52,9 @@ EasyRAG 是一个面向真实业务场景的**企业知识库智能问答平台*
 │ app/agents     │ │ app/rag      │ │ app/tools    │ │                 │
 │ app/graph      │ │ (chunker/    │ │ registry     │ │ Postgres(pgvector│
 │ (LangGraph)    │ │  embedding/  │ │ + MCP 桥接   │ │  +图谱+业务)     │
-│ Orchestrator   │ │  retriever/  │ │ app/skills   │ │ Milvus(向量)     │
-│ + Workers      │ │  bm25/rerank/│ │ app/memory   │ │ Redis · MinIO    │
-│ DeepAgents     │ │  ocr/parsers)│ │              │ │ Ollama(embedding)│
+│ DeepAgents     │ │  retriever/  │ │ app/skills   │ │ Milvus(向量)     │
+│ 委派协同        │ │  bm25/rerank/│ │ app/memory   │ │ Redis · MinIO    │
+│                │ │  ocr/parsers)│ │              │ │ Ollama(embedding)│
 │                │ │  graph_cache)│ │              │ │ MinerU(旁路解析) │
 └────────────────┘ └──────────────┘ └──────────────┘ │  Tavily(联网搜索) │
                                                      └──────────────────┘
@@ -69,11 +69,11 @@ EasyRAG 是一个面向真实业务场景的**企业知识库智能问答平台*
 ```
 EasyRAG/
 ├── app/                          # Agent 内核（纯逻辑层）
-│   ├── agents/                   # 多智能体编排
-│   │   ├── orchestrator.py       #   拆解→派发→汇总（TaskBrief / WorkerReport / Blackboard）
-│   │   ├── blackboard.py         #   每次 run 创建的黑板，跨 Worker 共享上下文
-│   │   ├── workers/              #   base.py(RagWorker/LegalWorker/CodeWorker 基类) + 三个专家
-│   │   └── deep/                 #   DeepAgents：主 Agent + SubAgent（agent/subagents/progress）
+│   ├── agents/                   # 多智能体层（DeepAgents 统一，2026-08-26 退役 Orchestrator）
+│   │   ├── events.py             #   统一事件流（请求级 trace + span + emit + sink）
+│   │   ├── progress.py           #   进度投影器（SSE 进度摘要）
+│   │   └── deep/                 #   DeepAgents：主 Agent + task/spawn_tasks 委派 +
+│   │                              #   结构化黑板 + 子智能体名册 + 动态重规划
 │   ├── graph/                    # LangGraph 工作流
 │   │   ├── state.py              #   AgentState TypedDict（total=False）
 │   │   ├── nodes.py              #   10 个节点实现（966 行）
@@ -167,14 +167,14 @@ send_message (chat_router.py)
 ```
 send_message_stream
   ├─ 同样的模型/Skill/会话/历史/知识范围解析
-  ├─ 深度研究开关：use_deep = AGENT_MODE=="deepagents" 或 req.deep_research=true
-  ├─ agent_mode = deepagents | multi | single（首个事件就返回，前端徽标用）
-  ├─ DeepAgents：线程里跑主 Agent，状态队列(Queue) 逐条投影为 progress_summary 事件
-  │     （DeepResearchProgressProjector 把内部 step 映射为用户可读进度，不含原始工具参数）
-  ├─ 多智能体：线程里跑 Orchestrator，AgentActivity 事件流（progress/task/artifact）
+  ├─ use_deep = AGENT_MODE 属 {deepagents, multi} 或 req.deep_research=true
+  │     或 auto 且 _should_use_multi 命中（multi 为 deepagents 兼容别名）
+  ├─ agent_mode = deepagents | single（首个事件就返回，前端徽标用）
+  ├─ DeepAgents：线程里跑主 Agent，状态队列(Queue) 逐条投影为 progress_summary；
+  │     统一事件流经桥接映射为任务面板协议（sub_tasks/status/worker_output）
   ├─ 单 Agent：prepare_context（手动执行意图→工具→检索节点，不跑完整图）
   │     → llm.chat_stream 逐 token yield delta
-  └─ 结束：done 事件携带 sources + intent；答案/引用落库
+  └─ 结束：done 事件携带 sources + intent + run_id（委派持久化）；答案/引用落库
 ```
 
 流式路径不完整跑 LangGraph 图（避免 stream 与图执行状态纠缠），而是手动执行「意图识别 → 工具 → 检索 → 拼装 messages」后直接调 `chat_stream`。**两条路径的 context 注入逻辑保持一致**（`prepare_context` 与图内节点共用同一套模板与截断守卫）。
@@ -184,9 +184,9 @@ send_message_stream
 ```
 agent.run()
   ├─ AGENT_MODE == "deepagents"        → _run_deep()    （主 Agent + SubAgent 委派）
-  ├─ AGENT_MODE == "multi"             → orchestrator.run()（强制多智能体）
+  ├─ AGENT_MODE == "multi"             → _run_deep()（deepagents 兼容别名，仅告警提示）
   ├─ AGENT_MODE == "auto":
-  │     _should_use_multi(query) 命中 → orchestrator.run()
+  │     _should_use_multi(query) 命中 → _run_deep()（主 Agent 自行拆解/委派）
   │     不命中                          → self._graph.invoke()（LangGraph 单 Agent）
   └─ AGENT_MODE == "single"            → self._graph.invoke()
 ```
@@ -196,7 +196,7 @@ agent.run()
 2. 查询 >80 字符且含「然后/并且/同时」等连词 → multi
 3. 其余 → single
 
-即使规则触发，LLM 拆解器仍可判定单一意图并退化为单 Agent（orchestrator 内部 degenerate 保护）。
+命中规则只是把请求交给 DeepAgents 主 Agent，是否真正拆解/委派由模型自行决定（task / spawn_tasks 工具），无需独立拆解器。
 
 ### 5.5 会话记忆与摘要折叠
 
@@ -462,24 +462,35 @@ POST /bases/{kb_id}/upload → 202 + file_id（立刻返回）
 
 ---
 
-## 10. 多智能体编排（app/agents）
+## 10. 多智能体（DeepAgents 统一实现，app/agents）
 
 ### 10.1 设计思想
 
-借鉴 subagent-driven-development 的「任务简报（brief）」：LLM 拆解用户查询为结构化 `TaskBrief`，按 `worker_hint` 路由到专家 Worker，线程池并行执行，汇总各 `WorkerReport` 生成最终回答。
+2026-08-26 起多智能体统一到 LangGraph 原生 DeepAgents：不再设独立拆解器，
+**由主 Agent（create_react_agent）根据工具描述自主决定委派**——拆解/派发/汇总从
+固定编排流程变成模型行为。原 Orchestrator-Worker（orchestrator.py / workers/ /
+旧黑板）已退役删除；`AGENT_MODE=multi` 保留为 `deepagents` 的兼容别名（仅告警）。
 
 ### 10.2 组件
 
 | 组件 | 职责 |
 |------|------|
-| **Orchestrator** | `run()`：LLM 拆解（_DECOMPOSE_PROMPT 输出 needs_decomposition/sub_tasks/execution_mode/final_instruction）→ 注册表找 Worker → `ThreadPoolExecutor(as_completed)` 并行执行 → `_synthesize` 汇总。拆解判定单一意图时 **degenerate 退化为单 Worker** |
-| **Workers** | `RagWorker`（知识库问答，内置检索）、`LegalWorker`（法律分析，多节结构化输出）、`CodeWorker`（代码），继承 `BaseWorker`（`TaskBrief`/`WorkerReport` 数据类） |
-| **Blackboard** | 每次 run 创建，跨 Worker 共享上下文（M2） |
-| **agent_run 持久化** | `agent_runs` + `agent_tasks` 表：run 生命周期（pending/running/completed）、每任务状态，前端任务面板轮询展示 done/total |
+| **主 Agent**（`deep/agent.py`） | `create_react_agent` + checkpointer 会话记忆；持有 task / spawn_tasks / revise_plan 委派工具 |
+| **task 工具**（`deep/task_tool.py`） | 单任务委派：SubAgent 内联执行，含熔断与降级（连续失败熔断后续委派） |
+| **spawn_tasks**（`deep/planner.py`） | DAG 并行委派：`depends_on` 拓扑分层 + 线程池，依赖产出摘要自动注入；请求上下文快照重放 |
+| **revise_plan** | 运行中动态重规划（结构化尾部：增/改/取消任务） |
+| **SubAgent**（`deep/subagents.py`） | 内置 research-agent / coding-agent + 外部 JSON/YAML 配置；动态工具绑定（`*` / `except:` / `@tag`）+ 越权错误附可用清单 |
+| **结构化黑板**（`deep/blackboard.py`） | 任务产出物 `{key, producer, summary, data, tags, version}` 摘要/全量两级共享 + 依赖订阅 |
+| **统一事件流**（`agents/events.py`） | 请求级 trace/span + emit + 事件汇聚；跨线程调度用 `snapshot_request_context` 重放 |
+| **委派持久化**（`delegation_service`） | 解析事件流 → Run/Task/AgentRun 三表落库（best-effort，复用既有表结构） |
+| **可观测性**（`observability/tracing.py`） | OTel 可选 span（`tool.invoke.<name>` / `subagent.<type>` / `spawn_tasks`）+ 工具进度回调接入事件流 |
 
-### 10.3 汇总阶段的 token 治理
+### 10.3 前端消费与历史演进
 
-- 多 Worker 产出合并会超 `max_tokens` → `_synthesize` 用 `max_tokens=16384`；单 Worker 产出超 500 字符时先用 fast model 并行压缩成 2-3 句摘要（`asyncio.gather`），输入 12000 chars → ~900 chars，token 大头留给输出
+- 统一事件流经 `delegation_service.bridge_delegation_event` 桥接为既有任务面板协议（sub_tasks / status / worker_output / progress_summary），前端任务面板与 AgentActivity 直接复用，无新组件；委派树/工具时间线由事件 span（`spawn/<key>`、`subagent/<name>`）关联。
+- 汇总阶段的 token 治理：旧 `_synthesize` 的 fast-model 压缩机制随 Orchestrator 退役，改由主 Agent 整合输出与委派结果截断规则承接。
+- 历史：Orchestrator-Worker（LLM 拆解 → Worker 派发 → 汇总，含并行单例竞态等已知问题）于 2026-08-26 阶段 5 删除，相关测试迁移为 deep 路径等价物。
+
 
 ---
 
@@ -642,21 +653,21 @@ minio:9090(Console)/9091(API)    mineru-api:18000(→容器8000, GPU, 仅 127.0.
  │  POST /api/v1/chat/stream  {query, model_id, skill_ids, conversation_id}
  ▼ chat_router.send_message_stream
  │  JWT 鉴权 → 解析模型/Skill → 会话/消息落库 → 压缩历史 → 知识库范围
- │  use_multi 判定(命中"劳动"+"赔偿"两领域) → 创建 agent_run → agent_mode="multi"
- ▼ AgentService (线程) → Orchestrator.run()
- │  LLM 拆解 TaskBrief: [task-1 工伤认定条件(rag), task-2 赔偿标准(legal)]
- │  ThreadPoolExecutor 并行执行两个 Worker
- │    ├─ RagWorker → knowledge_retrieval(增强流水线)
- │    │    查询分解(2-3子问题) → 四路并行(实体/语义/关系/BM25)
- │    │    → 融合重排 → answerability(乘法否决) → 聚类 → 缺口补充
+ │  use_deep 判定(命中"劳动"+"赔偿"两领域) → agent_mode="deepagents"
+ ▼ AgentService._run_deep（executor 线程）→ 主 Agent（create_react_agent）
+ │  模型自主委派：spawn_tasks [task-1 工伤认定条件, task-2 赔偿标准]
+ │  depends_on 拓扑分层 + 线程池并行（请求上下文快照重放）
+ │    ├─ research-agent → kb_search（授权范围取自请求级 ContextVar）
+ │    │    增强流水线：查询分解 → 四路并行 → 融合重排 → answerability
  │    │    → sources 带 kb_id+file_id
- │    └─ LegalWorker → LLM 多节分析(条文引用)
- │  _synthesize 压缩合并 → 最终回答
+ │    └─ research-agent → LLM 条文引用分析（结构化输出）
+ │  结构化黑板收集产出 → 主 Agent 整合最终回答；
+ │  委派事件流 → 桥接任务面板协议 + Run/Task/AgentRun 落库（best-effort）
  ▼ SSE 事件流
- │  conversation_id → progress(任务面板) → delta(逐token) → done(sources+intent)
+ │  conversation_id → sub_tasks/worker_output(委派面板) → delta(逐token) → done(sources+intent+run_id)
  ▼ 前端
  │  回答逐 token 渲染，引用来源可点击 → 跳转文档预览
- │  任务面板展示 run 进度 (done/total)
+ │  任务面板展示委派进度（done/total）与各子智能体产出
 ```
 
 ---

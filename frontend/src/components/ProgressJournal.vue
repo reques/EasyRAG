@@ -88,8 +88,8 @@ function formatTime(value) {
   overflow: hidden;
   border: 1px solid var(--gray-150);
   border-radius: 14px;
-  background: linear-gradient(145deg, rgba(255,255,255,.96), var(--main-20));
-  box-shadow: 0 8px 28px rgba(23, 60, 52, .05);
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 4px 18px rgba(58, 48, 40, .045);
 }
 
 .progress-journal-head {
@@ -101,7 +101,7 @@ function formatTime(value) {
   gap: 12px;
   border-bottom: 1px solid var(--gray-100);
 }
-.progress-journal-title { display: inline-flex; align-items: center; gap: 7px; color: var(--gray-900); font-size: 12px; font-weight: 720; }
+.progress-journal-title { display: inline-flex; align-items: center; gap: 7px; color: var(--gray-900); font-family: var(--font-display); font-size: 13px; font-weight: var(--font-display-weight); }
 .progress-journal-title svg { color: var(--main-600); }
 .progress-journal-state { display: inline-flex; align-items: center; gap: 6px; color: var(--main-600); font-size: 10px; font-weight: 650; }
 .progress-journal-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--main-500); box-shadow: 0 0 0 3px var(--main-50); animation: progress-pulse 1.8s ease-in-out infinite; }

@@ -53,8 +53,9 @@ def _message_to_dict_with_reasoning(message: Any, _ob: Any) -> dict:
 
     if isinstance(message, AIMessage):
         rc = message.additional_kwargs.get("reasoning_content")
-        converted = _ob._convert_from_v1_to_chat_completions(message)
-        d = _ob._convert_message_to_dict(converted)
+        # 直接使用 _convert_message_to_dict，不依赖私有 API
+        # _convert_from_v1_to_chat_completions（该方法可能已被移除）
+        d = _ob._convert_message_to_dict(message)
         if rc:
             d["reasoning_content"] = rc
         return d

@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agents.orchestrator import Orchestrator
-from app.agents.workers.base import TaskBrief, WorkerReport
+from app.agents.events import run_with_request_context, snapshot_request_context
 from app.core.config import get_settings
 from app.llm.client import get_active_chat_model_id, use_chat_model
 from app.llm.models import (
@@ -104,33 +103,30 @@ def test_request_model_context_is_reset(monkeypatch):
     assert get_active_chat_model_id() is None
 
 
-def test_parallel_workers_inherit_selected_model(monkeypatch):
+def test_parallel_tasks_inherit_selected_model_via_context_snapshot(monkeypatch):
+    """并发子任务（ThreadPoolExecutor）通过请求上下文快照继承所选聊天模型。
+
+    DeepAgents 统一后，委派调度（planner/task 工具）用
+    snapshot_request_context + run_with_request_context 重放请求上下文，
+    取代旧 Orchestrator._dispatch_parallel 的手工传播。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     monkeypatch.setattr(
         "app.llm.models.get_chat_model_profile",
         lambda model_id: _profile(model_id),
     )
 
-    class CapturingWorker:
-        blackboard = None
-        tool_callback = None
-
-        def run_with_board(self, brief):
-            return WorkerReport(
-                task_id=brief.task_id,
-                worker_name="rag",
-                status="done",
-                summary=get_active_chat_model_id() or "",
-            )
-
-    orchestrator = Orchestrator.__new__(Orchestrator)
-    orchestrator._workers = {"rag": CapturingWorker()}
-    orchestrator._default_worker = "rag"
-    orchestrator.blackboard = object()
-
     with use_chat_model("minimax-m2.7"):
-        reports = orchestrator._dispatch_parallel(
-            [TaskBrief(task_id="task-1", goal="test", worker_hint="rag")],
-            [],
-        )
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(
+                    run_with_request_context,
+                    snapshot_request_context(),
+                    get_active_chat_model_id,
+                )
+                for _ in range(2)
+            ]
+            observed = [future.result() for future in futures]
 
-    assert reports[0].summary == "minimax-m2.7"
+    assert observed == ["minimax-m2.7", "minimax-m2.7"]

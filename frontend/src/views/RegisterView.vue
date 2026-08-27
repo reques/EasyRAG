@@ -1,7 +1,7 @@
 <template>
   <div class="auth-page">
     <aside class="auth-intro">
-      <div class="auth-intro-brand"><span><Waypoints :size="20" /></span> EasyRAG</div>
+      <div class="auth-intro-brand"><span><Asterisk :size="22" :stroke-width="2.1" /></span> EasyRAG</div>
       <div class="auth-intro-copy">
         <span class="auth-kicker">BUILD A KNOWLEDGE HOME</span>
         <h2>一个更聪明的<br />团队知识入口。</h2>
@@ -11,7 +11,7 @@
     </aside>
     <div class="auth-card">
       <div class="auth-header">
-        <span class="auth-logo"><Waypoints :size="23" /></span>
+        <span class="auth-logo"><Asterisk :size="24" :stroke-width="2.1" /></span>
         <span class="auth-eyebrow">GET STARTED</span>
         <h1>创建账户</h1>
         <p>建立属于你的知识工作空间</p>
@@ -48,7 +48,7 @@
 
 <script setup>
 import { ref, reactive } from 'vue'
-import { Sparkles, Waypoints } from 'lucide-vue-next'
+import { Asterisk, Sparkles } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 

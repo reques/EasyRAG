@@ -15,8 +15,6 @@ from app.rag.retriever import (
     MilvusRetriever,
     get_document_chunk_id,
 )
-from app.agents.workers.base import TaskBrief
-from app.agents.workers.rag_worker import RagWorker
 from app.graph import nodes
 
 
@@ -224,22 +222,29 @@ def test_graph_node_propagates_authorised_scope(monkeypatch):
     assert [doc["content"] for doc in result["retrieved_docs"]] == ["tenant A"]
 
 
-class FakeLLM:
-    def chat_sync(self, _messages, **_kwargs):
-        return "scoped answer"
+def test_kb_search_scope_comes_from_request_authorisation(monkeypatch):
+    """Deep 路径等价物（取代 RagWorker）：kb_search 的检索范围只来自请求级授权上下文。
 
+    多智能体统一到 DeepAgents 后，子任务的隔离不再依赖 TaskBrief 传参，而是
+    工具从 ContextVar 读取授权范围（模型无法通过工具参数越权）。
+    """
+    from types import SimpleNamespace
 
-def test_rag_worker_propagates_scope_from_task_brief():
+    from app.services.knowledge_context import use_authorised_kb_ids
+    from app.tools.registry import get_tool_registry
+
     spy = ScopeSpyRetriever()
-    worker = RagWorker()
-    worker._retriever = spy
-    worker.llm = FakeLLM()
 
-    report = worker.run(TaskBrief(
-        task_id="task-1",
-        goal="query",
-        knowledge_base_ids=[KB_A],
-    ))
+    class _FakeEnhanced:
+        def retrieve(self, query, history=None, knowledge_base_ids=None):
+            spy.retrieve(query, knowledge_base_ids=knowledge_base_ids)
+            return SimpleNamespace(knowledge_blocks=[], raw_docs=[], sources=[])
 
-    assert report.ok()
+    monkeypatch.setattr(
+        "app.rag.enhanced_retriever.get_enhanced_retriever", lambda: _FakeEnhanced()
+    )
+
+    with use_authorised_kb_ids([KB_A]):
+        get_tool_registry().invoke("kb_search", query="query")
+
     assert spy.knowledge_base_ids == [KB_A]
