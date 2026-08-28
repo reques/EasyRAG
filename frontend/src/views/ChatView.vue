@@ -42,7 +42,7 @@
           <!-- 等待首 token 时的空 assistant 占位不渲染，由下方「思考中」气泡代替，
                避免空灰条 + 思考中两个框同时出现 -->
           <div
-            v-if="!(sending && msg.role === 'assistant' && !msg.content && !msg.steps?.length && !msg.progressSummaries?.length && i === messages.length - 1)"
+            v-if="!(sending && msg.role === 'assistant' && !msg.content && !msg.steps?.length && !msg.workItems?.length && !msg.progressSummaries?.length && i === messages.length - 1)"
             :class="['message', msg.role, { 'msg-enter': msg.enter }]"
           >
           <!-- 用户消息时间: 显示在气泡外上方, 左对齐时间标签, 不放进气泡里 -->
@@ -53,19 +53,13 @@
             <!-- 操作流（Cursor/Copilot 风格：图标+英文动词+对象），绑定在该条消息上，
                  渲染在答案上方，按实际走的节点（意图/检索/工具/推理/生成）实时流转，
                  不被下一轮覆盖 -->
-            <ProgressJournal
-              v-if="msg.progressSummaries && msg.progressSummaries.length"
-              :items="msg.progressSummaries"
+            <WorkProgress
+              v-if="(msg.workItems && msg.workItems.length) || (msg.progressSummaries && msg.progressSummaries.length)"
+              :items="msg.workItems || []"
+              :summaries="msg.progressSummaries"
               :running="msg.stepsLoading"
               :error="msg.error || ''"
               :stopped="!!msg.stopped"
-            />
-            <AgentActivity
-              v-if="(msg.steps && msg.steps.length) || (msg.artifacts && msg.artifacts.length)"
-              :steps="msg.steps"
-              :artifacts="msg.artifacts"
-              :running="msg.stepsLoading"
-              :error="msg.error || ''"
             />
             <div v-if="msg.role === 'user' && (msg.skills?.length || msg.deepResearch)" class="message-skill-strip">
               <span v-if="msg.deepResearch" class="deep-research-chip">
@@ -632,8 +626,7 @@ import {
   X,
 } from 'lucide-vue-next'
 import api from '../api'
-import AgentActivity from '../components/AgentActivity.vue'
-import ProgressJournal from '../components/ProgressJournal.vue'
+import WorkProgress from '../components/WorkProgress.vue'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
 // and rel=noopener so external sources open safely in a new tab.
@@ -1167,6 +1160,9 @@ async function deleteCustomSkill(skill) {
 // msg.steps 上（随消息保留，渲染在答案上方，不会被下一轮清空覆盖）
 const statusSteps = ref([])
 
+// 有序执行时间线自增 id：ChatView 按 SSE 到达顺序维护，WorkProgress 据此重建步骤链
+let _workWid = 0
+
 // 侧边任务进度面板（多智能体）：子任务清单 + 每个子任务的状态
 const taskPanel = ref({
   visible: false,
@@ -1230,6 +1226,45 @@ function summarizeWorkerOutput(text) {
   return flat.length > 120 ? `${flat.slice(0, 120)}…` : flat
 }
 
+// 历史回放：把 meta 中分开的 steps / artifacts / worker_outputs 重建为
+// 有序执行时间线（WorkProgress 数据源）。DeepAgents 以 artifacts 为链路主干
+// （含推理/工具/检索/委派顺序），单 Agent 以 steps 为阶段骨架。
+function buildHistoryWorkItems(m) {
+  const items = []
+  const arts = m.meta?.artifacts || []
+  const workers = m.meta?.worker_outputs || []
+  const steps = m.meta?.steps || []
+  let wid = 0
+  const deep = m.meta?.intent === 'deepagents'
+  const pushArt = (a) => {
+    if (!a || typeof a !== 'object' || !a.kind) return
+    items.push({
+      t: 'artifact',
+      wid: `h${++wid}`,
+      id: a.id || `h-art-${wid}`,
+      kind: a.kind, stage: a.stage || '', title: a.title || '',
+      content: a.content || '', streaming: false,
+    })
+  }
+  const pushStep = (s) => {
+    if (!s || typeof s !== 'object' || !s.step) return
+    items.push({
+      t: 'step', wid: `h${++wid}`,
+      step: s.step, detail: s.detail || '', task_id: s.task_id || '',
+    })
+  }
+  const first = deep ? arts : steps
+  const second = deep
+    ? [...workers, ...steps]
+    : [...arts, ...workers]
+  for (const a of first) deep ? pushArt(a) : pushStep(a)
+  for (const s of second) {
+    if (s && typeof s === 'object' && s.step) pushStep(s)
+    else pushArt(s)
+  }
+  return items
+}
+
 function taskFromRun(task, agentRuns) {
   const agent = (agentRuns || []).find(item => item.task_id === task.task_id)
   return {
@@ -1252,7 +1287,7 @@ const lastAssistantHasContent = computed(() => {
 
 const lastAssistantHasProgress = computed(() => {
   const last = messages.value[messages.value.length - 1]
-  return !!(last && last.role === 'assistant' && last.progressSummaries?.length)
+  return !!(last && last.role === 'assistant' && (last.progressSummaries?.length || last.workItems?.length))
 })
 
 function scrollBottom() {
@@ -1338,6 +1373,8 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
             streaming: false,
           }))
         ),
+        // 有序执行时间线：DeepAgents 以 artifacts 为链路主干；单 Agent 以 steps 为骨架
+        workItems: buildHistoryWorkItems(m),
         time: formatTime(m.created_at),
         ts: m.created_at ? Date.parse(m.created_at) : null,
       }))
@@ -1400,6 +1437,7 @@ async function send() {
     stepsLoading: true,
     error: '',
     artifacts: [],
+    workItems: [],
     progressSummaries: [],
     time: formatTime(new Date(asstTs).toISOString()),
     ts: asstTs,
@@ -1475,11 +1513,15 @@ async function send() {
         }
       } else if (ev.type === 'status') {
         // 状态事件：落到当前 assistant 消息的 steps（随消息保留）
-        // _ts 记录到达时刻，AgentActivity 用它计算每步耗时与总耗时
-        const st = { step: ev.step, detail: ev.detail, _ts: Date.now() }
+        // _ts 记录到达时刻，WorkProgress 用它计算每步耗时与总耗时
+        const st = { step: ev.step, detail: ev.detail, task_id: ev.task_id || '', _ts: Date.now() }
         statusSteps.value.push(st)
         const m = messages.value[msgIndex]
-        messages.value[msgIndex] = { ...m, steps: [...(m.steps || []), st] }
+        messages.value[msgIndex] = {
+          ...m,
+          steps: [...(m.steps || []), st],
+          workItems: [...(m.workItems || []), { t: 'step', wid: `w${++_workWid}`, ...st }],
+        }
         if (ev.step === 'task_started') setTaskStatus(ev.task_id, 'running')
         scrollBottom()
       } else if (ev.type === 'worker_output') {
@@ -1495,16 +1537,18 @@ async function send() {
         const wm = messages.value[msgIndex]
         const workerId = `worker-${ev.task_id}`
         if (wm && !(wm.artifacts || []).some(a => a.id === workerId)) {
+          const workerArt = {
+            id: workerId,
+            kind: 'worker',
+            stage: 'synthesize',
+            title: `子任务 ${ev.task_id}（${ev.worker || 'worker'}）完成`,
+            content: ev.summary || summarizeWorkerOutput(ev.content),
+            streaming: false,
+          }
           messages.value[msgIndex] = {
             ...wm,
-            artifacts: [...(wm.artifacts || []), {
-              id: workerId,
-              kind: 'worker',
-              stage: 'synthesize',
-              title: `子任务 ${ev.task_id}（${ev.worker || 'worker'}）完成`,
-              content: ev.summary || summarizeWorkerOutput(ev.content),
-              streaming: false,
-            }],
+            artifacts: [...(wm.artifacts || []), workerArt],
+            workItems: [...(wm.workItems || []), { t: 'artifact', wid: `w${++_workWid}`, ...workerArt }],
           }
           scrollBottom()
         }
@@ -1512,23 +1556,35 @@ async function send() {
         // 中间产出实时流：检索片段/工具结果/思维链（thinking 增量按 id 追加）
         const am = messages.value[msgIndex]
         const list = [...(am.artifacts || [])]
+        const wl = [...(am.workItems || [])]
         const last = list[list.length - 1]
+        const lastWi = wl[wl.length - 1]
+        const artId = ev.id || `art-${Date.now()}-${list.length}`
         if (ev.streaming && last && ev.id && last.id === ev.id) {
           last.content += ev.content || ''
-          messages.value[msgIndex] = { ...am, artifacts: list }
+          if (lastWi && lastWi.t === 'artifact' && lastWi.id === ev.id) {
+            lastWi.content += ev.content || ''
+          }
+          messages.value[msgIndex] = { ...am, artifacts: list, workItems: wl }
         } else if (ev.streaming === false && last && ev.id && last.id === ev.id) {
           last.streaming = false
-          messages.value[msgIndex] = { ...am, artifacts: list }
+          if (lastWi && lastWi.t === 'artifact' && lastWi.id === ev.id) {
+            lastWi.streaming = false
+            lastWi.streamed = true
+          }
+          messages.value[msgIndex] = { ...am, artifacts: list, workItems: wl }
         } else {
-          list.push({
-            id: ev.id || `art-${Date.now()}-${list.length}`,
+          const art = {
+            id: artId,
             kind: ev.kind || 'info',
             stage: ev.stage || '',
             title: ev.title || '',
             content: ev.content || '',
             streaming: !!ev.streaming,
-          })
-          messages.value[msgIndex] = { ...am, artifacts: list }
+          }
+          list.push(art)
+          wl.push({ t: 'artifact', wid: `w${++_workWid}`, streamed: !!ev.streaming, ...art })
+          messages.value[msgIndex] = { ...am, artifacts: list, workItems: wl }
         }
         scrollBottom()
       } else if (ev.type === 'delta') {
@@ -1554,6 +1610,15 @@ async function send() {
           // done 携带的完整 steps 仅在流式中断时兜底补齐
           steps: (m.steps && m.steps.length) ? m.steps : (ev.steps || []),
           artifacts: (m.artifacts && m.artifacts.length) ? m.artifacts : (ev.artifacts || []),
+          workItems: (m.workItems && m.workItems.length)
+            ? m.workItems
+            : (ev.artifacts || []).map((a, ai) => ({
+                t: 'artifact',
+                wid: `w${++_workWid}`,
+                id: a.id || `done-art-${ai}`,
+                kind: a.kind, stage: a.stage || '', title: a.title || '',
+                content: a.content || '', streaming: false,
+              })),
           progressSummaries: (m.progressSummaries && m.progressSummaries.length)
             ? m.progressSummaries
             : (ev.progress_summaries || []),
