@@ -35,6 +35,7 @@ from backend.services.ingestion_service import (
 )
 from backend.services.knowledge_service import update_file_progress
 from backend.storage.postgres.manager import get_session
+from backend.storage.redis.lock import RedisLock
 from backend.storage.redis.manager import get_redis
 
 logger = get_logger(__name__)
@@ -80,13 +81,13 @@ async def handle_message(redis_client, message_id: str, fields: dict, sem: async
             await ack_message(message_id)
             return
 
-        # ── 文件处理锁（2026-08-27 修复重复处理） ──
+        # ── 文件处理锁（2026-08-27：RedisLock 工厂，短 TTL + 自动续期 + Lua 原子性） ──
         # 防 XAUTOCLAIM 认领重入 / 多 worker 并发处理同一文件：
-        # 锁存在 = 另一实例正在处理（或 30 分钟内处理过且未释放）→ 跳过。
-        # 锁 TTL 兜底：worker 真崩溃时锁自动过期，消息超时认领后可重跑。
-        lock_key = f"ingestion:lock:{file_id}"
-        locked = await redis_client.set(lock_key, "1", nx=True, ex=cfg.INGESTION_LOCK_TTL)
-        if not locked:
+        # 锁存在 = 另一实例正在处理 → 跳过。
+        lock = await RedisLock.acquire(
+            redis_client, f"ingestion:lock:{file_id}", cfg.INGESTION_LOCK_TTL
+        )
+        if lock is None:
             logger.info("[ingestion_worker] %s already being processed, skip (lock held)", filename)
             await ack_message(message_id)
             return
@@ -114,11 +115,8 @@ async def handle_message(redis_client, message_id: str, fields: dict, sem: async
                     )
                 await ack_message(message_id)
         finally:
-            # 处理结束释放锁（无论成功失败；异常路径由外层 except 兜底标记 failed）
-            try:
-                await redis_client.delete(lock_key)
-            except Exception:
-                pass
+            # 停止续期并原子释放锁（仅释放自己持有的；异常路径由外层 except 兜底）
+            await lock.release()
 
     except Exception as exc:
         logger.error("[ingestion_worker] message %s failed: %s", message_id, exc)
