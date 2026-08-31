@@ -748,8 +748,14 @@ async def send_message_stream(
             and AgentService._should_use_multi(effective_query, db_history)
         )
     )
-    # 本轮实际执行的 Agent 路径（前端徽标/诊断用）：deepagents（主 Agent + SubAgent）| single（单 Agent）
-    agent_mode = "deepagents" if use_deep else "single"
+    # 通过 use_dynamic 新增轻量动态 Agent（auto 普通问题 / AGENT_MODE=dynamic）
+    # 模型每轮自行决定直接回答 / 检索 / 调工具，简单问题不走复杂流程。
+    use_dynamic = (
+        not use_deep
+        and cfg.AGENT_MODE != "single"
+        and cfg.AGENT_MODE in ("dynamic", "auto")
+    )
+    agent_mode = "deepagents" if use_deep else ("dynamic" if use_dynamic else "single")
 
     async def _event_gen_inner():
         from app.services.agent_service import get_agent_service
@@ -961,6 +967,143 @@ async def send_message_stream(
 
                 asyncio.get_event_loop().create_task(_gen_title_deep())
             return
+
+        # ── 轻量动态 Agent 路径（auto 普通问题 / AGENT_MODE=dynamic）──
+        # 在 executor 线程跑动态 Agent（模型通过函数调用自行决定
+        # 调工具 / 检索 / 直接回答）；通过安全队列把每一步
+        # 状态实时桥接回事件循环，SSE 逐步推给前端。
+        from app.agents.progress import ProgressProjector
+        import queue as _dyn_queue
+        _dyn_status_queue: "_dyn_queue.Queue" = _dyn_queue.Queue()
+        _dyn_collected_steps: list[dict] = []
+        _dyn_collected_artifacts: list[dict] = []
+        _dyn_progress: list[dict] = []
+        _dyn_projector = ProgressProjector()
+
+        def _dyn_status(step: str, detail: str = ""):
+            ev = {"step": step, "detail": detail}
+            _dyn_collected_steps.append(ev)
+            _dyn_status_queue.put({"type": "status", **ev})
+            try:
+                progress = _dyn_projector.feed(step, detail)
+                if progress:
+                    progress["created_at"] = time.time()
+                    _dyn_progress.append(dict(progress))
+                    _dyn_status_queue.put({"type": "progress_summary", **progress})
+            except Exception:
+                pass
+
+        def _dyn_artifact(ev: dict):
+            _dyn_collected_artifacts.append(dict(ev))
+            _dyn_status_queue.put({"type": "artifact", **ev})
+
+        def _run_dynamic_in_thread():
+            with use_chat_model(selected_model), use_skill_context(skill_context):
+                return agent._run_dynamic(
+                    effective_query,
+                    session_id=str(conv_id),
+                    history=db_history,
+                    user_id=current_user.id,
+                    knowledge_base_ids=knowledge_base_ids,
+                    knowledge_catalog=knowledge_catalog,
+                    image_data=image_for_context,
+                    on_step=_dyn_status,
+                    on_artifact=_dyn_artifact,
+                )
+
+        _dyn_start = time.perf_counter()
+        _dyn_future = loop.run_in_executor(None, _run_dynamic_in_thread)
+        while True:
+            try:
+                ev = await loop.run_in_executor(None, _dyn_status_queue.get, True, 0.1)
+            except Exception:
+                ev = None
+            if ev is None:
+                if _dyn_future.done():
+                    break
+                continue
+            yield _sse(ev)
+        try:
+            dyn_result = _dyn_future.result()
+        except Exception as exc:
+            logger.error("[chat/stream] dynamic agent error: %s", exc)
+            dyn_result = {
+                "final_answer": f"\u5904\u7406\u8bf7\u6c42\u65f6\u53d1\u751f\u9519\u8bef: {exc}",
+                "steps": [],
+                "sources": [],
+                "is_fallback": True,
+            }
+        answer = dyn_result.get("final_answer", "") or ""
+        elapsed = round(time.perf_counter() - _dyn_start, 3)
+
+        # 委派持久化（best-effort；无事件自动跳过）
+        delegation_run_id = ""
+        if dyn_result.get("events"):
+            from backend.services.delegation_service import persist_delegation
+
+            try:
+                delegation_run_id = await persist_delegation(
+                    get_session,
+                    conversation_id=conv_id,
+                    user_id=current_user.id,
+                    events=dyn_result.get("events"),
+                    goal=req.query,
+                    model_id=selected_model.id,
+                    source_message_id=user_message_id,
+                ) or ""
+            except Exception as exc:
+                logger.warning("[chat/stream] dynamic delegation persist failed: %s", exc)
+
+        # 落库助手回复（含步骤/进度/中间产出）
+        try:
+            async with get_session() as session:
+                meta = json.dumps({
+                    "intent": "dynamic",
+                    "agent_mode": agent_mode,
+                    "sources": dyn_result.get("sources") or [],
+                    "steps": _dyn_collected_steps,
+                    "progress_summaries": _dyn_progress,
+                    "artifacts": _dyn_collected_artifacts,
+                    "model_id": selected_model.id,
+                    "model_name": selected_model.name,
+                    "skills": skill_payload,
+                }, ensure_ascii=False)
+                await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
+                await session.commit()
+        except Exception as exc:
+            logger.warning("[chat/stream] dynamic persist failed: %s", exc)
+
+        yield _sse({
+            "type": "done",
+            "content": answer,
+            "sources": dyn_result.get("sources") or [],
+            "intent": "dynamic",
+            "agent_mode": agent_mode,
+            "run_id": delegation_run_id,
+            "steps": _dyn_collected_steps,
+            "artifacts": _dyn_collected_artifacts,
+            "progress_summaries": _dyn_progress,
+            "elapsed_seconds": elapsed,
+            "model_id": selected_model.id,
+            "model_name": selected_model.name,
+            "skills": skill_payload,
+        })
+
+        # 新会话标题后台生成
+        if is_new and answer:
+            async def _gen_title_dynamic():
+                try:
+                    title = await generate_conversation_title(req.query, answer)
+                    async with get_session() as session:
+                        c = await get_conversation(session, conv_id)
+                        if c:
+                            c.title = title
+                            await session.commit()
+                except Exception as exc:
+                    logger.warning("[chat/stream] dynamic title gen failed: %s", exc)
+
+            asyncio.get_event_loop().create_task(_gen_title_dynamic())
+        return
 
         # ── 单 Agent 路径（带实时思考过程透出）─────────────────────────────────
         # 1. 同步编排(检索/工具)在 executor 线程跑, 通过线程安全队列把每一步的
