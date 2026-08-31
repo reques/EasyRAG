@@ -1,93 +1,95 @@
 <template>
-  <section class="work-progress" :class="{ 'is-running': running, 'is-error': !!error, 'panel-collapsed': !panelOpen }" aria-live="polite">
-    <header
-      class="work-progress-head"
-      role="button"
-      tabindex="0"
-      :aria-expanded="panelOpen"
-      @click="panelOpen = !panelOpen"
-      @keydown.enter="panelOpen = !panelOpen"
+  <section class="agent-process" :class="{ 'is-running': running, 'is-error': !!error, 'is-collapsed': !panelOpen }" aria-live="polite">
+    <!-- 折叠态：单行摘要，点击展开回看完整过程 -->
+    <button
+      v-if="!panelOpen"
+      type="button"
+      class="process-summary-line"
+      :aria-expanded="false"
+      @click="togglePanel"
     >
-      <span class="work-progress-title"><Activity :size="14" /> 工作进度</span>
-      <span class="work-progress-state">
-        <span v-if="running" class="wp-state is-running"><i></i> 进行中</span>
-        <span v-else-if="error" class="wp-state is-warning"><CircleAlert :size="12" /> 遇到问题</span>
-        <span v-else-if="stopped" class="wp-state is-warning"><CircleAlert :size="12" /> 已停止</span>
-        <span v-else class="wp-state is-done"><CheckCircle2 :size="12" /> 已完成</span>
+      <span class="process-summary-marker" :class="{ 'is-warning': !!error || stopped }">
+        <CircleAlert v-if="error || stopped" :size="13" />
+        <CheckCircle2 v-else :size="13" />
       </span>
-      <ChevronDown :size="15" class="work-progress-chevron" :class="{ flipped: !panelOpen }" />
-    </header>
+      <span class="process-summary-text">{{ collapsedSummary }}</span>
+      <ChevronRight :size="13" class="process-summary-chevron" />
+    </button>
 
-    <div v-if="!panelOpen" class="work-progress-collapsed">
-      <span class="work-progress-collapsed-summary">{{ collapsedSummary }}</span>
-    </div>
+    <!-- 展开态：无边框日志流 -->
+    <template v-else>
+      <div v-if="error" class="process-error-line"><CircleAlert :size="12" /> {{ error }}</div>
+      <div v-if="!chain.length && running" class="process-empty">正在分析你的问题…</div>
 
-    <div v-else class="work-progress-body">
-      <div v-if="!chain.length && running" class="work-progress-empty">正在分析你的问题…</div>
       <!-- 旧消息兜底：无步骤时间线时退化为工作日志列表 -->
-      <ol v-else-if="!chain.length && summaries.length" class="wp-journal">
+      <ol v-else-if="!chain.length && summaries.length" class="process-journal">
         <li v-for="(s, si) in summaries" :key="s.id || si" :class="`phase-${s.phase || 'info'} status-${s.status || 'running'}`">
-          <span class="wp-journal-marker"><component :is="phaseIcon(s.phase)" :size="12" /></span>
-          <span class="wp-journal-text">{{ s.text }}</span>
+          <span class="process-journal-marker"><component :is="phaseIcon(s.phase)" :size="12" /></span>
+          <span class="process-journal-text">{{ s.text }}</span>
         </li>
       </ol>
 
-      <ol v-if="chain.length" class="work-chain" ref="chainEl">
-        <li
-          v-for="st in displayChain"
-          :key="st.uid"
-          class="work-step"
-          :class="[
-            `wk-${st.kind}`,
-            {
-              'is-expanded': st.expanded,
-              'is-running': st.status === 'running',
-              'is-done': st.status === 'done',
-              'is-fallback': st.isFallback,
-            },
-          ]"
-        >
-          <div
-            class="work-step-head"
-            role="button"
-            tabindex="0"
-            :aria-expanded="st.expanded"
-            @click="toggleStep(st)"
-            @keydown.enter="toggleStep(st)"
+      <ol v-if="chain.length || thoughtRows.length" class="process-log" ref="logEl">
+        <template v-for="row in displayRows" :key="row.uid">
+          <!-- 思考流：弱化灰字段落，不属于步骤行 -->
+          <li v-if="row.isThought" class="process-thought" :class="{ 'is-streaming': row.streaming }">
+            <span class="process-thought-marker"><Brain :size="11" /></span>
+            <span class="process-thought-text">{{ row.content }}<span v-if="row.streaming" class="process-thought-caret" aria-hidden="true"></span></span>
+          </li>
+          <!-- 步骤/工具行：⏺ 标记 + 动词 + 对象，可展开结果 -->
+          <li
+            v-else
+            class="process-line"
+            :class="[
+              `wk-${row.kind}`,
+              {
+                'is-expanded': row.expanded,
+                'is-running': row.status === 'running',
+                'is-done': row.status === 'done',
+                'is-fallback': row.isFallback,
+              },
+            ]"
           >
-            <span class="work-step-badge" :class="`kind-${st.kind}`">
-              <component :is="st.icon" :size="13" />
-            </span>
-            <span class="work-step-label">
-              <span class="work-step-name">{{ st.label }}</span>
-              <span v-if="st.subagent" class="work-step-subagent">{{ st.subagent }}</span>
-              <span v-if="st.object" class="work-step-object" :title="st.object">{{ st.object }}</span>
-              <span v-if="!st.expanded && previewOf(st)" class="work-step-preview" :title="previewOf(st)">{{ previewOf(st) }}</span>
-            </span>
-            <span class="work-step-side">
-              <span v-if="st.status === 'running'" class="work-step-spinner"><Loader2 :size="12" class="spin" /></span>
-              <CheckCircle2 v-else-if="st.status === 'done' && !st.isFallback" :size="13" class="work-step-check" />
-              <AlertTriangle v-else-if="st.isFallback" :size="13" class="work-step-warn" />
-              <span v-if="st.streaming" class="work-step-caret" aria-hidden="true"></span>
-              <span v-if="st.durationMs != null" class="work-step-duration">{{ formatDuration(st.durationMs) }}</span>
-              <ChevronDown :size="13" class="work-step-chevron" :class="{ flipped: !st.expanded }" />
-            </span>
-          </div>
-          <div v-show="st.expanded" class="work-step-body" :ref="el => setBodyRef(st.uid, el)">
-            <div v-if="st.content" class="work-step-content" :class="{ 'is-code': st.kind === 'tool' }">{{ st.content }}</div>
-            <div v-if="st.results.length" class="work-step-results">
-              <div v-for="(r, ri) in st.results" :key="ri" class="work-step-result" :class="{ 'is-error': r.isError }">
-                <span v-if="r.label" class="work-step-result-label">{{ r.label }}</span>
-                <span class="work-step-result-text">{{ r.text }}</span>
+            <div
+              class="process-line-head"
+              role="button"
+              tabindex="0"
+              :aria-expanded="row.expanded"
+              @click="toggleStep(row)"
+              @keydown.enter.prevent="toggleStep(row)"
+            >
+              <span class="process-marker" :class="`kind-${row.kind}`">
+                <Loader2 v-if="row.status === 'running'" :size="12" class="spin" />
+                <component :is="row.icon" v-else :size="12" />
+              </span>
+              <span class="process-verb">{{ row.label }}</span>
+              <span v-if="row.subagent" class="process-subagent">{{ row.subagent }}</span>
+              <span v-if="row.object" class="process-object" :title="row.object">{{ row.object }}</span>
+              <span class="process-side">
+                <CheckCircle2 v-if="row.status === 'done' && !row.isFallback" :size="12" class="process-check" />
+                <AlertTriangle v-else-if="row.isFallback" :size="12" class="process-warn" />
+                <span v-if="row.durationMs != null" class="process-duration">{{ formatDuration(row.durationMs) }}</span>
+                <ChevronDown v-if="row.content || row.results.length" :size="12" class="process-chevron" :class="{ flipped: !row.expanded }" />
+              </span>
+            </div>
+            <div v-show="row.expanded && (row.content || row.results.length)" class="process-line-body" :ref="el => setBodyRef(row.uid, el)">
+              <div v-if="row.content" class="process-line-content" :class="{ 'is-code': row.kind === 'tool' }">{{ row.content }}</div>
+              <div v-if="row.results.length" class="process-line-results">
+                <div v-for="(r, ri) in row.results" :key="ri" class="process-result" :class="{ 'is-error': r.isError }">
+                  <span v-if="r.label" class="process-result-label">{{ r.label }}</span>
+                  <span class="process-result-text">{{ r.text }}</span>
+                </div>
               </div>
             </div>
-            <div v-if="!st.content && !st.results.length && st.status === 'running'" class="work-step-placeholder">执行中…</div>
-          </div>
-        </li>
+          </li>
+        </template>
       </ol>
-    </div>
 
-    <div v-if="error" class="work-progress-error"><CircleAlert :size="13" /> {{ error }}</div>
+      <!-- 收起入口：运行结束后显示 -->
+      <button v-if="!running && (chain.length || thoughtRows.length)" type="button" class="process-collapse-entry" @click="togglePanel">
+        <ChevronLeft :size="12" /> 收起过程
+      </button>
+    </template>
   </section>
 </template>
 
@@ -111,6 +113,9 @@ import {
   Workflow,
   Info,
   Terminal,
+  ChevronRight,
+  ChevronDown,
+  ChevronLeft,
 } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -124,7 +129,29 @@ const props = defineProps({
   stopped: { type: Boolean, default: false },
 })
 
-const panelOpen = ref(true)
+/* ── 折叠行为：运行中强制展开；结束后自动收起为摘要；历史消息默认折叠 ── */
+const panelOpen = ref(false)
+const userToggled = ref(false)
+
+watch(
+  () => props.running,
+  (running) => {
+    if (running) {
+      // 新一轮开始 → 展开实时日志（用户手动收起状态不跨轮保留，重置）
+      userToggled.value = false
+      panelOpen.value = true
+    } else if (!userToggled.value) {
+      // 运行结束 → 自动折叠为摘要（用户已手动操作则尊重其选择）
+      panelOpen.value = false
+    }
+  },
+  { immediate: true },
+)
+
+function togglePanel() {
+  userToggled.value = true
+  panelOpen.value = !panelOpen.value
+}
 
 /* ── 步骤/产出 → 链上行定义 ─────────────────────────────────────────── */
 const STEP_DEFS = {
@@ -222,6 +249,8 @@ function newRow(def, wid, startedAt, createdBy = 'artifact') {
     ownerWid: wid,
     uid: s.uid,
     createdBy,
+    isThought: false,
+    _order: null,
     key: def.key,
     label: def.label,
     icon: def.icon,
@@ -277,12 +306,17 @@ function setStream(row, streamId) {
   row.streamSrc = streamId
 }
 
-/* ── 链构建：按到达顺序合并步骤与产出（确定性重建，状态经 stateMap 持久） ── */
+/* ── 链构建：按到达顺序合并步骤与产出（确定性重建，状态经 stateMap 持久） ──
+   思考（thought artifact）不再并入步骤链，单独收进 thoughtRows 弱化展示。
+   每行记录 _order（items 中的位次），展示时据此按时序交织。 */
+const thoughtRows = ref([])
+
 const chain = computed(() => {
   const rows = []
+  const thoughts = []
   const seen = new Set()
-  for (const item of props.items) {
-    if (!item || seen.has(item.wid)) continue
+  props.items.forEach((item, order) => {
+    if (!item || seen.has(item.wid)) return
     seen.add(item.wid)
     if (item.t === 'step') {
       const { action, done, subagent } = parseStep(item.step)
@@ -318,35 +352,23 @@ const chain = computed(() => {
       const sg = subagentFromStage(item.stage)
       const def = artifactToDef(kind, item)
       if (kind === 'thought') {
-        if (item.streaming || item.streamed) {
-          const streamId = item.id || item.wid
-          const target = findRow(rows, 'generate') || findRow(rows, 'reason', sg)
-          if (target && !target.streamSrc) {
-            setStream(target, streamId)
-            if (!item.streaming) target.streaming = false
-            target.content = appendText(target.content, item.content)
-          } else if (target && target.streamSrc === streamId) {
-            if (item.content) target.content += item.content
-            if (!item.streaming) target.streaming = false
-          } else {
-            const r = newRow({ ...STEP_DEFS.reason, subagent: sg, label: '推理' }, item.wid, Date.now())
-            setStream(r, streamId)
-            if (!item.streaming) r.streaming = false
-            r.content = item.content || ''
-            rows.push(r)
-            closeOthers(rows, r)
-          }
+        // 思考流 → 弱化文本段落（独立于步骤行），记录 _order 用于时序交织
+        const streamId = item.id || item.wid
+        const last = thoughts[thoughts.length - 1]
+        if (item.streaming && last && last.streamSrc === streamId) {
+          last.content += item.content || ''
+        } else if (item.streaming === false && last && last.streamSrc === streamId) {
+          last.streaming = false
         } else {
-          const target = findRow(rows, 'reason', sg)
-          if (target && target.status === 'running' && !target.streaming) {
-            target.content = appendText(target.content, item.content)
-          } else {
-            const r = newRow({ ...STEP_DEFS.reason, subagent: sg, label: '推理' }, item.wid, Date.now())
-            r.content = item.content || ''
-            r.object = item.title || ''
-            rows.push(r)
-            closeOthers(rows, r)
-          }
+          thoughts.push(reactive({
+            isThought: true,
+            uid: `th-${streamId}`,
+            streamId,
+            streamSrc: streamId,
+            _order: order,
+            content: item.content || '',
+            streaming: !!item.streaming,
+          }))
         }
       } else if (kind === 'tool' || kind === 'delegate') {
         const target = findRow(rows, def.key, sg)
@@ -404,11 +426,39 @@ const chain = computed(() => {
         closeOthers(rows, r)
       }
     }
-  }
+  })
+  // 思考段落数组整体替换（重建无副作用：内容来自 items 全量重放）
+  thoughtRows.value = thoughts
   return rows
 })
 
-/* ── 自动展开/折叠：执行中的步骤展开，完成后折叠，随后展开下一步 ── */
+/* ── 展示行合并：步骤行 + 思考段落按 items 到达顺序交织 ──────────────── */
+const displayRows = computed(() => {
+  const rows = chain.value
+  // 步骤行记录位次：以 items 中首个关联来源的位次近似（_order 越小越先）
+  const orderOf = new Map()
+  props.items.forEach((item, idx) => {
+    if (!item || orderOf.has(item.wid)) return
+    orderOf.set(item.wid, idx)
+  })
+  for (const st of rows) {
+    // 整轮结束后，未配对收尾的 running 步骤统一置为 done
+    if (!props.running && st.status === 'running') {
+      st.finishedAt = st.finishedAt || st.startedAt
+      st.status = 'done'
+    }
+    st.durationMs = stageDuration(st)
+    if (st._order == null) {
+      // chain 重建时行对象是全新的；ownerWid 即来源 item 的 wid
+      st._order = orderOf.get(st.ownerWid) ?? Number.MAX_SAFE_INTEGER
+    }
+  }
+  const merged = [...rows, ...thoughtRows.value]
+  merged.sort((a, b) => (a._order ?? 0) - (b._order ?? 0))
+  return merged
+})
+
+/* ── 自动展开：执行中的步骤展开其结果体，完成后折叠该行 ─────────────── */
 watch(
   () => [props.running, chain.value.length, chain.value.map(r => r.status).join('')],
   () => applyAutoExpand(),
@@ -442,7 +492,7 @@ function applyAutoExpand() {
       }
     }
   }
-  scrollActiveBody()
+  scrollLogToBottom()
 }
 
 function toggleStep(st) {
@@ -452,18 +502,6 @@ function toggleStep(st) {
   st.expanded = s.expanded
   st.auto = false
 }
-
-const displayChain = computed(() => {
-  for (const st of chain.value) {
-    // 整轮结束后，未配对收尾的 running 步骤统一置为 done
-    if (!props.running && st.status === 'running') {
-      st.finishedAt = st.finishedAt || st.startedAt
-      st.status = 'done'
-    }
-    st.durationMs = stageDuration(st)
-  }
-  return chain.value
-})
 
 /* ── 耗时计时 ──────────────────────────────────────────────────────── */
 const now = ref(Date.now())
@@ -497,31 +535,35 @@ function formatDuration(ms) {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
-/* ── 流式滚动：活动步骤内容增长时自动滚到底部 ──────────────────────── */
+/* ── 流式滚动：日志增长时自动滚到底部 ──────────────────────────────── */
+const logEl = ref(null)
 const bodyRefs = new Map()
 function setBodyRef(uid, el) {
   if (el) bodyRefs.set(uid, el)
   else bodyRefs.delete(uid)
 }
-function scrollActiveBody() {
+function scrollLogToBottom() {
+  if (!props.running) return
   nextTick(() => {
-    const actives = chain.value.filter(r => r.status === 'running')
-    const active = actives[actives.length - 1]
-    const el = active && bodyRefs.get(active.uid)
-    if (el) el.scrollTop = el.scrollHeight
+    const el = logEl.value
+    if (el) {
+      const scroller = el.closest('.chat-messages') || null
+      if (scroller) scroller.scrollTop = scroller.scrollHeight
+    }
   })
 }
 watch(
-  () => chain.value.map(r => `${r.uid}:${r.content.length}:${r.results.length}`).join('|'),
-  () => { if (props.running) scrollActiveBody() },
+  () => [
+    chain.value.length,
+    thoughtRows.value.length,
+    thoughtRows.value[thoughtRows.value.length - 1]?.content?.length || 0,
+    chain.value.map(r => r.content.length).join(''),
+  ],
+  () => scrollLogToBottom(),
 )
 
-/* ── 摘要与兜底日志 ────────────────────────────────────────────────── */
-function previewOf(st) {
-  if (st.results.length) return previewText(st.results[st.results.length - 1].text)
-  return previewText(st.content)
-}
-
+/* ── 摘要：完成后折叠行的文案 ──────────────────────────────────────── */
+const KIND_LABELS = { retrieve: '检索', tool: '工具', reason: '推理', delegate: '委派', generate: '生成' }
 const collapsedSummary = computed(() => {
   const rows = chain.value
   if (!rows.length) {
@@ -529,8 +571,22 @@ const collapsedSummary = computed(() => {
     if (last) return props.running ? `${last.text}…` : last.text
     return props.running ? '正在执行…' : '无执行记录'
   }
-  const done = rows.filter(r => r.status === 'done').length
-  return `共 ${rows.length} 步 · 已完成 ${done} 步${props.running ? ' · 进行中' : ''}`
+  const counts = {}
+  for (const r of rows) {
+    const label = KIND_LABELS[r.kind]
+    if (label) counts[label] = (counts[label] || 0) + 1
+  }
+  const parts = Object.entries(counts).map(([label, n]) => `${label} ${n} 次`)
+  // 总耗时：首行开始 → 末行结束（无时间数据时省略）
+  const starts = rows.map(r => r.startedAt).filter(Boolean)
+  const ends = rows.map(r => r.finishedAt).filter(Boolean)
+  if (starts.length && ends.length) {
+    const total = Math.max(0, Math.max(...ends) - Math.min(...starts))
+    if (total > 0) parts.push(formatDuration(total))
+  }
+  const head = props.running ? '进行中' : (props.error ? '遇到问题' : (props.stopped ? '已停止' : '已完成'))
+  const body = parts.length ? parts.join(' · ') : `${rows.length} 步`
+  return props.running ? `${head} · ${body}` : `${head} · ${body}`
 })
 
 const PHASE_ICONS = {
@@ -550,182 +606,187 @@ function phaseIcon(phase) {
 </script>
 
 <style scoped>
-.work-progress {
+/* 无边框日志流：去卡片边框/背景/阴影，贴近终端 agent 过程输出 */
+.agent-process {
   width: min(100%, 720px);
-  margin: 2px 0 16px;
-  overflow: hidden;
-  border: 1px solid var(--gray-150);
-  border-radius: 14px;
-  background: rgba(255,255,255,.94);
-  box-shadow: 0 4px 18px rgba(58, 48, 40, .045);
+  margin: 2px 0 14px;
 }
 
-.work-progress-head {
-  min-height: 42px;
-  padding: 0 14px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  border-bottom: 1px solid var(--gray-100);
-  cursor: pointer;
-  user-select: none;
-}
-.work-progress-title {
+/* ── 折叠态摘要行 ── */
+.process-summary-line {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: var(--gray-900);
-  font-family: var(--font-display);
-  font-size: 13px;
-  font-weight: var(--font-display-weight);
+  max-width: 100%;
+  padding: 4px 8px;
+  margin-left: -8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--gray-500);
+  transition: background .15s ease;
 }
-.work-progress-title svg { color: var(--main-600); }
-.work-progress-state { display: inline-flex; align-items: center; margin-left: auto; }
-.wp-state { display: inline-flex; align-items: center; gap: 6px; color: var(--main-600); font-size: 10px; font-weight: 650; }
-.wp-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--main-500); box-shadow: 0 0 0 3px var(--main-50); animation: wp-pulse 1.8s ease-in-out infinite; }
-.wp-state.is-done { color: var(--gray-500); }
-.wp-state.is-warning { color: var(--color-warning-900); }
-.work-progress-chevron { color: var(--gray-400); transition: transform .2s ease; }
-.work-progress-chevron.flipped { transform: rotate(180deg); }
-.work-progress-head:hover .work-progress-chevron { color: var(--gray-600); }
-
-.work-progress-collapsed { padding: 8px 14px; font-size: 11px; color: var(--gray-500); }
-.work-progress-collapsed-summary { display: inline-flex; align-items: center; gap: 6px; }
-
-.work-progress-body { padding: 8px 0 6px; }
-.work-progress-empty { padding: 10px 14px; color: var(--gray-400); font-size: 12px; }
-
-/* 旧消息兜底日志 */
-.wp-journal { margin: 0; padding: 2px 14px 6px; list-style: none; }
-.wp-journal li { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; color: var(--gray-700); }
-.wp-journal-marker { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--main-100); color: var(--main-600); }
-.wp-journal-text { min-width: 0; }
-
-/* 步骤链 */
-.work-chain { margin: 0; padding: 0 10px; list-style: none; }
-.work-step { position: relative; }
-.work-step:not(:last-child)::after {
-  content: '';
-  position: absolute;
-  top: 34px;
-  bottom: -4px;
-  left: 19px;
-  width: 1px;
-  background: var(--gray-150);
+.process-summary-line:hover { background: var(--gray-25); }
+.process-summary-marker { display: inline-flex; color: var(--gray-400); }
+.process-summary-marker.is-warning { color: var(--color-warning-900); }
+.process-summary-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.work-step-head {
+.process-summary-chevron { flex: 0 0 auto; color: var(--gray-400); }
+
+/* ── 展开态日志流 ── */
+.process-log { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; }
+.process-empty { padding: 2px 0 6px; color: var(--gray-400); font-size: 12px; }
+.process-error-line {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 6px;
-  border-radius: 9px;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--color-error-50);
+  color: var(--color-error-700);
+  font-size: 11.5px;
+}
+
+/* 步骤行 */
+.process-line-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  margin-left: -8px;
+  border-radius: 8px;
   cursor: pointer;
   user-select: none;
   transition: background .15s ease;
 }
-.work-step-head:hover { background: var(--gray-25); }
-.work-step-badge {
-  position: relative;
-  z-index: 1;
+.process-line-head:hover { background: var(--gray-25); }
+.process-marker {
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--main-100);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--main-600);
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--gray-400);
+  background: var(--gray-25);
 }
-.work-step.is-running .work-step-badge { border-color: var(--main-200); color: var(--main-700); box-shadow: 0 0 0 3px var(--main-50); }
-.work-step.is-done .work-step-badge { background: var(--main-50); }
-.work-step.is-fallback .work-step-badge { border-color: #f0dcae; background: var(--color-warning-50); color: var(--color-warning-900); }
-
-.work-step-label {
+.process-line.is-running .process-marker { color: var(--main-600); background: var(--main-50); }
+.process-line.is-fallback .process-marker { color: var(--color-warning-900); background: var(--color-warning-50); }
+.process-verb { flex: 0 0 auto; font-size: 12px; font-weight: 650; color: var(--gray-800); }
+.process-subagent { flex: 0 0 auto; padding: 1px 6px; border-radius: 999px; background: var(--main-50); color: var(--main-700); font-size: 9.5px; }
+.process-object {
   min-width: 0;
   flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--gray-800);
-  white-space: nowrap;
-}
-.work-step-name { font-weight: 650; }
-.work-step-subagent { flex: 0 0 auto; padding: 1px 6px; border-radius: 999px; background: var(--main-50); color: var(--main-700); font-size: 9.5px; }
-.work-step-object {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--gray-500);
   font-size: 11px;
 }
-.work-step-preview {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--gray-400);
-  font-size: 10.5px;
-  max-width: 240px;
-}
-.work-step-side { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; }
-.work-step-spinner { color: var(--main-500); display: inline-flex; }
-.work-step-check { color: var(--color-success-600, #3f9d5f); }
-.work-step-warn { color: var(--color-warning-900); }
-.work-step-caret {
-  width: 2px;
-  height: 11px;
-  border-radius: 1px;
-  background: var(--main-400);
-  animation: wp-caret-blink .9s steps(1) infinite;
-}
-.work-step-duration { color: var(--gray-400); font-size: 9px; font-variant-numeric: tabular-nums; }
-.work-step-chevron { color: var(--gray-400); transition: transform .2s ease; }
-.work-step-chevron.flipped { transform: rotate(-90deg); }
+.process-side { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
+.process-check { color: var(--color-success-600, #3f9d5f); }
+.process-warn { color: var(--color-warning-900); }
+.process-duration { color: var(--gray-400); font-size: 9.5px; font-variant-numeric: tabular-nums; }
+.process-chevron { color: var(--gray-400); transition: transform .2s ease; }
+.process-chevron.flipped { transform: rotate(-90deg); }
 
-.work-step-body {
-  margin: 2px 6px 6px 40px;
+/* 展开体：左侧细竖线日志缩进，无底色块 */
+.process-line-body {
+  margin: 2px 0 6px 26px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--gray-150);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   max-height: 220px;
   overflow-y: auto;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: var(--gray-25);
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.6;
   color: var(--gray-600);
 }
-.work-step-content { white-space: pre-wrap; word-break: break-word; }
-.work-step-content.is-code {
+.process-line-content { white-space: pre-wrap; word-break: break-word; }
+.process-line-content.is-code {
   font-family: var(--font-mono);
   font-size: 11px;
-  background: var(--gray-50);
-  border: 1px solid var(--gray-100);
-  border-radius: 6px;
-  padding: 6px 8px;
-  color: var(--gray-700);
+  color: var(--gray-600);
 }
-.work-step-results { display: flex; flex-direction: column; gap: 6px; }
-.work-step-result { display: flex; align-items: flex-start; gap: 7px; }
-.work-step-result-label { flex: 0 0 auto; color: var(--gray-400); font-size: 10.5px; padding-top: 1px; }
-.work-step-result-text { min-width: 0; color: var(--gray-600); }
-.work-step-result.is-error .work-step-result-text { color: var(--color-error-700); }
-.work-step-placeholder { color: var(--gray-400); font-style: italic; }
+.process-line-results { display: flex; flex-direction: column; gap: 4px; }
+.process-result { display: flex; align-items: flex-start; gap: 7px; }
+.process-result-label { flex: 0 0 auto; color: var(--gray-400); font-size: 10.5px; padding-top: 1px; }
+.process-result-text { min-width: 0; white-space: pre-wrap; word-break: break-word; color: var(--gray-600); }
+.process-result.is-error .process-result-text { color: var(--color-error-700); }
 
-.work-progress-error { margin: 0 14px 12px; padding: 8px 10px; display: flex; align-items: center; gap: 6px; border-radius: 8px; background: var(--color-error-50); color: var(--color-error-700); font-size: 11px; }
-
-.spin { animation: wp-spin 1s linear infinite; }
-@keyframes wp-spin { to { transform: rotate(360deg); } }
-@keyframes wp-pulse {
-  0%, 100% { opacity: .55; transform: scale(.92); }
-  50% { opacity: 1; transform: scale(1); }
+/* ── 思考流：弱化灰字段落 ── */
+.process-thought {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+  margin-left: 10px;
 }
-@keyframes wp-caret-blink { 50% { opacity: 0; } }
+.process-thought-marker { flex: 0 0 auto; display: inline-flex; padding-top: 3px; color: var(--gray-300); }
+.process-thought-text {
+  min-width: 0;
+  color: var(--gray-400);
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.process-thought.is-streaming .process-thought-text { color: var(--gray-500); }
+.process-thought-caret {
+  display: inline-block;
+  width: 2px;
+  height: 11px;
+  margin-left: 2px;
+  vertical-align: -1px;
+  border-radius: 1px;
+  background: var(--gray-400);
+  animation: process-caret-blink .9s steps(1) infinite;
+}
+
+/* 收起入口 */
+.process-collapse-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 3px 8px;
+  margin-left: -8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--gray-400);
+  transition: background .15s ease, color .15s ease;
+}
+.process-collapse-entry:hover { background: var(--gray-25); color: var(--gray-600); }
+
+/* 旧消息兜底日志 */
+.process-journal { margin: 0; padding: 0; list-style: none; }
+.process-journal li { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; color: var(--gray-600); }
+.process-journal-marker { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; color: var(--gray-400); }
+.process-journal-text { min-width: 0; }
+
+.spin { animation: process-spin 1s linear infinite; }
+@keyframes process-spin { to { transform: rotate(360deg); } }
+@keyframes process-caret-blink { 50% { opacity: 0; } }
 
 @media (max-width: 640px) {
-  .work-progress { border-radius: 12px; }
-  .work-step-object, .work-step-preview { max-width: 120px; }
-  .work-step-body { margin-left: 34px; }
+  .process-object { max-width: 140px; }
+  .process-line-body { margin-left: 24px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wp-state i { animation: none; }
+  .process-thought-caret { animation: none; }
 }
 </style>

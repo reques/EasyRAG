@@ -164,8 +164,25 @@ class AgentService:
                 knowledge_catalog=knowledge_catalog,
             )
 
-        # ── 单 Agent 路径（默认，行为不变）─────────────────────────────────
+        # ── 单 Agent 旧固定管线（AGENT_MODE=single）─────────────────────────────────
         # 优先使用传入的 DB 历史，否则回退到内存 SessionStore
+        # ── 轻量动态 Agent（auto 普通问题 / AGENT_MODE=dynamic）──
+        # 模型每轮自行决策：直接回答 / 调工具（web_search、calculator…）/ 检索
+        # 知识库（kb_search）；简单问题只消耗一次 LLM 调用，不走固定管线。
+        if cfg.AGENT_MODE != "single":
+            logger.info(
+                "[agent_service] 路由至 dynamic agent（动态工具/检索决策）",
+            )
+            return self._run_dynamic(
+                query,
+                session_id=session_id,
+                history=history,
+                user_id=user_id,
+                knowledge_base_ids=knowledge_base_ids,
+                knowledge_catalog=knowledge_catalog,
+                image_data=image_data,
+            )
+
         if history is None:
             history = self._sessions.get_history(session_id)
         initial: Dict[str, Any] = {
@@ -204,6 +221,45 @@ class AgentService:
         return self._build_response(final, elapsed)
 
     # ── DeepAgents 模式（AGENT_MODE=deepagents）──────────────────────────
+    def _run_dynamic(
+        self,
+        query: str,
+        session_id: str = "default",
+        history: Optional[List[Dict[str, str]]] = None,
+        user_id=None,
+        knowledge_base_ids: Optional[Sequence[str]] = None,
+        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
+        image_data: Optional[str] = None,
+        on_step=None,
+        on_artifact=None,
+    ) -> Dict[str, Any]:
+        """轻量动态 Agent 入口：请求级 trace + 统一事件流。
+
+        复用 ``app/agents/dynamic.run_dynamic_agent``：模型通过函数调用自行决定
+        是否调工具、是否检索、是否直接回答；返回与单 Agent 兼容的响应结构。
+        """
+        from app.agents.dynamic import run_dynamic_agent
+        from app.agents.events import use_request_trace
+
+        with use_request_trace(session_id=session_id) as request_trace:
+            if history is None:
+                history = self._sessions.get_history(session_id)
+            result = run_dynamic_agent(
+                query,
+                session_id=session_id,
+                history=history,
+                user_id=user_id,
+                knowledge_base_ids=knowledge_base_ids,
+                knowledge_catalog=knowledge_catalog,
+                image_data=image_data,
+                on_step=on_step,
+                on_artifact=on_artifact,
+            )
+            result["trace_id"] = request_trace.trace.trace_id
+            result["events"] = list(request_trace.events)
+            return result
+
+
     def _run_deep(
         self,
         query: str,
