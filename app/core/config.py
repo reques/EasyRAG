@@ -130,9 +130,10 @@ class Settings(BaseSettings):
     GRAPH_QUERY_TOP_ENTITIES: int = 3      # 检索增强时最多展开的实体数
     # 文件索引消息队列（Redis Stream，2026-08-27）
     INGESTION_CONCURRENCY: int = 3          # 索引 worker 同时处理的最大文件数（全局闸门）
-    INGESTION_PENDING_CLAIM_MS: int = 1800000  # pending 消息认领超时（毫秒，默认 30 分钟；
-    #   必须大于单文件处理时长，否则处理中的消息会被 XAUTOCLAIM 误认领重跑）
-    INGESTION_LOCK_TTL: int = 1800          # 单文件处理锁 TTL（秒，默认 30 分钟）
+    INGESTION_PENDING_CLAIM_MS: int = 180000  # pending 消息认领超时（毫秒，默认 3 分钟）。
+    #   处理中的消息由自动续期锁保护：worker 活着锁持续刷新 → 认领被锁挡住 skip；
+    #   worker 崩溃锁 30 秒内过期 → 消息 3 分钟后被认领重跑（快速恢复，不会误伤处理中任务）
+    INGESTION_LOCK_TTL: int = 30            # 单文件处理锁 TTL（秒）：短 TTL + 持有者自动续期
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
     # 阶段 2A: 分块策略
