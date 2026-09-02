@@ -2,7 +2,7 @@
 
 因项目钉死 langchain==0.3.26（deepagents 官方包要求 langchain>=1.0），
 本模块参考 DeepAgents 的 SubAgent 架构（task 委派工具 + 配置化子智能体 +
-上下文隔离），用 langgraph create_react_agent 自组装等价能力。
+上下文隔离），用 langchain create_agent 自组装等价能力。
 """
 from app.agents.deep.agent import build_main_agent, get_main_agent
 from app.agents.deep.llm import get_langchain_model

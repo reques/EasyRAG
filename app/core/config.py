@@ -190,8 +190,10 @@ class Settings(BaseSettings):
     MAX_PLAN_STEPS: int = 5          # max sub-tasks per plan
     SESSION_TTL: int = 3600          # seconds to keep session state
     # 执行路径: auto=智能路由(普通问题走 dynamic 动态 Agent，复杂任务走 deepagents) |
-    #   single=旧固定单 Agent 管线 | dynamic=轻量动态 Agent(模型自行决定工具/检索/直接回答) |
+    #   dynamic=轻量动态 Agent(模型自行决定工具/检索/直接回答) |
     #   multi=deepagents 的兼容别名(已废弃) | deepagents=DeepAgents 主 Agent+SubAgent
+    # （阶段 0，2026-09-02：single 与 app/graph 固定管线已退役，配置 single/multi
+    #   按 auto 处理并告警）
     AGENT_MODE: Literal["auto", "single", "dynamic", "multi", "deepagents"] = "auto"
 
     # ── DeepAgents (AGENT_MODE=deepagents) ────────────────────────────────
@@ -204,10 +206,6 @@ class Settings(BaseSettings):
     # 阶段 2：委派时按任务描述 discover() 动态收窄子智能体工具集（默认关闭；
     # 只能收窄不能放大——仍需通过配置白名单与请求级权限裁决）
     DEEP_DYNAMIC_TOOLS: bool = False
-
-    # ── Answer quality ───────────────────────────────────────────────────
-    ANSWER_VALIDATION_ENABLED: bool = True
-    ANSWER_MIN_LENGTH: int = 20      # chars below which answer is "too short"
 
     # ── 快速路径（简单问题零成本分流）──────────────────────────────────
     # 简单常识/问候/计算/时间问题先用规则预判直接回答，跳过 LLM 意图分类、

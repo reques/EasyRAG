@@ -26,15 +26,6 @@ CATALOG = [{
 }]
 
 
-class CapturingLLM:
-    def __init__(self):
-        self.messages = None
-
-    def chat_sync(self, messages, **_kwargs):
-        self.messages = messages
-        return "catalog-aware answer"
-
-
 def test_catalog_formatter_exposes_names_and_treats_metadata_as_data():
     prompt = format_knowledge_catalog(CATALOG)
 
@@ -71,21 +62,10 @@ def test_repository_catalog_query_remains_owner_scoped():
     assert "KnowledgeFile.text_content" not in method
 
 
-def test_single_agent_generation_receives_catalog(monkeypatch):
-    llm = CapturingLLM()
-    monkeypatch.setattr(nodes, "get_llm_client", lambda: llm)
-
-    result = nodes.answer_generation({
-        "query": "当前知识库有什么文件",
-        "history": [],
-        "retrieved_docs": [],
-        "knowledge_catalog": CATALOG,
-        "steps": [],
-    })
-
-    assert result["draft_answer"] == "catalog-aware answer"
-    assert "动作识别论文库" in llm.messages[0]["content"]
-    assert "SkelHCC.pdf" in llm.messages[0]["content"]
+# test_single_agent_generation_receives_catalog 随 single 管线退役
+# （2026-09-02 阶段 0）：answer_generation 节点已删除；目录注入行为由
+# test_stream_context_receives_catalog（prepare_context 路径）与
+# test_deep_agent_receives_catalog（deep 路径）继续覆盖。
 
 
 def test_stream_context_receives_catalog(monkeypatch):

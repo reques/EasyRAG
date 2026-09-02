@@ -94,7 +94,7 @@ def test_build_cache_reuses_same_tool_fingerprint(fake_registry, monkeypatch):
         builds["n"] += 1
         return object()
 
-    monkeypatch.setattr("langgraph.prebuilt.create_react_agent", _fake_create)
+    monkeypatch.setattr("langchain.agents.create_agent", _fake_create)
     monkeypatch.setattr("app.agents.deep.llm.get_langchain_model", lambda: object())
     sa._subagent_cache.clear()
 

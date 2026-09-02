@@ -3,7 +3,7 @@
 历史上的 Orchestrator-Worker（orchestrator.py / workers/ / blackboard.py）
 已退役，统一收敛到 ``app/agents/deep``：
 
-- ``deep.agent``        主 Agent（create_react_agent）+ SubAgent 委派
+- ``deep.agent``        主 Agent（create_agent）+ SubAgent 委派
 - ``deep.task_tool``    task 工具（单任务委派 + 熔断）
 - ``deep.planner``      spawn_tasks（DAG 并行委派）与 revise_plan（动态重规划）
 - ``deep.blackboard``   结构化黑板（任务结果共享 + 订阅）
