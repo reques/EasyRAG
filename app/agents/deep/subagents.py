@@ -4,8 +4,8 @@
 主 Agent 通过 ``task(description, subagent_type)`` 工具按描述选择 SubAgent
 （模型自动路由，业务代码零 if/else）。
 
-SubAgent 用 langgraph ``create_react_agent`` 构建（DeepAgents 底层同款
-harness），每次 invoke 独立 state —— 子 Agent 上下文天然与主 Agent 隔离，
+SubAgent 用 langchain ``create_agent`` 构建（1.x 标准构建入口，与
+DeepAgents 底层同款 harness），每次 invoke 独立 state —— 子 Agent 上下文天然与主 Agent 隔离，
 结果以纯文本返回，不污染主 Agent state。
 
 tools 声明语法（2026-08-26 阶段 2 扩展，见 ``resolve_tool_spec``）：
@@ -212,7 +212,7 @@ _subagent_cache: Dict[Tuple[str, Tuple[str, ...]], Any] = {}
 
 
 def build_subagent(config: SubAgentConfig, model=None):
-    """构建 SubAgent 的 langgraph compiled graph（create_react_agent）。
+    """构建 SubAgent 的 langgraph compiled graph（langchain create_agent）。
 
     - 工具子集 = ``resolve_tool_spec(config.tools)`` 解析结果（经注册表转换，
       技能/可用性检查生效）
@@ -221,7 +221,7 @@ def build_subagent(config: SubAgentConfig, model=None):
     - 每次 invoke 独立 state → 子 Agent 上下文隔离
     - model: 测试可注入 mock（此时不缓存）；None = 项目配置的真实模型
     """
-    from langgraph.prebuilt import create_react_agent
+    from langchain.agents import create_agent
 
     from app.agents.deep.llm import get_langchain_model
     from app.agents.deep.tools import registry_to_langchain_tools
@@ -239,11 +239,11 @@ def build_subagent(config: SubAgentConfig, model=None):
         "[deepagents] build subagent %s: %d tools %s",
         config.name, len(tools), list(tool_names),
     )
-    agent = create_react_agent(
+    agent = create_agent(
         model=model,
         tools=tools,
         # 阶段 4：统一追加结构化尾部约定（外部配置文件也自动生效）
-        prompt=config.system_prompt + RESULT_TAIL_PROMPT,
+        system_prompt=config.system_prompt + RESULT_TAIL_PROMPT,
         name=f"subagent_{config.name}",
     )
     if cacheable:

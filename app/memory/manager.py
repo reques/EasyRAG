@@ -1,6 +1,6 @@
 """分层记忆管理 — 情景记忆（会话摘要）+ 语义记忆（用户事实）。
 
-工作记忆即 LangGraph 的 AgentState（任务中间状态），不在此模块。
+工作记忆即 Agent 执行的中间状态（dynamic/deep 路径为 LangGraph messages state；旧 AgentState 已随 single 固定管线退役），不在此模块。
 本模块负责跨轮次/跨会话的持久记忆：
   - 情景记忆: 会话级增量摘要（消息数达到阈值时压缩, 注入 prompt 替代全部历史）
   - 语义记忆: 用户级 facts（规则触发存储 + 注入, LLM 自动提取留后续）

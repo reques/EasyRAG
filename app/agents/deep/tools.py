@@ -2,7 +2,7 @@
 
 EasyRAG 的工具中心是 ``app/tools/registry.py`` 的 ``ToolRegistry``（自动发现
 ``app/tools/*.py`` 导出的 ``TOOL`` + MCP 桥接），工具函数签名统一为
-``fn(**kwargs) -> str``。langchain ``create_react_agent`` 需要 langchain
+``fn(**kwargs) -> str``。langchain ``create_agent`` 需要 langchain
 BaseTool。这里把 ``ToolDefinition`` 包装成 ``StructuredTool``（执行时仍走
 ``registry.invoke``，因此技能白名单、check_fn 可用性检查、MCP 动态注册
 全部自动生效，不复制任何工具实现）。
