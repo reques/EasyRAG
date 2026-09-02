@@ -1,6 +1,6 @@
 # EasyRAG 项目架构与设计
 
-> 最后更新：2026-08-26（多智能体统一到 DeepAgents，Orchestrator-Worker 退役） | 快速上手见 [README](../README.md)，演进记录见 [PROGRESS.md](../PROGRESS.md)
+> 最后更新：2026-08-31（上传管线迁 Redis Stream 队列、structured 分块、图谱命名空间隔离） | 快速上手见 [README](../README.md)，演进记录见 [PROGRESS.md](../PROGRESS.md)
 
 ---
 
@@ -17,9 +17,9 @@ EasyRAG 是一个面向真实业务场景的企业知识库智能问答平台：
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Frontend (Vue 3 SPA)                         │
-│   ChatView · KnowledgeView · Login/Register · 状态栏/任务面板         │
+│   ChatView · KnowledgeView · Login/Register · 状态栏/任务面板 · 工作进度面板        │
 └───────────────────────────────┬─────────────────────────────────────┘
-                                │ REST / SSE (/api/v1, Vite 代理 :8000)
+                                │ REST / SSE (/api/v1, Vite 代理 :8001)
 ┌───────────────────────────────▼─────────────────────────────────────┐
 │                    Backend (FastAPI async)                           │
 │   routers: auth / chat / knowledge / evaluation / mcp                │
@@ -74,8 +74,8 @@ EasyRAG/
 │   │   └── workflow.py           #     StateGraph 装配与编译
 │   ├── llm/                      #   LLM 客户端（同步/流式/JSON 模式，模型分级接口）
 │   ├── rag/                      #   RAG 管线
-│   │   ├── chunker.py            #     多策略分块（fixed/recursive/markdown/parent-child）
-│   │   ├── embeddings.py         #     BGE-M3 embedding（ollama/api）
+│   │   ├── chunker.py            #     多策略分块（fixed/recursive/markdown/parent-child/legal/structured）
+│   │   ├── embeddings.py         #     BGE-M3 embedding（local/ollama/api）
 │   │   ├── vector_store.py       #     向量库三后端（Milvus/Chroma/Memory）
 │   │   ├── retriever.py / enhanced_retriever.py / bm25.py / reranker.py
 │   │   ├── graph_cache.py        #     知识图谱缓存
@@ -93,13 +93,15 @@ EasyRAG/
 │   └── api/                      #   [遗留] 旧版 KB 路由（/api/v1/kb/*）
 ├── backend/                      # 业务后端（分层架构）
 │   ├── server/
-│   │   ├── main.py               #   FastAPI 装配 + lifespan（建表/增量列迁移/种子）
+│   │   ├── main.py               #   FastAPI 装配 + lifespan（建表/增量列迁移/种子/ingestion worker 内嵌启停）
 │   │   ├── routers/              #   auth / chat / knowledge / evaluation / mcp
 │   │   └── seed.py
 │   ├── services/                 #   chat / knowledge / graph / evaluation / model_config
 │   │                             #   skill_config / ragas_evaluator / ragas_worker / agent_run
+│   │                             #   ingestion_service（索引执行）/ ingestion_queue（Redis Stream 发布/ACK）
+│   ├── worker/                   #   ingestion_worker（队列消费者，默认内嵌 uvicorn）
 │   ├── repositories/             #   数据访问层（skill_config 等）
-│   └── storage/                  #   postgres（models_*.py）/ redis / minio 客户端
+│   └── storage/                  #   postgres（models_*.py）/ redis（manager 单例 + RedisLock 工厂）/ minio 客户端
 ├── frontend/                     # Vue 3 SPA
 │   └── src/
 │       ├── views/                #   ChatView / KnowledgeView / Login / Register / Layout
@@ -164,10 +166,11 @@ any error --> fallback_handler --> END
 
 ### 5.3 RAG 管线（app/rag）
 
-- **分块**：fixed / recursive / markdown 结构感知 / parent-child 四策略（`CHUNK_STRATEGY` 配置）
-- **向量化**：BGE-M3，`EMBEDDING_TYPE=ollama`（本地）或 `api`（远程）
+- **分块**：fixed / recursive / markdown 结构感知 / parent-child / legal（法律条文）/ structured（通用结构感知：标题+编号条目一级切分、超长 section 滑动窗口）六策略（`CHUNK_STRATEGY` 配置）
+- **向量化**：BGE-M3，`EMBEDDING_TYPE=local`（本地）/ `ollama`（本地服务）/ `api`（远程）三实现
 - **检索**：Milvus 主后端（Chroma/Memory 供测试），配 BM25 混合 + reranker 重排；命中 child chunk 时 `_unwrap_parent` 回填父块上下文
-- **知识图谱**：实体关系抽取注入检索结果（`GRAPH_ENABLED` 开关），`graph_cache` 缓存
+- **知识图谱**：实体关系抽取注入检索结果（`GRAPH_ENABLED` 开关），`graph_cache` 缓存；实体身份 = `(kb_id, source_file, name)` 命名空间隔离（同名跨文件各自成节点，删除文件级联清理图谱）
+- **上传索引**：Redis Stream 队列化（`kb:ingestion` + 内嵌 uvicorn 的 ingestion worker，并发闸门 + 处理锁 + 崩溃认领），发布失败回退进程内后台任务
 - **OCR / 解析**：扫描件 OCR；`parsers/router.py` 按类型分流到本地解析器或 MinerU API（`deploy/mineru` 旁路部署，见其 README）
 
 ### 5.4 工具系统（app/tools）
@@ -194,13 +197,14 @@ any error --> fallback_handler --> END
 分层：routers（HTTP 契约）→ services（业务逻辑）→ repositories（数据访问）→ storage（Postgres/Redis/MinIO 客户端）。要点：
 
 - **executor 线程连接池隔离**：FastAPI `run_in_executor` 的 worker 线程内 DB 查询一律走随用随建的独立 engine，杜绝异步连接池跨事件循环污染
-- **lifespan 自举**：启动时 `init_db()` 建表 + 增量列迁移（开发用，生产应换 Alembic）+ 种子数据
-- **异步任务**：文件上传返回 202，解析/embedding/图谱抽取放后台任务，阶段化更新进度
+- **lifespan 自举**：启动时 `init_db()` 建表 + 增量列迁移（开发用，生产应换 Alembic）+ 种子数据 + **内嵌启动 ingestion worker**（uvicorn 重启 = worker 重启，消息持久化在 Redis 不丢）
+- **异步任务队列**：文件上传返回 202，索引任务发布到 Redis Stream（`kb:ingestion`，消息只带定位信息），worker 消费执行解析/embedding/图谱抽取，阶段化更新进度；发布失败回退进程内 BackgroundTasks 保底
 
 ### 5.8 前端（frontend）
 
-- ChatView：SSE 流式逐 token 渲染、引用来源可点击跳转原文档、模型切换、Skill 选择标签、任务状态栏（可收起/展开）
-- KnowledgeView：多知识库隔离、两阶段上传进度条（传输 + 索引）、文件预览
+- ChatView：SSE 流式逐 token 渲染、引用来源可点击跳转原文档、模型切换、Skill 选择标签、任务状态栏（可收起/展开）、多智能体任务产出面板
+- KnowledgeView：多知识库隔离、多文件并行上传（独立进度/失败留列表/可关弹窗）、文件预览、检索测试工作台（basic/enhanced 双模式）、图谱可视化（按文件筛选）
+- 工作进度面板（WorkProgress）：progress_summary 驱动的步骤时间线（进行中展开、完成折叠），展示 deep/single 路径的阶段进度
 - 全局设计 token 体系（style.css，main 青色系 + gray 色阶）
 
 ---
@@ -217,12 +221,15 @@ any error --> fallback_handler --> END
 8. **引用可溯源**：检索结果携带 `knowledge_base_id + file_id`，点击跳转文档预览
 9. **评估体系**：本地确定性指标（HitRate/MRR/avg_score）+ 可选 Ragas 独立 venv worker（避免升级主服务依赖，见 docs/ragas-evaluator.md）
 10. **MinerU 旁路部署**：解析服务 Docker 独立运行，不污染主 Python 环境（见 deploy/mineru/README.md）
+11. **上传队列进程化**：Redis Stream（消息只带定位信息、重启不丢、并发闸门 + 短 TTL 自续期锁 + 认领超时），worker 内嵌 uvicorn——不为后台任务引入第三终端
+12. **图谱命名空间隔离**：实体身份 = `(kb_id, source_file, name)`，同名跨文件各自成节点；删除文件按命名空间级联清理图谱表与内存缓存
+13. **通用结构化分块**：识别通用文档层级（标题/编号条目/章节词），通用层零领域词（用户红线）
 
 ---
 
 ## 7. API 概览
 
-统一前缀 `/api/v1`（完整交互文档：启动后端后访问 http://localhost:8000/docs）
+统一前缀 `/api/v1`（完整交互文档：启动后端后访问 http://localhost:8001/docs）
 
 ### 认证 auth
 | 端点 | 说明 |
@@ -246,11 +253,15 @@ any error --> fallback_handler --> END
 | 端点 | 说明 |
 |------|------|
 | `GET/POST /knowledge/bases` | 知识库列表 / 创建 |
-| `POST /knowledge/bases/{id}/upload` | 上传文件（202 异步，进度轮询） |
+| `POST /knowledge/bases/{id}/upload` | 上传文件（202 异步，Redis Stream 队列索引，进度轮询） |
 | `GET /knowledge/bases/{id}/files` | 文件列表（含索引进度/状态） |
 | `GET .../files/{fid}/preview` / `raw` | 文件预览 / 原始二进制 |
-| `DELETE .../files/{fid}` | 删除文件 |
-| `GET /knowledge/bases/{id}/graph` | 知识图谱（实体 + 关系） |
+| `DELETE .../files/{fid}` | 删除文件（级联清理向量 + MinIO + 图谱实体/关系） |
+| `POST .../files/{fid}/reindex` | 单文件重新索引 |
+| `GET /knowledge/bases/{id}/graph` | 知识图谱（实体 + 关系，`(name, source_file)` 去重） |
+| `GET .../graph/neighbors?entity=&source_file=` | 实体邻居（点击详情，可限定文件命名空间） |
+| `GET/POST .../graph/config` / `POST/DELETE .../graph` | 图谱构建配置 / 手动全库构建 / 重置 |
+| `POST .../retrieval/test` | 检索测试工作台（basic 纯向量 / enhanced 五步流水线） |
 
 ### 评估 evaluation
 | 端点 | 说明 |
@@ -278,7 +289,7 @@ any error --> fallback_handler --> END
 |------|------|
 | **智能对话** | SSE 流式逐 token 渲染 · 意图识别自动分流（闲聊/计算/联网搜索/知识库问答）· 引用来源可点击跳转 · 多模型切换 + 自定义模型 |
 | **多智能体** | DeepAgents 主 Agent 自主委派（task / spawn_tasks DAG）→ 子智能体并行执行 → 汇总；侧边任务面板展示进度与产出 |
-| **知识库管理** | 多知识库隔离 · txt/md/pdf/docx/图片上传 · 扫描件 OCR · 本地/MinerU 双解析 · 文件预览 · 两阶段上传进度条 |
+| **知识库管理** | 多知识库隔离 · txt/md/pdf/docx/图片上传 · 多文件并行上传（独立进度）· 队列化索引（Redis Stream，重启不丢）· 扫描件 OCR · 本地/MinerU 双解析 · 文件预览 · 图谱级联删除 |
 | **检索增强** | Milvus 向量检索 · 多策略分块 · BM25 混合 + 重排 · 知识图谱实体关系抽取与查询注入 |
 | **Agent 工具** | web_search（Tavily）· calculator · datetime · text_tool · MCP 外部工具 |
 | **Skill 系统** | 内置 + 自定义 Skill，指令注入 + 工具白名单执行层强制 |
