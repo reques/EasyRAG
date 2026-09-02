@@ -148,6 +148,19 @@ any error --> fallback_handler --> END
 - **校验重试**：`answer_validation` 检查回答质量，不合格最多重生成 1 次
 - **兜底**：任何节点异常 → `fallback_handler`，不把错误裸抛给用户
 
+### 5.1.6 轻量动态 Agent（app/agents/dynamic，默认普通问题链路）
+
+2026-08-31 起，``AGENT_MODE=auto`` 的普通问题与 ``AGENT_MODE=dynamic`` 统一走轻量动态
+Agent（``create_react_agent`` + 注册表工具，无委派工具）：
+
+- **动态决策**：模型每轮通过函数调用自行决定「直接回答 / 调工具 / 检索知识库」，
+  不再依赖固定 intent -> retrieval/tool 管线；简单问题一次 LLM 调用即结束
+- **工具集**：仅项目注册表普通工具（web_search / kb_search / calculator /
+  datetime_tool / text_tool / MCP 工具），不引入 task/spawn_tasks 委派
+- **流式透出**：/chat/stream 与 DeepAgents 分支同构，工具调用/检索状态实时
+  SSE 推给前端，徽标显示「动态」
+- **兼容**：``AGENT_MODE=single`` 仍保留旧固定管线；deepagents / multi 不变
+
 ### 5.2 多智能体（app/agents/deep，DeepAgents 统一实现）
 
 2026-08-26 起，多智能体统一到 LangGraph 原生 DeepAgents（原 Orchestrator-Worker

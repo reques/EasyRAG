@@ -1171,6 +1171,11 @@ body.task-panel-resizing {
   background: var(--gray-100);
   border-color: var(--gray-200);
 }
+.message-mode-badge.mode-dynamic {
+  color: #0f766e;
+  background: #f0fdfa;
+  border-color: rgba(20, 150, 135, .35);
+}
 /* 消息时间分隔条: 居中显示在消息上方, 小字灰显 */
 .message-time-separator {
   text-align: center;
@@ -3008,6 +3013,11 @@ select:focus-visible {
   color: var(--gray-700);
   border-color: var(--gray-200);
   background: var(--gray-50);
+}
+.message-mode-badge.mode-dynamic {
+  color: #0f766e;
+  border-color: rgba(20, 150, 135, .35);
+  background: #f0fdfa;
 }
 .activity-badge.kind-reason,
 .activity-badge.kind-tool,

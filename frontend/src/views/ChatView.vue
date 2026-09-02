@@ -661,6 +661,7 @@ const MODE_LABELS = {
   deepagents: 'DeepAgents',
   multi: '多智能体',
   single: '单 Agent',
+  dynamic: '动态',
 }
 function modeLabel(mode) {
   return MODE_LABELS[mode] || mode || ''
@@ -1597,6 +1598,7 @@ async function send() {
         const m = messages.value[msgIndex]
         messages.value[msgIndex] = {
           ...m,
+          content: m.content || ev.content || '',
           sources: ev.sources || [],
           meta: {
             intent: ev.intent,

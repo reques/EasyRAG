@@ -1345,3 +1345,19 @@ DeepAgents：**由主 Agent（create_react_agent）根据工具描述自主决�
 - 文档同步：README / `docs/ARCHITECTURE.md` / `docs/ARCHITECTURE_DETAILED.md`
   （架构图、目录树、5.2/5.4 路由、第 10 节重写、第 18 节端到端时序）；
   `.env.template` 与 `app/core/config.py` 注明 `multi` 为废弃别名
+
+#### 2026-08-31 — 轻量动态 Agent：默认回答流程改为“模型自行决定”
+**背景（用户反馈）：**当前回答流程过于单一：无论简单还是复杂问题都走固定管线
+（query_rewrite → intent → retrieval/tool → validate），简单问题也会浪费额外 LLM 调用。需要能根据不同情景动态调用工具、检索内容，
+简单问题不走复杂流程。
+**实现：**
+1. **新增轻量动态 Agent（app/agents/dynamic.py）**：``create_react_agent`` + 注册表工具
+   （web_search / kb_search / calculator / datetime_tool 等，无 task/spawn_tasks 委派）；模型每轮通过函数调用
+   自行决定「直接回答 / 调工具 / 检索知识库」，简单问题一次 LLM 调用就结束
+2. **路由收拢（agent_service.run）**：``AGENT_MODE=auto`` 的普通问题与 ``dynamic`` 模式→ 动态 Agent；
+   ``single`` 保留旧固定管线；``deepagents`` / ``multi`` 不变
+3. **流式支持（chat_router /chat/stream）**：新增动态分支，工具调用/检索状态实时
+   SSE 透出，``agent_mode=dynamic`` 徽标「动态」；前端 ChatView 新增 MODE_LABELS.dynamic 与样式
+4. **测试与验证**：新增 tests/test_dynamic_agent.py （路由、构建、结果解析）全部通过；
+   真实服务冒烟：“你好”直接回答、“现在几点”调 datetime_tool、
+   “15*17+3”调 calculator、“最新 AI 新闻”调 web_search；全量测试无新失败（原 5 个环境性失败与本改动无关）
