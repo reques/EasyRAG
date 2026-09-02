@@ -189,9 +189,10 @@ class Settings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 20   # LangGraph recursion_limit
     MAX_PLAN_STEPS: int = 5          # max sub-tasks per plan
     SESSION_TTL: int = 3600          # seconds to keep session state
-    # 执行路径: auto=智能路由(单 Agent/多智能体按规则分流) | single=仅单 Agent |
-    # multi=deepagents 的兼容别名(已废弃) | deepagents=DeepAgents 主 Agent+SubAgent
-    AGENT_MODE: Literal["auto", "single", "multi", "deepagents"] = "auto"
+    # 执行路径: auto=智能路由(普通问题走 dynamic 动态 Agent，复杂任务走 deepagents) |
+    #   single=旧固定单 Agent 管线 | dynamic=轻量动态 Agent(模型自行决定工具/检索/直接回答) |
+    #   multi=deepagents 的兼容别名(已废弃) | deepagents=DeepAgents 主 Agent+SubAgent
+    AGENT_MODE: Literal["auto", "single", "dynamic", "multi", "deepagents"] = "auto"
 
     # ── DeepAgents (AGENT_MODE=deepagents) ────────────────────────────────
     # 外部 SubAgent 配置文件（JSON/YAML，见 subagents.load_subagents 的格式；
