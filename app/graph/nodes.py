@@ -3,12 +3,11 @@ from typing import Any, Dict, List
 from app.core.config import get_settings
 from app.core.exceptions import EmptyRetrievalError, LLMClientError, ToolError
 from app.core.logger import get_logger
-from app.graph.state import AgentState
 from app.llm.client import get_llm_client
 from app.prompts.templates import (
-    ANSWER_NO_CONTEXT, ANSWER_VALIDATION, ANSWER_WITH_CONTEXT,
+    ANSWER_NO_CONTEXT, ANSWER_WITH_CONTEXT,
     ANSWER_WITH_ENHANCED_CONTEXT, ANSWER_WITH_ENHANCED_NO_CONTEXT,
-    FALLBACK_ANSWER, INTENT_RECOGNITION, REACT_REASONING, TASK_PLANNING,
+    INTENT_RECOGNITION,
 )
 from app.tools.registry import get_tool_registry
 logger = get_logger(__name__)
@@ -68,26 +67,6 @@ def rewrite_query_with_history(query: str, history: List[Dict[str, str]]) -> str
     except Exception as exc:
         logger.warning("[query_rewrite] failed, use original: %s", exc)
     return query
-
-
-def query_rewrite(state):
-    """Node 0: 结合历史把追问改写为自包含问题。
-
-    2026-08-15（P1 统一两条路径）：此前指代消解只在 SSE 快速路径
-    （prepare_context）执行，graph 路径（/chat/send）不做——同一句
-    "那明天呢"两条路径理解不一致。下沉到 graph 入口后 /chat/send 与
-    /chat/stream 行为一致。改写失败/无历史时原样返回，零副作用；
-    非追问查询不触发 LLM（rewrite_query_with_history 内部短路）。
-    """
-    query = state["query"]
-    history = state.get("history") or []
-    resolved = rewrite_query_with_history(query, history)
-    if resolved != query:
-        logger.info("[query_rewrite] %r -> %r (graph entry)", query[:40], resolved[:60])
-    return {
-        "query": resolved,
-        "steps": _append_step(state, f"query_rewrite -> {resolved[:40]}"),
-    }
 
 
 def intent_recognition(state):
@@ -170,118 +149,6 @@ def intent_recognition(state):
             "steps": _append_step(state, "intent_recognition -> fallback"),
         }
 
-def task_planning(state):
-    """Node 2: Decompose complex request into ordered sub-tasks."""
-    query = state["query"]
-    intent = state.get("intent", "complex_task")
-    logger.info("[task_planning] query=%r intent=%s", query[:60], intent)
-    client = get_llm_client()
-    prompt = TASK_PLANNING.format(query=query, intent=intent)
-    try:
-        data = client.chat_json_sync([{"role": "user", "content": prompt}])
-        sub_tasks = data.get("sub_tasks") or []
-        needs_retrieval = bool(data.get("needs_retrieval", True))
-        needs_tool = bool(data.get("needs_tool", False))
-        logger.info("[task_planning] %d sub-tasks", len(sub_tasks))
-        return {
-            "sub_tasks": sub_tasks,
-            "requires_retrieval": needs_retrieval,
-            "requires_tool": needs_tool,
-            "steps": _append_step(state, "task_planning -> " + str(len(sub_tasks)) + " sub-tasks"),
-        }
-    except Exception as exc:
-        logger.warning("[task_planning] failed: %s", exc)
-        return {
-            "sub_tasks": [query],
-            "requires_retrieval": True,
-            "requires_tool": False,
-            "steps": _append_step(state, "task_planning -> error, single task"),
-        }
-
-
-def agent_reasoning(state):
-    """ReAct 推理节点: LLM 决定下一步是调工具还是给最终答案。
-
-    每轮读取 query + history + observations（过往行动-观察序列）+ 可用工具描述,
-    输出 JSON 决定 action:
-      - action.type="tool"         → 写 pending_tool, 路由到 tool_execution
-      - action.type="final_answer" → 写 draft_answer, 路由到 answer_validation
-    非法 JSON / 未知工具 → 记为失败 observation 让 LLM 自我修正, 连续 3 次 → fallback。
-    达 AGENT_MAX_ITERATIONS → 强制基于现有观察生成答案。
-    """
-    query = state["query"]
-    observations = state.get("observations") or []
-    iterations = state.get("react_iterations", 0)
-    max_iter = cfg.AGENT_MAX_ITERATIONS or 5
-    logger.info("[agent_reasoning] iter=%d/%d obs=%d", iterations, max_iter, len(observations))
-
-    # 步数耗尽 → 强制基于现有观察给答案
-    if iterations >= max_iter:
-        obs_text = "\n".join(str(o.get("result", "")) for o in observations if o.get("tool") != "_error") or "（无有效观察）"
-        return {
-            "draft_answer": f"基于已有信息：\n{obs_text[:600]}",
-            "react_iterations": iterations + 1,
-            "steps": _append_step(state, "agent_reasoning -> max iterations, forced answer"),
-        }
-
-    client = get_llm_client()
-    registry = get_tool_registry()
-    obs_text = "\n".join(
-        f"{i+1}. 思考: {o.get('thought','')} | 工具: {o.get('tool','')} | 结果: {str(o.get('result',''))[:200]}"
-        for i, o in enumerate(observations)
-    ) or "（暂无观察）"
-    history = state.get("history") or []
-    prompt = REACT_REASONING.format(
-        tools=registry.to_react_prompt(),
-        observations=obs_text,
-        query=query,
-        history=_format_history_for_prompt(history),
-    )
-    from app.skills.context import get_active_skill_prompt
-
-    skill_prompt = get_active_skill_prompt()
-    if skill_prompt:
-        prompt = skill_prompt + "\n\n" + prompt
-    try:
-        data = client.chat_json_sync([{"role": "user", "content": prompt}])
-        action = data.get("action") or {}
-        thought = str(data.get("thought", ""))
-        if action.get("type") == "final_answer":
-            return {
-                "draft_answer": str(action.get("answer", "")),
-                "react_iterations": iterations + 1,
-                "steps": _append_step(state, f"agent_reasoning iter{iterations} -> final_answer"),
-            }
-        # tool 调用
-        tool_name = action.get("tool_name")
-        if tool_name not in registry.list_names():
-            raise ValueError(f"unknown or unavailable tool: {tool_name}")
-        return {
-            "pending_tool": {"tool_name": tool_name, "args": action.get("args") or {}, "thought": thought},
-            "observations": list(observations),
-            "react_iterations": iterations + 1,
-            "steps": _append_step(state, f"agent_reasoning iter{iterations} -> tool:{tool_name}"),
-        }
-    except Exception as exc:
-        logger.warning("[agent_reasoning] failed: %s", exc)
-        new_obs = list(observations)
-        new_obs.append({"thought": "", "tool": "_error", "args": {},
-                        "result": f"推理失败: {exc}。请输出合法 JSON。"})
-        errors = sum(1 for o in new_obs if o.get("tool") == "_error")
-        if errors >= 3:
-            return {
-                "is_fallback": True,
-                "error_message": "ReAct 推理连续失败",
-                "react_iterations": iterations + 1,
-                "steps": _append_step(state, "agent_reasoning -> 3 failures, fallback"),
-            }
-        return {
-            "observations": new_obs,
-            "react_iterations": iterations + 1,
-            "pending_tool": {"tool_name": "_retry", "args": {}},
-            "steps": _append_step(state, f"agent_reasoning iter{iterations} -> retry after error"),
-        }
-
 
 async def lookup_file_ids_async(
     pairs: List[tuple],
@@ -324,7 +191,7 @@ async def lookup_file_ids_async(
 
 
 # ── executor 线程安全的一次性 DB 访问 ────────────────────────────────────────
-# 背景：knowledge_retrieval / answer_generation 等节点被 FastAPI 端点经
+# 背景：knowledge_retrieval 等节点函数被 FastAPI 端点经
 # run_in_executor 丢到 worker 线程跑同步代码。线程内若 asyncio.run(...) 复用
 # 全局 async engine 的连接池，连接会带着另一个事件循环的 Future 归还池中，
 # 污染后续请求（症状：第一个事务静默失效，随后 FK violation / PendingRollback）。
@@ -757,211 +624,6 @@ def tool_execution(state):
             "tool_error": "Unexpected: " + str(exc),
             "steps": _append_step(state, "tool_execution -> ERROR"),
         }
-
-def answer_generation(state):
-    """Node 6: Generate a draft answer from retrieved docs and/or tool results."""
-    query = state["query"]
-    docs = state.get("retrieved_docs") or []
-    tool_result = state.get("tool_result") or ""
-    tool_error = state.get("tool_error") or ""
-    regen_count = state.get("regeneration_count") or 0
-    history = state.get("history") or []
-    image_data = state.get("image_data") or None  # 多模态直读：data URL
-    logger.info(
-        "[answer_generation] docs=%d tool_result=%s regen=%d history_turns=%d image=%s",
-        len(docs), bool(tool_result), regen_count, len(history) // 2, bool(image_data),
-    )
-    client = get_llm_client()
-    effective_tool = tool_result or ("Tool failed: " + tool_error if tool_error else "N/A")
-    try:
-        messages = [{"role": t["role"], "content": t["content"]} for t in history]
-
-        from app.services.knowledge_catalog import format_knowledge_catalog
-        from app.skills.context import get_active_skill_prompt
-
-        skill_prompt = get_active_skill_prompt()
-        if skill_prompt:
-            messages.insert(0, {"role": "system", "content": skill_prompt})
-
-        messages.insert(0, {
-            "role": "system",
-            "content": format_knowledge_catalog(state.get("knowledge_catalog")),
-        })
-
-        # 增强检索：使用知识块格式（截断保护：防止超大 context 导致 LLM 返回空）
-        knowledge_blocks = state.get("knowledge_blocks")
-        if knowledge_blocks and docs:
-            from app.rag.enhanced_retriever import format_blocks_for_prompt
-            context = format_blocks_for_prompt(
-                _rebuild_blocks(knowledge_blocks, docs)
-            )
-            # 截断保护：context 超过 8000 字符时截断，避免 LLM 因 prompt 过长返回空
-            MAX_CONTEXT_CHARS = 8000
-            if len(context) > MAX_CONTEXT_CHARS:
-                logger.warning(
-                    "[answer_generation] context too long (%d chars), truncating to %d",
-                    len(context), MAX_CONTEXT_CHARS,
-                )
-                context = context[:MAX_CONTEXT_CHARS] + "\n\n[... context truncated ...]"
-            messages.append({
-                "role": "user",
-                "content": (
-                    [
-                        {"type": "text", "text": ANSWER_WITH_ENHANCED_CONTEXT.format(
-                            query=query, context=context, tool_result=effective_tool
-                        )},
-                        {"type": "image_url", "image_url": {"url": image_data}},
-                    ]
-                    if image_data else
-                    ANSWER_WITH_ENHANCED_CONTEXT.format(
-                        query=query, context=context, tool_result=effective_tool
-                    )
-                ),
-            })
-        elif docs:
-            context = "\n\n".join(
-                "[" + str(i + 1) + "] " + d["content"] for i, d in enumerate(docs)
-            )
-            messages.append({
-                "role": "user",
-                "content": (
-                    [
-                        {"type": "text", "text": ANSWER_WITH_CONTEXT.format(
-                            query=query, context=context, tool_result=effective_tool
-                        )},
-                        {"type": "image_url", "image_url": {"url": image_data}},
-                    ]
-                    if image_data else
-                    ANSWER_WITH_CONTEXT.format(
-                        query=query, context=context, tool_result=effective_tool
-                    )
-                ),
-            })
-        else:
-            messages.append({
-                "role": "user",
-                "content": (
-                    [
-                        {"type": "text", "text": ANSWER_NO_CONTEXT.format(
-                            query=query, tool_result=effective_tool
-                        )},
-                        {"type": "image_url", "image_url": {"url": image_data}},
-                    ]
-                    if image_data else
-                    ANSWER_NO_CONTEXT.format(
-                        query=query, tool_result=effective_tool
-                    )
-                ),
-            })
-        draft = client.chat_sync(messages)
-        logger.info("[answer_generation] draft length=%d", len(draft))
-
-        # LLM occasionally returns an empty body with HTTP 200 — retry once
-        # in-place before giving up, so the user doesn't hit a fallback.
-        if not draft.strip():
-            logger.warning("[answer_generation] empty draft, retrying once")
-            # 如果用的是增强检索格式且答案为空，回退到传统平铺格式重试
-            if knowledge_blocks and docs:
-                flat_context = "\n\n".join(
-                    "[" + str(i + 1) + "] " + d["content"] for i, d in enumerate(docs)
-                )
-                fallback_msg = {
-                    "role": "user",
-                    "content": ANSWER_WITH_CONTEXT.format(
-                        query=query, context=flat_context, tool_result=effective_tool
-                    ),
-                }
-                retry_messages = messages[:-1] + [fallback_msg]
-                logger.info("[answer_generation] retrying with flat context (%d chars)", len(flat_context))
-                draft = client.chat_sync(retry_messages)
-            else:
-                draft = client.chat_sync(messages)
-            logger.info("[answer_generation] retry draft length=%d", len(draft))
-
-        if not draft.strip():
-            return {
-                "draft_answer": "",
-                "error_message": "LLM returned an empty response",
-                "steps": _append_step(state, "answer_generation -> EMPTY after retry"),
-            }
-
-        return {
-            "draft_answer": draft,
-            "regeneration_count": regen_count + 1,
-            "error_message": None,
-            "steps": _append_step(state, "answer_generation (attempt " + str(regen_count + 1) + ")"),
-        }
-    except LLMClientError as exc:
-        logger.error("[answer_generation] LLM error: %s", exc)
-        return {
-            "draft_answer": "",
-            "error_message": str(exc),
-            "steps": _append_step(state, "answer_generation -> LLM ERROR"),
-        }
-    except Exception as exc:
-        logger.error("[answer_generation] unexpected: %s", exc)
-        return {
-            "draft_answer": "",
-            "error_message": str(exc),
-            "steps": _append_step(state, "answer_generation -> ERROR"),
-        }
-
-def answer_validation(state):
-    """Node 7: Check whether draft answer is sufficient."""
-    if not cfg.ANSWER_VALIDATION_ENABLED:
-        logger.info("[answer_validation] disabled by config")
-        return {
-            "validation_passed": True,
-            "validation_feedback": "Validation disabled",
-            "final_answer": state.get("draft_answer", ""),
-            "steps": _append_step(state, "answer_validation -> skipped"),
-        }
-    query = state["query"]
-    draft = state.get("draft_answer", "")
-    logger.info("[answer_validation] draft length=%d", len(draft))
-    if len(draft.strip()) < cfg.ANSWER_MIN_LENGTH:
-        return {
-            "validation_passed": False,
-            "validation_feedback": "Answer too short.",
-            "final_answer": draft,
-            "steps": _append_step(state, "answer_validation -> FAILED (too short)"),
-        }
-    client = get_llm_client()
-    prompt = ANSWER_VALIDATION.format(query=query, draft_answer=draft)
-    try:
-        data = client.chat_json_sync([{"role": "user", "content": prompt}])
-        passed = bool(data.get("passed", True))
-        feedback = str(data.get("feedback", ""))
-        logger.info("[answer_validation] passed=%s feedback=%r", passed, feedback)
-        return {
-            "validation_passed": passed,
-            "validation_feedback": feedback,
-            "final_answer": draft if passed else "",
-            "steps": _append_step(state, "answer_validation -> " + ("PASSED" if passed else "FAILED")),
-        }
-    except Exception as exc:
-        logger.warning("[answer_validation] error (accepting draft): %s", exc)
-        return {
-            "validation_passed": True,
-            "validation_feedback": "Validation error; accepting draft.",
-            "final_answer": draft,
-            "steps": _append_step(state, "answer_validation -> ERROR (accepted)"),
-        }
-
-
-def fallback_handler(state):
-    """Node 8: Produce a safe fallback response on any failure."""
-    query = state.get("query", "")
-    error = state.get("error_message") or "the model could not produce an answer"
-    logger.warning("[fallback_handler] error=%r", error)
-    fallback_text = FALLBACK_ANSWER.format(query=query, error=error)
-    return {
-        "final_answer": fallback_text,
-        "is_fallback": True,
-        "validation_passed": False,
-        "steps": _append_step(state, "fallback_handler -> fallback answer generated"),
-    }
-
 
 def _rebuild_blocks(block_data: List[Dict[str, Any]], docs: List[Dict[str, Any]]):
     """从序列化数据重建知识块对象（用于 format_blocks_for_prompt）。"""

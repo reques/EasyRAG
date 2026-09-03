@@ -142,25 +142,26 @@ def test_auto_complex_query_routes_to_deepagents(monkeypatch):
     assert deep_called["n"] == 1
 
 
-def test_auto_simple_query_stays_single(monkeypatch):
-    """auto + 简单查询 → 不走 deep，进单 Agent 路径。"""
+def test_auto_simple_query_stays_dynamic(monkeypatch):
+    """auto + 简单查询 → 不走 deep，进 dynamic Agent 路径（阶段 0 后无单 Agent 管线）。"""
     from types import SimpleNamespace
     import app.services.agent_service as svc_mod
 
     deep_called = {"n": 0}
+    dyn_called = {"n": 0}
 
     def _fake_run_deep(self, query, **kwargs):
         deep_called["n"] += 1
         return {"final_answer": "deep"}
 
+    def _fake_run_dynamic(self, query, **kwargs):
+        dyn_called["n"] += 1
+        return {"final_answer": "dynamic"}
+
     monkeypatch.setattr(svc_mod, "cfg", SimpleNamespace(AGENT_MODE="auto"))
     monkeypatch.setattr(AgentService, "_run_deep", _fake_run_deep)
-    monkeypatch.setattr(svc_mod, "get_graph", lambda: None)
+    monkeypatch.setattr(AgentService, "_run_dynamic", _fake_run_dynamic)
     svc = object.__new__(AgentService)
-    from app.services.agent_service import SessionStore
-    svc._sessions = SessionStore()
-    try:
-        svc.run("今天天气怎么样", session_id="s3", history=[])
-    except Exception:
-        pass  # 单 Agent 路径会碰 graph（已 mock 为 None）——只需确认没进 deep
+    svc.run("今天天气怎么样", session_id="s3", history=[])
     assert deep_called["n"] == 0
+    assert dyn_called["n"] == 1

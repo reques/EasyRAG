@@ -2,7 +2,7 @@
 
 与 DeepAgents（``app/agents/deep``）的区别：
 - 不引入 task/spawn_tasks/revise_plan 等委派机制，只保留项目注册表里的普通工具；
-- 用 create_react_agent 的函数调用能力替代固定管线（query_rewrite -> intent
+- 用 create_agent 的函数调用能力替代固定管线（query_rewrite -> intent
   -> retrieval/tool -> validate），模型每轮自行决策下一步动作；
 - 简单问题（寒暄、常识、写作等）只需一次 LLM 调用即可完成，不需要走检索/验证等
   复杂流程；需要实时信息时模型会自动调 web_search，知识库内容会自动调 kb_search。
@@ -68,12 +68,12 @@ def build_dynamic_agent(
     model=None,
     recursion_limit: Optional[int] = None,
 ):
-    """构建轻量动态 Agent（create_react_agent + 注册表工具，无委派工具）。
+    """构建轻量动态 Agent（create_agent + 注册表工具，无委派工具）。
 
     model: 测试可注入 mock；None 时使用项目 LangChain 模型并缓存。
     recursion_limit: 仅作为构建期默认值保留（invoke 时仍可覆盖）。
     """
-    from langgraph.prebuilt import create_react_agent
+    from langchain.agents import create_agent
 
     from app.agents.deep.llm import get_langchain_model
     from app.agents.deep.tools import registry_to_langchain_tools
@@ -90,10 +90,10 @@ def build_dynamic_agent(
         "[dynamic] agent built: %d tools (registry only, no delegation tools)",
         len(tools),
     )
-    agent = create_react_agent(
+    agent = create_agent(
         model=model,
         tools=tools,
-        prompt=prompt,
+        system_prompt=prompt,
         name="easyrag_dynamic_agent",
     )
     if cacheable:

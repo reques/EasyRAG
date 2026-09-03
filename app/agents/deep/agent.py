@@ -1,13 +1,13 @@
 """DeepAgents 集成 — 主 Agent 构建。
 
-主 Agent = langgraph ``create_react_agent``：
+主 Agent = langchain ``create_agent``（1.x 标准构建入口）：
 - 项目全量工具（ToolRegistry → StructuredTool，含技能白名单）
 - ``task`` 委派工具（→ 配置化 SubAgent）
 - ``spawn_tasks`` 批量委派工具（阶段 3：DAG 依赖 + 分层并发）
 - ``revise_plan`` 计划修订工具（阶段 4：追加/取消/细化重发）
 - system prompt 注入：任务工具说明 + 可用子智能体名册
 
-架构对照 DeepAgents ``create_deep_agent``（底层同为 create_react_agent +
+架构对照 DeepAgents ``create_deep_agent``（底层同为 create_agent +
 工具集 + 委派机制），但因项目钉死 langchain 0.3.26 / langgraph 0.6.x
 （deepagents 官方包要求 langchain>=1.0），此处自组装等价能力。
 """
@@ -72,7 +72,7 @@ def build_main_agent(
     recursion_limit 在构建时绑定（None = DEEP_SUBAGENT_RECURSION_LIMIT）；
     主 Agent 自身 recursion_limit 由调用方 invoke 时传入。
     """
-    from langgraph.prebuilt import create_react_agent
+    from langchain.agents import create_agent
 
     from app.agents.deep.llm import get_langchain_model
     from app.agents.deep.planner import build_revise_plan_tool, build_spawn_tasks_tool
@@ -95,10 +95,10 @@ def build_main_agent(
         "[deepagents] main agent built: %d tools (incl. task, spawn_tasks, revise_plan)",
         len(tools),
     )
-    agent = create_react_agent(
+    agent = create_agent(
         model=model,
         tools=tools,
-        prompt=prompt,
+        system_prompt=prompt,
         name="easyrag_deep_agent",
     )
     if cacheable:

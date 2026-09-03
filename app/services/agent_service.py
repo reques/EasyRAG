@@ -1,11 +1,10 @@
-"""Agent service layer - wraps the LangGraph workflow."""
+"""Agent service layer - Agent routing (dynamic / deepagents)."""
 from __future__ import annotations
 import json
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from app.core.config import get_settings
 from app.core.logger import get_logger
-from app.graph.workflow import get_graph
 
 logger = get_logger(__name__)
 cfg = get_settings()
@@ -54,7 +53,6 @@ class SessionStore:
 
 class AgentService:
     def __init__(self):
-        self._graph = get_graph()
         self._sessions = SessionStore(ttl=cfg.SESSION_TTL)
 
     # ── 智能路由：auto 模式下判断是否走多智能体 ──────────────────────────────
@@ -151,6 +149,12 @@ class AgentService:
                 knowledge_base_ids=knowledge_base_ids,
                 knowledge_catalog=knowledge_catalog,
             )
+        # 阶段 0（2026-09-02）：single 与旧固定管线已删除，配置容错按 auto 处理
+        if cfg.AGENT_MODE == "single":
+            logger.warning(
+                "[agent_service] AGENT_MODE=single 已退役（固定管线删除），按 auto 处理；"
+                "请更新配置为 auto / dynamic / deepagents"
+            )
         if cfg.AGENT_MODE == "auto" and self._should_use_multi(query, history):
             logger.info(
                 "[agent_service] auto 判定复杂任务，路由至 deepagents（主 Agent 自行拆解/委派）"
@@ -164,61 +168,21 @@ class AgentService:
                 knowledge_catalog=knowledge_catalog,
             )
 
-        # ── 单 Agent 旧固定管线（AGENT_MODE=single）─────────────────────────────────
-        # 优先使用传入的 DB 历史，否则回退到内存 SessionStore
         # ── 轻量动态 Agent（auto 普通问题 / AGENT_MODE=dynamic）──
         # 模型每轮自行决策：直接回答 / 调工具（web_search、calculator…）/ 检索
-        # 知识库（kb_search）；简单问题只消耗一次 LLM 调用，不走固定管线。
-        if cfg.AGENT_MODE != "single":
-            logger.info(
-                "[agent_service] 路由至 dynamic agent（动态工具/检索决策）",
-            )
-            return self._run_dynamic(
-                query,
-                session_id=session_id,
-                history=history,
-                user_id=user_id,
-                knowledge_base_ids=knowledge_base_ids,
-                knowledge_catalog=knowledge_catalog,
-                image_data=image_data,
-            )
-
-        if history is None:
-            history = self._sessions.get_history(session_id)
-        initial: Dict[str, Any] = {
-            "query": query,
-            "session_id": session_id,
-            "history": history,
-            "user_id": str(user_id) if user_id else "",
-            "knowledge_base_ids": list(knowledge_base_ids or []),
-            "knowledge_catalog": list(knowledge_catalog or []),
-            "image_data": image_data,
-            "steps": [],
-            "retrieved_docs": [],
-            "tool_args": {},
-            "sub_tasks": [],
-            "regeneration_count": 0,
-            "retrieval_triggered": False,
-            "tool_triggered": False,
-            "is_fallback": False,
-        }
-        try:
-            final: Dict[str, Any] = self._graph.invoke(
-                initial,
-                config={"recursion_limit": cfg.AGENT_MAX_ITERATIONS},
-            )
-        except Exception as exc:
-            logger.error("[agent_service] graph error: %s", exc)
-            final = {
-                **initial,
-                "final_answer": "An unexpected error occurred: " + str(exc),
-                "is_fallback": True,
-                "error_message": str(exc),
-                "steps": ["graph_invoke -> FATAL ERROR"],
-            }
-        elapsed = time.perf_counter() - start
-        logger.info("[agent_service] done in %.2fs", elapsed)
-        return self._build_response(final, elapsed)
+        # 知识库（kb_search）；简单问题只消耗一次 LLM 调用。
+        # （阶段 0，2026-09-02：AGENT_MODE=single 与 app/graph 固定管线已退役，
+        #  auto/dynamic/deepagents 之外不再有兜底分支。）
+        logger.info("[agent_service] 路由至 dynamic agent（动态工具/检索决策）")
+        return self._run_dynamic(
+            query,
+            session_id=session_id,
+            history=history,
+            user_id=user_id,
+            knowledge_base_ids=knowledge_base_ids,
+            knowledge_catalog=knowledge_catalog,
+            image_data=image_data,
+        )
 
     # ── DeepAgents 模式（AGENT_MODE=deepagents）──────────────────────────
     def _run_dynamic(
@@ -305,7 +269,7 @@ class AgentService:
         on_step=None,
         on_artifact=None,
     ) -> Dict[str, Any]:
-        """DeepAgents 风格：主 Agent（create_react_agent + task 工具）→ SubAgent。
+        """DeepAgents 风格：主 Agent（create_agent + task 工具）→ SubAgent。
 
         同步执行（子 Agent 内联在 task 工具中，无异步任务系统）。
         on_step: 可选回调 fn(step, detail)，供 SSE 流式端点实时透传阶段状态。
@@ -869,42 +833,6 @@ class AgentService:
             "tool_result": state.get("tool_result"),
             "resolved_query": resolved_query,
         }
-
-    @staticmethod
-    def _build_response(state: Dict[str, Any], elapsed: float) -> Dict[str, Any]:
-        docs = state.get("retrieved_docs") or []
-        # 合并知识库引用与 web 搜索引用, 前端统一渲染引用块
-        sources = list(state.get("kb_sources") or [])
-        sources.extend(state.get("sources") or [])
-        response = {
-            "query": state.get("query", ""),
-            "session_id": state.get("session_id", ""),
-            "intent": state.get("intent", "unknown"),
-            "intent_confidence": state.get("intent_confidence", 0.0),
-            "retrieval_triggered": state.get("retrieval_triggered", False),
-            "retrieved_docs_count": len(docs),
-            "tool_triggered": state.get("tool_triggered", False),
-            "tool_name": state.get("tool_name"),
-            "tool_result": state.get("tool_result"),
-            "tool_error": state.get("tool_error"),
-            "sub_tasks": state.get("sub_tasks") or [],
-            "steps": state.get("steps") or [],
-            "validation_passed": state.get("validation_passed", False),
-            "validation_feedback": state.get("validation_feedback", ""),
-            "is_fallback": state.get("is_fallback", False),
-            "sources": sources,
-            "final_answer": state.get("final_answer") or state.get("draft_answer", ""),
-            "elapsed_seconds": round(elapsed, 3),
-        }
-        # 增强检索附加字段
-        if state.get("knowledge_blocks"):
-            response["knowledge_blocks"] = state["knowledge_blocks"]
-        if state.get("query_decomposition"):
-            response["query_decomposition"] = state["query_decomposition"]
-        if state.get("gap_rounds"):
-            response["gap_rounds"] = state["gap_rounds"]
-            response["gap_details"] = state.get("gap_details") or []
-        return response
 
 
 _service: Optional[AgentService] = None
