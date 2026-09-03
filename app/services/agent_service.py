@@ -3,11 +3,66 @@ from __future__ import annotations
 import json
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from app.agents.context import ChatContext
 from app.core.config import get_settings
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 cfg = get_settings()
+
+
+_LEGACY_RUN_KEYS = (
+    "session_id",
+    "history",
+    "user_id",
+    "knowledge_base_ids",
+    "knowledge_catalog",
+    "image_data",
+)
+
+
+def _merge_legacy_kwargs(
+    context: Optional[ChatContext], legacy: Dict[str, Any]
+) -> ChatContext:
+    """阶段 2 过渡：把散装 run() 关键字参数合入 ChatContext（迁移期兼容）。
+
+    context 已给出时散装参数仅允许出现在 context 里为空的字段（显式传入
+    优先）；未知关键字直接报错，避免拼写错误静默丢失。
+    """
+    extra = {k: v for k, v in legacy.items() if k not in _LEGACY_RUN_KEYS}
+    if extra:
+        raise TypeError(f"unexpected keyword arguments: {sorted(extra)}")
+    if context is None:
+        return ChatContext(
+            thread_id=str(legacy.get("session_id") or "default"),
+            user_id=(
+                str(legacy["user_id"])
+                if legacy.get("user_id") is not None
+                else None
+            ),
+            knowledge_base_ids=tuple(legacy.get("knowledge_base_ids") or ()),
+            knowledge_catalog=tuple(legacy.get("knowledge_catalog") or ()),
+            image_data=legacy.get("image_data"),
+            history=tuple(legacy.get("history") or ()),
+        )
+    for key in ("session_id", "history", "user_id", "knowledge_base_ids",
+                "knowledge_catalog", "image_data"):
+        if key not in legacy or legacy[key] is None:
+            continue
+        value = legacy[key]
+        if key == "session_id":
+            context.thread_id = str(value)
+        elif key == "user_id":
+            context.user_id = str(value)
+        elif key == "history":
+            context.history = tuple(value or ())
+        elif key == "knowledge_base_ids":
+            context.knowledge_base_ids = tuple(value or ())
+        elif key == "knowledge_catalog":
+            context.knowledge_catalog = tuple(value or ())
+        elif key == "image_data":
+            context.image_data = value
+    return context
 
 
 class SessionStore:
@@ -109,29 +164,22 @@ class AgentService:
 
         return False
 
-    def run(
-        self,
-        query: str,
-        session_id: str = "default",
-        history: Optional[List[Dict[str, str]]] = None,
-        user_id=None,
-        knowledge_base_ids: Optional[Sequence[str]] = None,
-        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
-        image_data: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    def run(self, query: str, context: Optional[ChatContext] = None, **legacy) -> Dict[str, Any]:
+        """智能路由入口（阶段 2：请求参数收拢为 ChatContext）。
+
+        context: 声明式请求上下文（thread_id/user/model/skills/KB 授权/历史/
+        流式回调），见 ``app/agents/context.py``。**legacy 兼容期**：阶段 2
+        过渡保留散装关键字参数（session_id/history/user_id/knowledge_base_ids/
+        knowledge_catalog/image_data），内部合入 context —— 调用方迁移完成后
+        删除（阶段 6 前端适配时一并清理）。
+        """
+        context = _merge_legacy_kwargs(context, legacy)
+        session_id = context.thread_id
         logger.info("[agent_service] session=%s query=%r", session_id, query[:80])
-        start = time.perf_counter()
 
         # ── DeepAgents 模式（AGENT_MODE=deepagents）：主 Agent + SubAgent ──
         if cfg.AGENT_MODE == "deepagents":
-            return self._run_deep(
-                query,
-                session_id=session_id,
-                history=history,
-                user_id=user_id,
-                knowledge_base_ids=knowledge_base_ids,
-                knowledge_catalog=knowledge_catalog,
-            )
+            return self._run_deep(query, context=context)
 
         # ── 多智能体分支：multi / auto 命中均路由到 DeepAgents（统一实现）──
         # AGENT_MODE=multi 作为 deepagents 的兼容别名保留（2026-08-26 阶段 5，
@@ -141,32 +189,18 @@ class AgentService:
                 "[agent_service] AGENT_MODE=multi 已废弃（deepagents 别名），"
                 "建议改用 AGENT_MODE=deepagents"
             )
-            return self._run_deep(
-                query,
-                session_id=session_id,
-                history=history,
-                user_id=user_id,
-                knowledge_base_ids=knowledge_base_ids,
-                knowledge_catalog=knowledge_catalog,
-            )
+            return self._run_deep(query, context=context)
         # 阶段 0（2026-09-02）：single 与旧固定管线已删除，配置容错按 auto 处理
         if cfg.AGENT_MODE == "single":
             logger.warning(
                 "[agent_service] AGENT_MODE=single 已退役（固定管线删除），按 auto 处理；"
                 "请更新配置为 auto / dynamic / deepagents"
             )
-        if cfg.AGENT_MODE == "auto" and self._should_use_multi(query, history):
+        if cfg.AGENT_MODE == "auto" and self._should_use_multi(query, list(context.history)):
             logger.info(
                 "[agent_service] auto 判定复杂任务，路由至 deepagents（主 Agent 自行拆解/委派）"
             )
-            return self._run_deep(
-                query,
-                session_id=session_id,
-                history=history,
-                user_id=user_id,
-                knowledge_base_ids=knowledge_base_ids,
-                knowledge_catalog=knowledge_catalog,
-            )
+            return self._run_deep(query, context=context)
 
         # ── 轻量动态 Agent（auto 普通问题 / AGENT_MODE=dynamic）──
         # 模型每轮自行决策：直接回答 / 调工具（web_search、calculator…）/ 检索
@@ -174,50 +208,35 @@ class AgentService:
         # （阶段 0，2026-09-02：AGENT_MODE=single 与 app/graph 固定管线已退役，
         #  auto/dynamic/deepagents 之外不再有兜底分支。）
         logger.info("[agent_service] 路由至 dynamic agent（动态工具/检索决策）")
-        return self._run_dynamic(
-            query,
-            session_id=session_id,
-            history=history,
-            user_id=user_id,
-            knowledge_base_ids=knowledge_base_ids,
-            knowledge_catalog=knowledge_catalog,
-            image_data=image_data,
-        )
+        return self._run_dynamic(query, context=context)
 
     # ── DeepAgents 模式（AGENT_MODE=deepagents）──────────────────────────
     def _run_dynamic(
         self,
         query: str,
-        session_id: str = "default",
-        history: Optional[List[Dict[str, str]]] = None,
-        user_id=None,
-        knowledge_base_ids: Optional[Sequence[str]] = None,
-        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
-        image_data: Optional[str] = None,
-        on_step=None,
-        on_artifact=None,
+        context: Optional[ChatContext] = None,
+        **legacy,
     ) -> Dict[str, Any]:
         """轻量动态 Agent 入口：请求级 trace + 统一事件流。
 
         复用 ``app/agents/dynamic.run_dynamic_agent``：模型通过函数调用自行决定
         是否调工具、是否检索、是否直接回答；返回与单 Agent 兼容的响应结构。
         """
+        from app.agents.context import ChatContext as _Ctx
         from app.agents.dynamic import run_dynamic_agent
         from app.agents.events import use_request_trace
 
-        with use_request_trace(session_id=session_id) as request_trace:
-            if history is None:
-                history = self._sessions.get_history(session_id)
+        context = context or _Ctx(thread_id="default")
+        if legacy:
+            context = _merge_legacy_kwargs(context, legacy)
+        with use_request_trace(session_id=context.thread_id) as request_trace:
+            history = list(context.history)
+            if not history and self._sessions is not None:
+                history = self._sessions.get_history(context.thread_id)
+            context.history = tuple(history)
             result = run_dynamic_agent(
                 query,
-                session_id=session_id,
-                history=history,
-                user_id=user_id,
-                knowledge_base_ids=knowledge_base_ids,
-                knowledge_catalog=knowledge_catalog,
-                image_data=image_data,
-                on_step=on_step,
-                on_artifact=on_artifact,
+                context=context,
             )
             result["trace_id"] = request_trace.trace.trace_id
             result["events"] = list(request_trace.events)
@@ -227,13 +246,8 @@ class AgentService:
     def _run_deep(
         self,
         query: str,
-        session_id: str = "default",
-        history: Optional[List[Dict[str, str]]] = None,
-        user_id=None,
-        knowledge_base_ids: Optional[Sequence[str]] = None,
-        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
-        on_step=None,
-        on_artifact=None,
+        context: Optional[ChatContext] = None,
+        **legacy,
     ) -> Dict[str, Any]:
         """DeepAgents 入口：建立请求级 trace（统一事件流，2026-08-26 阶段 1）。
 
@@ -241,19 +255,14 @@ class AgentService:
         返回 ``trace_id`` + ``events``（内存级执行轨迹，供诊断/前端消费；
         持久化在后续阶段接入）。SSE 步骤透传行为不变（见 _run_deep_inner）。
         """
+        from app.agents.context import ChatContext as _Ctx
         from app.agents.events import use_request_trace
 
-        with use_request_trace(session_id=session_id) as request_trace:
-            result = self._run_deep_inner(
-                query,
-                session_id=session_id,
-                history=history,
-                user_id=user_id,
-                knowledge_base_ids=knowledge_base_ids,
-                knowledge_catalog=knowledge_catalog,
-                on_step=on_step,
-                on_artifact=on_artifact,
-            )
+        context = context or _Ctx(thread_id="default")
+        if legacy:
+            context = _merge_legacy_kwargs(context, legacy)
+        with use_request_trace(session_id=context.thread_id) as request_trace:
+            result = self._run_deep_inner(query, context=context)
             result["trace_id"] = request_trace.trace.trace_id
             result["events"] = list(request_trace.events)
             return result
@@ -261,31 +270,42 @@ class AgentService:
     def _run_deep_inner(
         self,
         query: str,
-        session_id: str = "default",
-        history: Optional[List[Dict[str, str]]] = None,
-        user_id=None,
-        knowledge_base_ids: Optional[Sequence[str]] = None,
-        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
-        on_step=None,
-        on_artifact=None,
+        context: Optional[ChatContext] = None,
+        **legacy,
     ) -> Dict[str, Any]:
         """DeepAgents 风格：主 Agent（create_agent + task 工具）→ SubAgent。
 
         同步执行（子 Agent 内联在 task 工具中，无异步任务系统）。
-        on_step: 可选回调 fn(step, detail)，供 SSE 流式端点实时透传阶段状态。
-        on_artifact: 可选回调 fn(dict)，推送 ReAct 每轮推理思考 / 工具输入输出
-          等中间产出（{kind, stage, title, content}），实时透传给前端。
-        返回与单 Agent 兼容的响应结构。（由 _run_deep 包裹统一事件流。）
+        context.on_step: 可选回调 fn(step, detail)，供 SSE 流式端点实时透传
+        阶段状态。context.on_artifact: 可选回调 fn(dict)，推送 ReAct 每轮推理
+        思考 / 工具输入输出等中间产出（{kind, stage, title, content}），实时
+        透传给前端。返回与单 Agent 兼容的响应结构。（由 _run_deep 包裹统一事件流。）
         """
+        from app.agents.context import ChatContext as _Ctx
         from app.agents.deep.agent import get_main_agent
         from app.agents.events import emit
         from app.services.knowledge_catalog import format_knowledge_catalog
+        from app.services.knowledge_context import use_authorised_kb_ids
         from app.skills.context import get_active_skill_prompt
         from langgraph.errors import GraphRecursionError
+
+        context = context or _Ctx(thread_id="default")
+        if legacy:
+            context = _merge_legacy_kwargs(context, legacy)
+        session_id = context.thread_id
+        on_step = context.on_step
+        on_artifact = context.on_artifact
+        knowledge_base_ids = list(context.knowledge_base_ids)
+        knowledge_catalog = list(context.knowledge_catalog)
+        user_id = context.user_id
+        image_data = context.image_data
 
         start = time.perf_counter()
         steps: List[str] = []
         artifacts: List[Dict[str, Any]] = []
+        history = context.history_list()
+        if not history and self._sessions is not None:
+            history = self._sessions.get_history(session_id)
 
         def _step(step: str, detail: str = ""):
             steps.append(f"{step}: {detail}")
@@ -307,9 +327,6 @@ class AgentService:
                     on_artifact(dict(ev))
                 except Exception:
                     pass
-
-        if history is None:
-            history = self._sessions.get_history(session_id)
 
         # ── 组装消息（复用 prepare_context 的注入链，保证行为一致）──────
         messages: List[Dict[str, str]] = []
@@ -550,17 +567,13 @@ class AgentService:
     def prepare_context(
         self,
         query: str,
-        history: Optional[List[Dict[str, str]]] = None,
-        user_id=None,
-        knowledge_base_ids: Optional[Sequence[str]] = None,
-        knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
-        image_data: Optional[str] = None,
-        on_step=None,
-        on_artifact=None,
+        context: Optional[ChatContext] = None,
+        **legacy,
     ) -> Dict[str, Any]:
         """同步检索 + 构建生成消息, 为流式生成准备上下文。
 
-        编排流程（每一步都可通过 on_step 回调透传到前端实时展示）:
+        阶段 2：请求参数收拢为 ChatContext（legacy 散装参数兼容同 run()）。
+        编排流程（每一步都可通过 context.on_step 回调透传到前端实时展示）:
           0. 查询改写  — 追问/指代结合历史还原成自包含问题（"今天呢"→"无锡今天天气"）
           1. 意图识别  — 带历史分类, 决定走哪条编排分支
           2. 分支执行:
@@ -569,10 +582,29 @@ class AgentService:
              knowledge_qa  — 向量检索知识库
              complex_task  — 工具 + 检索组合
         返回 dict 含: messages / sources / intent / tool_result / resolved_query。
-        on_step: 可选回调 fn(step, detail)，在关键步骤调用。
-        on_artifact: 可选回调 fn(dict)，推送检索片段/工具结果等中间产出
+        context.on_step: 可选回调 fn(step, detail)，在关键步骤调用。
+        context.on_artifact: 可选回调 fn(dict)，推送检索片段/工具结果等中间产出
           （{kind, stage, title, content}），供 SSE 实时透传给前端。
         """
+        from app.graph.nodes import (
+            intent_recognition, knowledge_retrieval, tool_selection, tool_execution,
+            rewrite_query_with_history,
+        )
+        from app.prompts.templates import (
+            ANSWER_NO_CONTEXT, ANSWER_WITH_CONTEXT,
+            ANSWER_WITH_ENHANCED_CONTEXT,
+        )
+
+        context = context or ChatContext(thread_id="default")
+        if legacy:
+            context = _merge_legacy_kwargs(context, legacy)
+        history = list(context.history)
+        user_id = context.user_id
+        knowledge_base_ids = list(context.knowledge_base_ids)
+        knowledge_catalog = list(context.knowledge_catalog)
+        image_data = context.image_data
+        on_step = context.on_step
+        on_artifact = context.on_artifact
         from app.graph.nodes import (
             intent_recognition, knowledge_retrieval, tool_selection, tool_execution,
             rewrite_query_with_history,
@@ -619,8 +651,6 @@ class AgentService:
                     pass
             flat = " ".join(text.split())
             return flat[:200] + ("…" if len(flat) > 200 else "")
-
-        history = history or []
 
         # 0. 查询改写：把"今天呢"这类追问结合历史还原成自包含问题
         _step("understand", "理解问题中...")

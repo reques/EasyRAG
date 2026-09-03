@@ -479,7 +479,6 @@ async def send_message(
         selected_skills = await _resolve_request_skills(
             req.skill_ids, current_user.id, session
         )
-        skill_context = SkillRuntimeContext.from_profiles(selected_skills)
         skill_payload = _selected_skill_payload(selected_skills)
         # 获取或创建会话
         conv_id = None
@@ -541,20 +540,27 @@ async def send_message(
     result: dict[str, Any] = {}
     try:
         from app.services.agent_service import get_agent_service
-        from app.llm.client import use_chat_model
-        from app.skills.context import use_skill_context
+        from app.agents.context import ChatContext
+        from app.agents.request_context import use_request_context
 
         agent = get_agent_service()
-        with use_chat_model(selected_model), use_skill_context(skill_context):
-            result = agent.run(
-                query=effective_query,
-                session_id=str(conv_id),
-                history=db_history,          # ← 关键：传入 DB 历史
-                user_id=current_user.id,
-                knowledge_base_ids=knowledge_base_ids,
-                knowledge_catalog=knowledge_catalog,
-                image_data=image_for_context,
-            )
+        # 阶段 2：请求参数收拢为 ChatContext，模型/Skill/KB 授权/trace 由
+        # use_request_context 一次性铺设（门面，见 app/agents/request_context.py）。
+        # skill_profiles 传入已解析的 SkillProfile（含 custom:* 校验），避免
+        # 门面内按 skill_ids 回查目录时丢失自定义 Skill。
+        chat_ctx = ChatContext.from_request(
+            effective_query,
+            thread_id=str(conv_id),
+            user_id=current_user.id,
+            model_id=selected_model.id,
+            skill_ids=[p.id for p in selected_skills],
+            knowledge_base_ids=knowledge_base_ids,
+            knowledge_catalog=knowledge_catalog,
+            image_data=image_for_context,
+            history=db_history,          # ← 关键：传入 DB 历史
+        )
+        with use_request_context(chat_ctx, skill_profiles=selected_skills, model_profile=selected_model):
+            result = agent.run(query=effective_query, context=chat_ctx)
         answer = result.get("final_answer", "")
     except Exception as exc:
         logger.error("[chat/send] agent error: %s", exc)
@@ -599,10 +605,11 @@ async def send_message(
                     ),
                 },
             ]
-            if skill_context.active:
+            _skill_rt = SkillRuntimeContext.from_profiles(selected_skills)
+            if _skill_rt.active:
                 fallback_messages.insert(0, {
                     "role": "system",
-                    "content": skill_context.render_prompt(),
+                    "content": _skill_rt.render_prompt(),
                 })
             fallback_answer = llm.chat_sync(fallback_messages)
             if fallback_answer and fallback_answer.strip():
@@ -681,7 +688,6 @@ async def send_message_stream(
         selected_skills = await _resolve_request_skills(
             req.skill_ids, current_user.id, session
         )
-        skill_context = SkillRuntimeContext.from_profiles(selected_skills)
         skill_payload = _selected_skill_payload(selected_skills)
         # 获取或创建会话
         if req.conversation_id:
@@ -764,10 +770,26 @@ async def send_message_stream(
         )
     agent_mode = "deepagents" if use_deep else "dynamic"
 
+    # 阶段 2：请求上下文声明层只建一次（两个分支共享）。query 为模型选型 /
+    # deep_research 裁决后的 effective_query；skill 回查等归属路由层职责，
+    # 这里直接把已解析的 SkillProfile 透传给门面，避免丢失 custom:* 内容。
+    from app.agents.context import ChatContext
+
+    _chat_ctx = ChatContext.from_request(
+        effective_query,
+        thread_id=str(conv_id),
+        user_id=current_user.id,
+        model_id=selected_model.id,
+        skill_ids=[p.id for p in selected_skills],
+        knowledge_base_ids=knowledge_base_ids,
+        knowledge_catalog=knowledge_catalog,
+        image_data=image_for_context,
+        history=db_history,          # ← 关键：传入 DB 历史
+    )
+
     async def _event_gen_inner():
         from app.services.agent_service import get_agent_service
-        from app.llm.client import get_llm_client, use_chat_model
-        from app.skills.context import use_skill_context
+        from app.llm.client import get_llm_client
 
         loop = asyncio.get_event_loop()
         agent = get_agent_service()
@@ -808,6 +830,12 @@ async def send_message_stream(
                 except Exception:
                     pass
 
+            # 阶段 2：on_step 在 executor 线程经 use_request_context 铺设前
+            # 不属于 _chat_ctx（不能跨线程携带 closure），先挂到线程局部副本。
+            from dataclasses import replace
+
+            _deep_ctx = replace(_chat_ctx, on_step=_deep_status)
+
             # 统一事件流 → orchestrator 时代 SSE 协议（阶段 5）：委派树/工具时间线
             # 由前端现有任务面板与 AgentActivity 直接消费，无需新组件。
             # 映射规则见 delegation_service.bridge_delegation_event（可单测）。
@@ -846,21 +874,11 @@ async def send_message_stream(
                     pass
 
             def _run_deep_in_thread():
-                with use_chat_model(selected_model), use_skill_context(skill_context), \
+                from app.agents.request_context import use_request_context
+
+                with use_request_context(_deep_ctx, skill_profiles=selected_skills, model_profile=selected_model), \
                         use_event_sink(_bridge_event):
-                    return agent._run_deep(
-                        req.query,
-                        session_id=str(conv_id),
-                        history=db_history,
-                        user_id=current_user.id,
-                        knowledge_base_ids=knowledge_base_ids,
-                        knowledge_catalog=knowledge_catalog,
-                        on_step=_deep_status,
-                        # 阶段 6：artifact（推理 / 工具调用 / 工具返回 / 检索片段）
-                        # 经统一事件流 sink（_bridge_event → bridge_delegation_event）
-                        # 实时下发到当前会话，无需 on_artifact 回调二次透传。
-                        on_artifact=None,
-                    )
+                    return agent._run_deep(_deep_ctx.query, context=_deep_ctx)
 
             # 注意：此处不能用 `start` 命名 —— _event_gen_inner 内任何赋值都会
             # 把 start 变成局部变量，遮蔽外层函数的 start（单 Agent 分支的
@@ -1009,19 +1027,18 @@ async def send_message_stream(
             _dyn_collected_artifacts.append(dict(ev))
             _dyn_status_queue.put({"type": "artifact", **ev})
 
+        # 阶段 2：on_step/on_artifact 在 executor 线程经 use_request_context 铺设
+        # 前不属于 _chat_ctx（不能跨线程携带 closure），故在 _run_dynamic_in_thread
+        # 内把回调挂到线程局部的副本上，由门面写入传播层。
+        from dataclasses import replace
+
+        _dyn_ctx = replace(_chat_ctx, on_step=_dyn_status, on_artifact=_dyn_artifact)
+
         def _run_dynamic_in_thread():
-            with use_chat_model(selected_model), use_skill_context(skill_context):
-                return agent._run_dynamic(
-                    effective_query,
-                    session_id=str(conv_id),
-                    history=db_history,
-                    user_id=current_user.id,
-                    knowledge_base_ids=knowledge_base_ids,
-                    knowledge_catalog=knowledge_catalog,
-                    image_data=image_for_context,
-                    on_step=_dyn_status,
-                    on_artifact=_dyn_artifact,
-                )
+            from app.agents.request_context import use_request_context
+
+            with use_request_context(_dyn_ctx, skill_profiles=selected_skills, model_profile=selected_model):
+                return agent._run_dynamic(_dyn_ctx.query, context=_dyn_ctx)
 
         _dyn_start = time.perf_counter()
         _dyn_future = loop.run_in_executor(None, _run_dynamic_in_thread)

@@ -19,6 +19,7 @@ import json
 import time
 from typing import Any, Dict, List, Optional, Sequence
 
+from app.agents.context import ChatContext
 from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.tools.registry import get_tool_registry
@@ -108,6 +109,8 @@ def get_dynamic_agent():
 
 def run_dynamic_agent(
     query: str,
+    context: Optional[ChatContext] = None,
+    *,
     session_id: str = "default",
     history: Optional[List[Dict[str, str]]] = None,
     user_id=None,
@@ -120,6 +123,8 @@ def run_dynamic_agent(
 ) -> Dict[str, Any]:
     """运行轻量动态 Agent 并返回与单 Agent 兼容的结果字典。
 
+    阶段 2：优先传声明式 ``context``（ChatContext）；散装参数保留为过渡期
+    兼容（内部合入 context，调用方迁移完成后删除）。
     on_step: 可选回调 fn(step, detail)，供流式端点实时透出阶段状态。
     on_artifact: 可选回调 fn(dict)，透出工具调用/工具返回等中间产出。
     """
@@ -131,10 +136,32 @@ def run_dynamic_agent(
     from app.services.knowledge_context import use_authorised_kb_ids
     from app.skills.context import get_active_skill_prompt
 
+    context = context or ChatContext(thread_id=session_id)
+    if history is not None:
+        context.history = tuple(history)
+    if user_id is not None:
+        context.user_id = str(user_id)
+    if knowledge_base_ids is not None:
+        context.knowledge_base_ids = tuple(knowledge_base_ids)
+    if knowledge_catalog is not None:
+        context.knowledge_catalog = tuple(knowledge_catalog)
+    if image_data is not None:
+        context.image_data = image_data
+    if on_step is not None:
+        context.on_step = on_step
+    if on_artifact is not None:
+        context.on_artifact = on_artifact
+    session_id = context.thread_id
+    history = list(context.history)
+    knowledge_base_ids = list(context.knowledge_base_ids)
+    knowledge_catalog = list(context.knowledge_catalog)
+    image_data = context.image_data
+    on_step = context.on_step
+    on_artifact = context.on_artifact
+
     start = time.perf_counter()
     steps: List[str] = []
     artifacts: List[Dict[str, Any]] = []
-    history = history or []
 
     def _step(step: str, detail: str = ""):
         steps.append(f"{step}: {detail}")
