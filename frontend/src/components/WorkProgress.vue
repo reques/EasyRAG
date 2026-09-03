@@ -19,17 +19,17 @@
     <!-- 展开态：无边框日志流 -->
     <template v-else>
       <div v-if="error" class="process-error-line"><CircleAlert :size="12" /> {{ error }}</div>
-      <div v-if="!chain.length && running" class="process-empty">正在分析你的问题…</div>
+      <div v-if="!timeline.rows.length && running" class="process-empty">正在分析你的问题…</div>
 
       <!-- 旧消息兜底：无步骤时间线时退化为工作日志列表 -->
-      <ol v-else-if="!chain.length && summaries.length" class="process-journal">
+      <ol v-else-if="!timeline.rows.length && summaries.length" class="process-journal">
         <li v-for="(s, si) in summaries" :key="s.id || si" :class="`phase-${s.phase || 'info'} status-${s.status || 'running'}`">
           <span class="process-journal-marker"><component :is="phaseIcon(s.phase)" :size="12" /></span>
           <span class="process-journal-text">{{ s.text }}</span>
         </li>
       </ol>
 
-      <ol v-if="chain.length || thoughtRows.length" class="process-log" ref="logEl">
+      <ol v-if="timeline.rows.length || timeline.thoughts.length" class="process-log" ref="logEl">
         <template v-for="row in displayRows" :key="row.uid">
           <!-- 思考流：弱化灰字段落，不属于步骤行 -->
           <li v-if="row.isThought" class="process-thought" :class="{ 'is-streaming': row.streaming }">
@@ -86,7 +86,7 @@
       </ol>
 
       <!-- 收起入口：运行结束后显示 -->
-      <button v-if="!running && (chain.length || thoughtRows.length)" type="button" class="process-collapse-entry" @click="togglePanel">
+      <button v-if="!running && (timeline.rows.length || timeline.thoughts.length)" type="button" class="process-collapse-entry" @click="togglePanel">
         <ChevronLeft :size="12" /> 收起过程
       </button>
     </template>
@@ -242,7 +242,7 @@ function stateFor(wid) {
   return s
 }
 
-function newRow(def, wid, startedAt, createdBy = 'artifact') {
+function newRow(def, wid, startedAt, createdBy = 'artifact', order = null) {
   const s = stateFor(wid)
   if (s.startedAt == null) s.startedAt = startedAt || Date.now()
   const row = reactive({
@@ -250,7 +250,7 @@ function newRow(def, wid, startedAt, createdBy = 'artifact') {
     uid: s.uid,
     createdBy,
     isThought: false,
-    _order: null,
+    _order: order,
     key: def.key,
     label: def.label,
     icon: def.icon,
@@ -298,20 +298,15 @@ function appendText(base, extra) {
   return [base, extra].filter(Boolean).join('\n')
 }
 
-function setStream(row, streamId) {
-  const s = stateFor(row.ownerWid)
-  s.streaming = true
-  s.streamSrc = streamId
-  row.streaming = true
-  row.streamSrc = streamId
-}
-
-/* ── 链构建：按到达顺序合并步骤与产出（确定性重建，状态经 stateMap 持久） ──
-   思考（thought artifact）不再并入步骤链，单独收进 thoughtRows 弱化展示。
-   每行记录 _order（items 中的位次），展示时据此按时序交织。 */
-const thoughtRows = ref([])
-
-const chain = computed(() => {
+/* ── 链构建：按到达顺序合并步骤与产出（确定性重建，状态经 stateMap 持久）──
+   思考段落独立于步骤链，收进 thoughts 弱化展示。
+   ⚠ 纯派生约定：本计算内所有写操作都只发生在本轮新建的行对象上
+   （构建期尚无订阅者），计算结束后不再触碰任何外部 reactive ref/行属性。
+   旧版在 displayRows / applyAutoExpand watcher 里回写行的
+   status/durationMs/expanded，属于「effect 修改自身依赖」，会触发
+   Vue "Maximum recursive updates exceeded" 并打爆 ChatView 渲染队列
+   （症状：一轮回复完成后按钮卡死、下一轮无任何输出）。 */
+const timeline = computed(() => {
   const rows = []
   const thoughts = []
   const seen = new Set()
@@ -329,7 +324,7 @@ const chain = computed(() => {
           markDone(row, item._ts || Date.now())
           if (def.key !== 'tool' && item.detail) row.object = cleanObject(item.detail) || row.object
         } else {
-          const r = newRow({ ...def, subagent: sg }, item.wid, item._ts || Date.now(), 'step')
+          const r = newRow({ ...def, subagent: sg }, item.wid, item._ts || Date.now(), 'step', order)
           markDone(r, item._ts || Date.now())
           r.object = cleanObject(item.detail)
           rows.push(r)
@@ -341,7 +336,7 @@ const chain = computed(() => {
         if (row && (row.status === 'running' || row.createdBy === 'artifact')) {
           if (item.detail) row.object = cleanObject(item.detail) || row.object
         } else {
-          const r = newRow({ ...def, subagent: sg }, item.wid, item._ts || Date.now(), 'step')
+          const r = newRow({ ...def, subagent: sg }, item.wid, item._ts || Date.now(), 'step', order)
           r.object = cleanObject(item.detail)
           rows.push(r)
           closeOthers(rows, r)
@@ -376,7 +371,7 @@ const chain = computed(() => {
           target.object = target.object || cleanObject(item.title || '')
           target.content = appendText(target.content, item.content)
         } else {
-          const r = newRow({ ...def, subagent: sg }, item.wid, Date.now())
+          const r = newRow({ ...def, subagent: sg }, item.wid, Date.now(), 'artifact', order)
           r.object = cleanObject(item.title || '')
           r.content = item.content || ''
           rows.push(r)
@@ -392,7 +387,7 @@ const chain = computed(() => {
           })
           if (target.status === 'running') markDone(target)
         } else {
-          const r = newRow({ ...STEP_DEFS.tool, subagent: sg, label: '工具返回', icon: Terminal }, item.wid, Date.now())
+          const r = newRow({ ...STEP_DEFS.tool, subagent: sg, label: '工具返回', icon: Terminal }, item.wid, Date.now(), 'artifact', order)
           markDone(r)
           r.results.push({ label: item.title || '', text: item.content || '' })
           rows.push(r)
@@ -402,7 +397,7 @@ const chain = computed(() => {
         if (target && target.status === 'running') {
           target.content = appendText(target.content, item.content)
         } else {
-          const r = newRow({ ...STEP_DEFS.retrieve, subagent: sg }, item.wid, Date.now())
+          const r = newRow({ ...STEP_DEFS.retrieve, subagent: sg }, item.wid, Date.now(), 'artifact', order)
           r.content = item.content || ''
           r.object = item.title || ''
           rows.push(r)
@@ -414,90 +409,62 @@ const chain = computed(() => {
           target.results.push({ label: item.title || '', text: item.content || '', isError: false })
           if (target.status === 'running') markDone(target)
         } else {
-          const r = newRow({ ...STEP_DEFS.delegate, label: '子任务', icon: ListChecks, kind: 'worker' }, item.wid, Date.now())
+          const r = newRow({ ...STEP_DEFS.delegate, label: '子任务', icon: ListChecks, kind: 'worker' }, item.wid, Date.now(), 'artifact', order)
           markDone(r)
           r.results.push({ label: item.title || '', text: item.content || '' })
           rows.push(r)
         }
       } else {
-        const r = newRow({ ...STEP_DEFS.info, subagent: sg, label: item.title || '步骤' }, item.wid, Date.now())
+        const r = newRow({ ...STEP_DEFS.info, subagent: sg, label: item.title || '步骤' }, item.wid, Date.now(), 'artifact', order)
         r.content = item.content || ''
         rows.push(r)
         closeOthers(rows, r)
       }
     }
   })
-  // 思考段落数组整体替换（重建无副作用：内容来自 items 全量重放）
-  thoughtRows.value = thoughts
-  return rows
+  // 收尾归一化（仅写本轮新建的行对象；stateMap 是普通 Map，不触发响应式）：
+  // 整轮结束后，未配对收尾的 running 步骤统一置为 done，并冻结时长。
+  const running = props.running
+  for (const r of rows) {
+    if (!running && r.status === 'running') {
+      const s = stateFor(r.ownerWid)
+      if (s.finishedAt == null) s.finishedAt = s.startedAt || Date.now()
+      r.finishedAt = s.finishedAt
+      r.status = 'done'
+    }
+    r.durationMs = stageDuration(r)
+  }
+  syncExpandState(rows, running)
+  return { rows, thoughts }
 })
 
-/* ── 展示行合并：步骤行 + 思考段落按 items 到达顺序交织 ──────────────── */
+/* ── 展示行合并：步骤行 + 思考段落按 items 到达顺序交织（纯派生，无回写）── */
 const displayRows = computed(() => {
-  const rows = chain.value
-  // 步骤行记录位次：以 items 中首个关联来源的位次近似（_order 越小越先）
-  const orderOf = new Map()
-  props.items.forEach((item, idx) => {
-    if (!item || orderOf.has(item.wid)) return
-    orderOf.set(item.wid, idx)
-  })
-  for (const st of rows) {
-    // 整轮结束后，未配对收尾的 running 步骤统一置为 done
-    if (!props.running && st.status === 'running') {
-      st.finishedAt = st.finishedAt || st.startedAt
-      st.status = 'done'
-    }
-    st.durationMs = stageDuration(st)
-    if (st._order == null) {
-      // chain 重建时行对象是全新的；ownerWid 即来源 item 的 wid
-      st._order = orderOf.get(st.ownerWid) ?? Number.MAX_SAFE_INTEGER
-    }
-  }
-  const merged = [...rows, ...thoughtRows.value]
+  const { rows, thoughts } = timeline.value
+  const merged = [...rows, ...thoughts]
   merged.sort((a, b) => (a._order ?? 0) - (b._order ?? 0))
   return merged
 })
 
-/* ── 自动展开：执行中的步骤展开其结果体，完成后折叠该行 ─────────────── */
-watch(
-  () => [props.running, chain.value.length, chain.value.map(r => r.status).join('')],
-  () => applyAutoExpand(),
-  { flush: 'post', immediate: true },
-)
-
-function applyAutoExpand() {
-  const rows = chain.value
-  if (!props.running) {
-    for (const r of rows) {
-      if (!r.auto) continue
-      const s = stateFor(r.ownerWid)
-      s.expanded = false
-      r.expanded = false
-    }
-    return
+/* ── 自动展开：执行中只展开最新 running 行，完成后折叠 auto 行 ──────────
+   在 timeline 构建期内联调用（写入对象均为本轮新建 + 普通 stateMap），
+   取代旧版 flush:'post' watcher 对行属性的回写。 */
+function syncExpandState(rows, running) {
+  let active = null
+  if (running) {
+    for (const r of rows) if (r.status === 'running') active = r
   }
-  const actives = rows.filter(r => r.status === 'running')
-  const active = actives[actives.length - 1] || null
   for (const r of rows) {
     const s = stateFor(r.ownerWid)
-    if (r.status === 'running') {
-      if (s.auto) {
-        s.expanded = r === active
-        r.expanded = s.expanded
-      }
-    } else if (r.status === 'done') {
-      if (s.auto) {
-        s.expanded = false
-        r.expanded = false
-      }
-    }
+    if (!s.auto) continue
+    s.expanded = running ? r === active : false
+    r.expanded = s.expanded
   }
-  scrollLogToBottom()
 }
 
 function toggleStep(st) {
   const s = stateFor(st.ownerWid)
-  s.expanded = !st.expanded
+  s.expanded = !s.expanded
   s.auto = false
   st.expanded = s.expanded
   st.auto = false
@@ -553,19 +520,22 @@ function scrollLogToBottom() {
   })
 }
 watch(
-  () => [
-    chain.value.length,
-    thoughtRows.value.length,
-    thoughtRows.value[thoughtRows.value.length - 1]?.content?.length || 0,
-    chain.value.map(r => r.content.length).join(''),
-  ],
+  () => {
+    const t = timeline.value
+    return [
+      t.rows.length,
+      t.thoughts.length,
+      t.thoughts[t.thoughts.length - 1]?.content?.length || 0,
+      t.rows.map(r => r.content.length).join(''),
+    ]
+  },
   () => scrollLogToBottom(),
 )
 
 /* ── 摘要：完成后折叠行的文案 ──────────────────────────────────────── */
 const KIND_LABELS = { retrieve: '检索', tool: '工具', reason: '推理', delegate: '委派', generate: '生成' }
 const collapsedSummary = computed(() => {
-  const rows = chain.value
+  const rows = timeline.value.rows
   if (!rows.length) {
     const last = props.summaries[props.summaries.length - 1]
     if (last) return props.running ? `${last.text}…` : last.text

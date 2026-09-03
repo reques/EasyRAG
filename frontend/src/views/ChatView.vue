@@ -1680,6 +1680,31 @@ async function send() {
         error: aborted ? undefined : e.message,
       }
     }
+    // 动态 Agent / 单 Agent 无 delta 时，回答只在 done 一次性下发。
+    // 若流异常中断但后端已落库，主动拉取历史回填气泡。
+    if (!aborted && conversationId.value) {
+      try {
+        const cur = messages.value[msgIndex]
+        const contentNow = cur?.content?.trim()
+        if (!contentNow && !cur?.error) {
+          const res = await api.get(`/chat/conversations/${conversationId.value}/history`)
+          const hist = res.messages || []
+          const lastAsst = [...hist].reverse().find(mm => mm.role === 'assistant' && (mm.content || '').trim())
+          if (lastAsst && (lastAsst.content || '').trim()) {
+            const mm = messages.value[msgIndex]
+            messages.value[msgIndex] = {
+              ...mm,
+              content: lastAsst.content,
+              sources: lastAsst.meta?.sources || mm.sources || [],
+              steps: (mm.steps && mm.steps.length) ? mm.steps : (lastAsst.meta?.steps || []),
+              artifacts: (mm.artifacts && mm.artifacts.length) ? mm.artifacts : (lastAsst.meta?.artifacts || []),
+              progressSummaries: (mm.progressSummaries && mm.progressSummaries.length) ? mm.progressSummaries : (lastAsst.meta?.progress_summaries || []),
+              stepsLoading: false,
+            }
+          }
+        }
+      } catch { /* 回补失败静默 */ }
+    }
   } finally {
     sending.value = false
     if (currentAbort) { currentAbort = null }
