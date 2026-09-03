@@ -38,11 +38,14 @@
           </div>
         </div>
 
-        <template v-for="(msg, i) in messages" :key="msg.ts || i">
-          <!-- 等待首 token 时的空 assistant 占位不渲染，由下方「思考中」气泡代替，
-               避免空灰条 + 思考中两个框同时出现 -->
+        <template v-for="(msg, i) in messages" :key="msg.uid">
+          <!-- 渲染防护：① 非法条目（无 role 的幽灵/数组空洞）不渲染；
+               ② content 为空且无 error/stopped 的 assistant 消息一律不渲染，
+               唯一例外是正在流式输出的本轮占位（sending 且为最后一条）——
+               没有这条防护时空占位会以「进度条+模型标签、正文空白」的形态
+               残留在列表里（历史脏数据/切换竞态都可能产生）。 -->
           <div
-            v-if="!(sending && msg.role === 'assistant' && !msg.content && !msg.steps?.length && !msg.workItems?.length && !msg.progressSummaries?.length && i === messages.length - 1)"
+            v-if="msg && (msg.role === 'user' || msg.role === 'assistant') && !(msg.role === 'assistant' && !msg.content && !msg.error && !msg.stopped && !(sending && i === messages.length - 1))"
             :class="['message', msg.role, { 'msg-enter': msg.enter }]"
           >
           <!-- 用户消息时间: 显示在气泡外上方, 左对齐时间标签, 不放进气泡里 -->
@@ -99,13 +102,8 @@
                 </li>
               </ol>
             </div>
-            <div v-if="msg.meta && (msg.meta.agentMode || msg.meta.intent || msg.meta.elapsed || msg.meta.modelName || msg.meta.skillNames?.length)" class="message-meta">
-              <span v-if="msg.meta.agentMode" class="message-mode-badge" :class="`mode-${msg.meta.agentMode}`">{{ modeLabel(msg.meta.agentMode) }}</span>
-              <span v-if="msg.meta.modelName">模型: {{ msg.meta.modelName }}</span>
-              <span v-if="msg.meta.skillNames?.length">Skill: {{ msg.meta.skillNames.join('、') }}</span>
-              <span v-if="msg.meta.intent">意图: {{ intentLabel(msg.meta.intent) }}</span>
-              <span v-if="msg.meta.elapsed">耗时: {{ msg.meta.elapsed }}s</span>
-            </div>
+            <!-- 回复末尾的模式/模型/意图标签行按用户要求移除（2026-09-02）；
+                 msg.meta 数据仍在收集与持久化，仅不再展示。 -->
           </div>
           <div v-if="msg.content" class="message-actions">
             <button
@@ -1164,6 +1162,12 @@ const statusSteps = ref([])
 // 有序执行时间线自增 id：ChatView 按 SSE 到达顺序维护，WorkProgress 据此重建步骤链
 let _workWid = 0
 
+// 消息列表渲染 key：不能用 ts —— send() 里 user/assistant 两条消息同毫秒 push、
+// 历史消息 created_at 只有秒级精度，都可能撞 key，Vue 撞 key 后 DOM 会错乱
+// （表现为流式期间上一条消息的进度条/meta 块“多出来”挂在用户气泡上方）。
+let _msgUid = 0
+const nextMsgUid = () => `msg-${++_msgUid}`
+
 // 侧边任务进度面板（多智能体）：子任务清单 + 每个子任务的状态
 const taskPanel = ref({
   visible: false,
@@ -1378,6 +1382,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         workItems: buildHistoryWorkItems(m),
         time: formatTime(m.created_at),
         ts: m.created_at ? Date.parse(m.created_at) : null,
+        uid: nextMsgUid(),
       }))
       try {
         const runData = await api.get(`/chat/conversations/${newId}/runs`)
@@ -1418,6 +1423,7 @@ async function send() {
     deepResearch: deepResearch.value,
     time: formatTime(new Date(userTs).toISOString()),
     ts: userTs,
+    uid: nextMsgUid(),
     enter: true, // 新消息进入动画（历史加载不带动画）
   })
   // 先插入一条空的 assistant 消息, 流式 delta 逐步填充其 content
@@ -1442,9 +1448,14 @@ async function send() {
     progressSummaries: [],
     time: formatTime(new Date(asstTs).toISOString()),
     ts: asstTs,
+    uid: nextMsgUid(),
     enter: true,
   })
   const msgIndex = messages.value.length - 1
+  // 本轮占位消息的身份凭据：流式期间若用户切换会话，watch 会清空并重建
+  // messages，msgIndex 随之失效——按索引写会污染别的会话的消息、甚至凭空
+  // 造出无 role/content 的幽灵条目。之后所有写入前先确认占位仍在列表中。
+  const asstUid = messages.value[msgIndex].uid
   scrollBottom()
 
   let gotError = ''
@@ -1461,6 +1472,8 @@ async function send() {
       deep_research: deepResearch.value,
       image: attachedImage.value || undefined,
     }, (ev) => {
+      // 占位消息已不在列表（会话已切换/历史已重载）→ 本轮事件全部丢弃
+      if (!messages.value.some(x => x.uid === asstUid)) return
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
         const m = messages.value[msgIndex]
@@ -1648,7 +1661,9 @@ async function send() {
 
     if (gotError) {
       const m = messages.value[msgIndex]
-      messages.value[msgIndex] = { ...m, content: m.content || `❌ ${gotError}`, stepsLoading: false, error: gotError }
+      if (m && m.uid === asstUid) {
+        messages.value[msgIndex] = { ...m, content: m.content || `❌ ${gotError}`, stepsLoading: false, error: gotError }
+      }
     }
     // 刷新侧边栏列表
     await chatStore.refreshAfterSend(conversationId.value)
@@ -1656,12 +1671,14 @@ async function send() {
     const m = messages.value[msgIndex]
     // 停止生成：AbortError 属正常终止（后端不保存本轮），非错误
     const aborted = e && (e.name === 'AbortError' || /abort/i.test(String(e.message || '')))
-    messages.value[msgIndex] = {
-      ...m,
-      content: aborted ? (m.content || '') : (m.content || `❌ 请求失败: ${e.message}`),
-      stopped: aborted || undefined,
-      stepsLoading: false,
-      error: aborted ? undefined : e.message,
+    if (m && m.uid === asstUid) {
+      messages.value[msgIndex] = {
+        ...m,
+        content: aborted ? (m.content || '') : (m.content || `❌ 请求失败: ${e.message}`),
+        stopped: aborted || undefined,
+        stepsLoading: false,
+        error: aborted ? undefined : e.message,
+      }
     }
     // 动态 Agent / 单 Agent 无 delta 时，回答只在 done 一次性下发。
     // 若流异常中断但后端已落库，主动拉取历史回填气泡。

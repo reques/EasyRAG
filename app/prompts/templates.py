@@ -93,52 +93,9 @@ CRITICAL routing rules:
 """
 )
 
-# ── Task Planning ─────────────────────────────────────────────────────────────
-
-TASK_PLANNING = PromptTemplate(
-    """You are a task planner. Decompose the user request into an ordered list of sub-tasks.
-
-User request: {query}
-Detected intent: {intent}
-
-Return ONLY valid JSON:
-{{
-  "sub_tasks": ["<step 1>", "<step 2>", ...],
-  "needs_retrieval": <true|false>,
-  "needs_tool": <true|false>
-}}
-
-Keep each sub-task concise (one action). Maximum 5 sub-tasks.
-"""
-)
-
 # ── ReAct Reasoning ───────────────────────────────────────────────────────────
-
-REACT_REASONING = PromptTemplate(
-    """你是一个采用 ReAct（推理+行动）模式的智能体。根据用户问题、对话历史和过往观察，决定下一步行动。
-
-可用工具:
-{tools}
-
-对话历史（最近，可能为空）:
-{history}
-
-过往观察（按时间顺序）:
-{observations}
-
-用户问题: {query}
-
-规则:
-1. 先思考（thought），再决定行动（action）
-2. 如果需要调用工具获取信息，action.type 设为 "tool" 并给出 tool_name 和 args
-3. 如果已有足够信息回答，action.type 设为 "final_answer" 并给出完整答案
-4. 只输出合法 JSON，不要任何其他文字、解释或 markdown 代码块
-
-输出格式（二选一）:
-{{"thought": "...", "action": {{"type": "tool", "tool_name": "...", "args": {{...}}}}}}
-{{"thought": "...", "action": {{"type": "final_answer", "answer": "..."}}}}
-"""
-)
+# （阶段 0，2026-09-02：TASK_PLANNING 与 REACT_REASONING 随 single 固定管线退役删除；
+#  意图分流/任务规划由 dynamic / deepagents 路径的模型函数调用承接。）
 
 # ── Answer Generation (with context) ─────────────────────────────────────────
 
@@ -178,38 +135,8 @@ Answer:
 )
 
 # ── Answer Validation ─────────────────────────────────────────────────────────
-
-ANSWER_VALIDATION = PromptTemplate(
-    """You are a quality checker. Evaluate whether the draft answer adequately addresses the question.
-
-Original question: {query}
-Draft answer: {draft_answer}
-
-Return ONLY valid JSON:
-{{
-  "passed": <true|false>,
-  "score": <int 1-10>,
-  "feedback": "<one sentence feedback or empty string>"
-}}
-
-Criteria:
-- Does the answer address the question?
-- Is the answer factual and not self-contradictory?
-- Is the length appropriate (not too short, not unnecessarily verbose)?
-"""
-)
-
-# ── Fallback Answer ───────────────────────────────────────────────────────────
-
-FALLBACK_ANSWER = PromptTemplate(
-    """I encountered a problem while processing your request.
-
-Your question: {query}
-Error: {error}
-
-I cannot provide a complete answer at this time. Please try again or rephrase your question.
-"""
-)
+# （阶段 0，2026-09-02：ANSWER_VALIDATION 与 FALLBACK_ANSWER 随 single 固定管线
+#  退役删除；质量兜底由 dynamic/deep 路径自身的 fallback 与 degraded 逻辑承接。）
 
 # ── Empty Retrieval Recovery ──────────────────────────────────────────────────
 

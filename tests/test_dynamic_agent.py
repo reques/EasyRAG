@@ -29,18 +29,18 @@ def test_dynamic_prompt_excludes_delegation_tools():
     assert "spawn_tasks" not in prompt
 
 
-# ── 构建：注册表工具 + react agent ────────────────
-def test_build_dynamic_agent_creates_react_agent(monkeypatch):
+# ── 构建：注册表工具 + agent ────────────────
+def test_build_dynamic_agent_creates_agent(monkeypatch):
     captured = {}
 
     class FakeAgent:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    def fake_create(model=None, tools=None, prompt=None, name=None):
-        return FakeAgent(model=model, tools=tools, prompt=prompt, name=name)
+    def fake_create(model=None, tools=None, system_prompt=None, name=None):
+        return FakeAgent(model=model, tools=tools, system_prompt=system_prompt, name=name)
 
-    monkeypatch.setattr("langgraph.prebuilt.create_react_agent", fake_create)
+    monkeypatch.setattr("langchain.agents.create_agent", fake_create)
     fake_model = object()
     monkeypatch.setattr("app.agents.deep.llm.get_langchain_model", lambda: fake_model)
     dyn._dynamic_agent_cache = None
@@ -49,8 +49,8 @@ def test_build_dynamic_agent_creates_react_agent(monkeypatch):
         assert agent is not None
         assert captured["name"] == "easyrag_dynamic_agent"
         assert captured["model"] is fake_model
-        assert isinstance(captured["prompt"], str)
-        assert "web_search" in captured["prompt"]
+        assert isinstance(captured["system_prompt"], str)
+        assert "web_search" in captured["system_prompt"]
         # 不包含委派工具名称
         names = [getattr(t, "name", "") for t in captured["tools"]]
         assert "task" not in names
@@ -60,7 +60,7 @@ def test_build_dynamic_agent_creates_react_agent(monkeypatch):
 
 
 def test_get_dynamic_agent_is_cached(monkeypatch):
-    monkeypatch.setattr("langgraph.prebuilt.create_react_agent", lambda **kw: object())
+    monkeypatch.setattr("langchain.agents.create_agent", lambda **kw: object())
     monkeypatch.setattr("app.agents.deep.llm.get_langchain_model", lambda: object())
     dyn._dynamic_agent_cache = None
     try:
@@ -205,18 +205,22 @@ def test_dynamic_mode_routes_to_run_dynamic(monkeypatch):
     assert calls["q"] == "测试"
 
 
-def test_single_mode_keeps_legacy_graph(monkeypatch):
+def test_single_mode_deprecated_falls_back_to_dynamic(monkeypatch):
+    """阶段 0（2026-09-02）：single 固定管线已退役，配置残留按 auto 处理 → dynamic。"""
     import app.services.agent_service as svc_mod
 
-    fake_graph = types.SimpleNamespace(
-        invoke=lambda initial, config=None: {"final_answer": "graph", "steps": ["x"], "is_fallback": False}
-    )
+    calls = {}
+
+    def _fake_dyn(self, query, **kwargs):
+        calls["q"] = query
+        return {"final_answer": "dyn", "is_fallback": False}
+
     monkeypatch.setattr(svc_mod, "cfg", _simple_cfg(AGENT_MODE="single"))
+    monkeypatch.setattr(AgentService, "_run_dynamic", _fake_dyn)
     svc = object.__new__(AgentService)
-    svc._graph = fake_graph
-    svc._sessions = types.SimpleNamespace(get_history=lambda sid: [])
     result = svc.run("测试", session_id="s1")
-    assert result["final_answer"] == "graph"
+    assert result["final_answer"] == "dyn"
+    assert calls["q"] == "测试"
 
 
 def test_deepagents_mode_still_routes_to_deep(monkeypatch):

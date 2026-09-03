@@ -113,7 +113,7 @@ def fast_intent_detect(
 ) -> Optional[Dict[str, Any]]:
     """规则快速路径意图判定。
 
-    返回可直接合并进 AgentState 的部分 intent 字典；无法确定时返回 None，
+    返回可直接合并进 intent state 的部分 intent 字典（原 AgentState 消费方，阶段 0 后由 prepare_context 的普通 dict state 消费）；无法确定时返回 None，
     由调用方回退 LLM 意图分类器。
     """
     history = history or []

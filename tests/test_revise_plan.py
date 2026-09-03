@@ -77,18 +77,18 @@ def test_parse_result_tail_empty():
 
 
 def test_subagent_prompt_includes_tail_convention(monkeypatch):
-    """build_subagent 把尾部约定追加进子 Agent prompt（外部配置也生效）。"""
+    """build_subagent 把尾部约定追加进子 Agent system prompt（外部配置也生效）。"""
     import app.agents.deep.subagents as sa
 
     captured = {}
     monkeypatch.setattr(
-        "langgraph.prebuilt.create_react_agent",
+        "langchain.agents.create_agent",
         lambda **kw: captured.update(kw) or object(),
     )
     cfg = sa.SubAgentConfig(name="x", description="", system_prompt="原始指令")
     sa.build_subagent(cfg, model=object())
-    assert captured["prompt"].startswith("原始指令")
-    assert '"status"' in captured["prompt"] and "suggested_followup" in captured["prompt"]
+    assert captured["system_prompt"].startswith("原始指令")
+    assert '"status"' in captured["system_prompt"] and "suggested_followup" in captured["system_prompt"]
 
 
 # ── revise_plan：无计划 / 取消 / 已完成保护 ──────────────────────────────

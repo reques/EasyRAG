@@ -713,7 +713,7 @@ async def send_message_stream(
             session, current_user.id
         )
 
-    # ── 图片裁决（deep / single 共用）──────────────────────────────────────────
+    # ── 图片裁决（deep / dynamic 共用）──────────────────────────────────────────
     # OCR 回退只做一次：所选模型不支持多模态时，把图片转成文字拼进查询；
     # 多模态模型则保留 image_for_context 直读，query 不变。
     effective_query = req.query
@@ -750,12 +750,19 @@ async def send_message_stream(
     )
     # 通过 use_dynamic 新增轻量动态 Agent（auto 普通问题 / AGENT_MODE=dynamic）
     # 模型每轮自行决定直接回答 / 检索 / 调工具，简单问题不走复杂流程。
+    # （阶段 0，2026-09-02：single 固定管线已退役——use_deep=False 且
+    #   use_dynamic=False 的组合已不可能出现，不再产生 single 分支。）
     use_dynamic = (
         not use_deep
         and cfg.AGENT_MODE != "single"
         and cfg.AGENT_MODE in ("dynamic", "auto")
     )
-    agent_mode = "deepagents" if use_deep else ("dynamic" if use_dynamic else "single")
+    if not use_deep and not use_dynamic:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"AGENT_MODE={cfg.AGENT_MODE} 已退役，请使用 auto / dynamic / deepagents",
+        )
+    agent_mode = "deepagents" if use_deep else "dynamic"
 
     async def _event_gen_inner():
         from app.services.agent_service import get_agent_service
@@ -936,6 +943,11 @@ async def send_message_stream(
             except Exception as exc:
                 logger.warning("[chat/stream] deepagents persist failed: %s", exc)
 
+            # 与动态 Agent 路径同理：DeepAgents 的最终回答是整段返回（无逐 token
+            # 流式），补发一个整段 delta，回答才能在 done 前实时出现在对话框。
+            if answer:
+                yield _sse({"type": "delta", "content": answer})
+
             yield _sse({
                 "type": "done",
                 "content": answer,
@@ -1073,6 +1085,13 @@ async def send_message_stream(
         except Exception as exc:
             logger.warning("[chat/stream] dynamic persist failed: %s", exc)
 
+        # 动态 Agent 路径的最终回答不走 LLM 流式（run_dynamic_agent 是整段返回），
+        # 此前没有任何 delta 事件 —— 前端在 done 前始终显示"思考中"，正文一直
+        # 空白，直到刷新从历史里恢复。这里补发一个整段 delta，让回答实时出现。
+        # （deep 路径同理补发，见下。）
+        if answer:
+            yield _sse({"type": "delta", "content": answer})
+
         yield _sse({
             "type": "done",
             "content": answer,
@@ -1104,230 +1123,6 @@ async def send_message_stream(
 
             asyncio.get_event_loop().create_task(_gen_title_dynamic())
         return
-
-        # ── 单 Agent 路径（带实时思考过程透出）─────────────────────────────────
-        # 1. 同步编排(检索/工具)在 executor 线程跑, 通过线程安全队列把每一步的
-        #    状态实时桥接回事件循环, SSE 逐步推给前端 — 不再是黑盒等待。
-        import queue as _queue
-        step_queue: "_queue.Queue" = _queue.Queue()
-        _SENTINEL = object()
-        # 收集本轮全部状态步骤，随 meta 落库（历史加载时恢复思考过程）
-        collected_steps: list[dict] = []
-        # 收集本轮中间产出（检索片段/工具结果/思维链），随 meta 落库
-        collected_artifacts: list[dict] = []
-        from app.agents.progress import ProgressProjector
-        single_projector = ProgressProjector()
-        # 收集本轮工作日志（进度摘要），随 meta 落库，历史回放时恢复
-        single_progress: list[dict] = []
-
-        def _on_step(step: str, detail: str = ""):
-            ev = {"step": step, "detail": detail}
-            collected_steps.append(ev)
-            step_queue.put({"type": "status", **ev})
-            try:
-                progress = single_projector.feed(step, detail)
-                if progress:
-                    progress["created_at"] = time.time()
-                    single_progress.append(dict(progress))
-                    step_queue.put({"type": "progress_summary", **progress})
-            except Exception:
-                pass
-
-        def _on_artifact(ev: dict):
-            collected_artifacts.append(dict(ev))
-            step_queue.put({"type": "artifact", **ev})
-
-        def _prepare():
-            try:
-                with use_chat_model(selected_model), use_skill_context(skill_context):
-                    return agent.prepare_context(
-                        effective_query,
-                        db_history,
-                        user_id=current_user.id,
-                        knowledge_base_ids=knowledge_base_ids,
-                        knowledge_catalog=knowledge_catalog,
-                        image_data=image_for_context,
-                        on_step=_on_step,
-                        on_artifact=_on_artifact,
-                    )
-            finally:
-                step_queue.put(_SENTINEL)
-
-        prepare_future = loop.run_in_executor(None, _prepare)
-
-        # 边等 prepare 边 drain 队列, 实时推状态
-        ctx = None
-        prepare_error: Optional[Exception] = None
-        while True:
-            try:
-                ev = await loop.run_in_executor(None, step_queue.get, True, 0.1)
-            except Exception:
-                ev = None  # queue.Empty 超时 → 检查 future 是否完成
-            if ev is _SENTINEL:
-                break
-            if ev is not None:
-                yield _sse(ev)
-            if prepare_future.done() and step_queue.empty():
-                break
-        # drain 残留
-        while not step_queue.empty():
-            ev = step_queue.get_nowait()
-            if ev is not _SENTINEL:
-                yield _sse(ev)
-
-        try:
-            ctx = prepare_future.result()
-        except Exception as exc:
-            prepare_error = exc
-
-        if prepare_error is not None or ctx is None:
-            logger.error("[chat/stream] prepare_context error: %s", prepare_error)
-            yield _sse({"type": "error", "detail": f"检索失败: {prepare_error}"})
-            return
-
-        # 1b. 主协程里 async 反查 file_id 并回填到引用(executor 线程里
-        #     asyncio.run 会与主线程 async engine 冲突, 故在此统一补齐)。
-        try:
-            from app.graph.nodes import lookup_file_ids_async
-            pairs = [
-                (s.get("knowledge_base_id", ""), s.get("title", ""))
-                for s in ctx["sources"]
-                if s.get("type") in ("kb", "knowledge_graph")
-            ]
-            fid_map = await lookup_file_ids_async(pairs)
-            for s in ctx["sources"]:
-                key = (s.get("knowledge_base_id", ""), s.get("title", ""))
-                if key in fid_map:
-                    s["file_id"] = fid_map[key]
-        except Exception as exc:
-            logger.warning("[chat/stream] file_id backfill failed: %s", exc)
-
-        # 2. 流式生成（含思维链实时透出 + 空响应兜底）
-        answer_parts: list[str] = []
-        _think_buf: list[str] = []        # 思考增量缓冲（合并后落库，避免碎片化）
-        _think_id = f"think-{conv_id}"    # 流式思考的事件 id（前端按 id 追加内容）
-        try:
-            llm = get_llm_client(profile=selected_model)
-            async for ev in llm.chat_stream_events(ctx["messages"]):
-                if ev["type"] == "thought":
-                    # DeepSeek 类模型的 reasoning_content：实时推给前端展示思考过程
-                    _think_buf.append(ev["text"])
-                    yield _sse({
-                        "type": "artifact",
-                        "id": _think_id,
-                        "kind": "thought",
-                        "stage": "generate",
-                        "title": "思考",
-                        "content": ev["text"],
-                        "streaming": True,
-                    })
-                else:
-                    answer_parts.append(ev["text"])
-                    yield _sse({"type": "delta", "content": ev["text"]})
-        except Exception as exc:
-            logger.error("[chat/stream] generation error: %s", exc)
-            yield _sse({"type": "error", "detail": f"生成失败: {exc}"})
-            return
-
-        # 思考流结束标记（前端把"思考"卡片标记为完成）
-        if _think_buf:
-            yield _sse({
-                "type": "artifact",
-                "id": _think_id,
-                "kind": "thought",
-                "stage": "generate",
-                "streaming": False,
-            })
-            collected_artifacts.append({
-                "kind": "thought",
-                "stage": "generate",
-                "title": "思考",
-                "content": "".join(_think_buf)[:2000],
-            })
-
-        # 兜底：流式返回空时用同步调用重试（API 偶发空响应，尤其法律类内容）
-        if not answer_parts:
-            logger.warning("[chat/stream] stream returned 0 tokens, falling back to sync")
-            try:
-                fallback_answer = await loop.run_in_executor(
-                    None, llm.chat_sync, ctx["messages"]
-                )
-            except Exception as fb_exc:
-                logger.error("[chat/stream] sync fallback also failed: %s", fb_exc)
-                yield _sse({"type": "error", "detail": "模型未返回有效回答，请重试"})
-                return
-
-            if fallback_answer and fallback_answer.strip():
-                answer_parts = [fallback_answer]
-                yield _sse({"type": "delta", "content": fallback_answer})
-                logger.info("[chat/stream] sync fallback succeeded (%d chars)", len(fallback_answer))
-            else:
-                logger.warning("[chat/stream] sync fallback also returned empty")
-                yield _sse({"type": "error", "detail": "模型未返回有效回答，请尝试简化问题后重试"})
-                return
-
-        answer = "".join(answer_parts).strip()
-        elapsed = round(time.perf_counter() - start, 3)
-
-        # 生成完成 → 收尾状态事件：前端据此把"生成回答"步骤标记为完成
-        _gen_done = {"step": "generate_done", "detail": f"回答生成完成（{len(answer)} 字符）"}
-        collected_steps.append(_gen_done)
-        yield _sse({"type": "status", **_gen_done})
-        _gen_progress = single_projector.feed("generate_done", _gen_done["detail"])
-        if _gen_progress:
-            _gen_progress["created_at"] = time.time()
-            single_progress.append(dict(_gen_progress))
-            yield _sse({"type": "progress_summary", **_gen_progress})
-
-        # 3. 落库助手回复(含引用)
-        try:
-            async with get_session() as session:
-                meta = json.dumps({
-                    "intent": ctx["intent"],
-                    "agent_mode": agent_mode,
-                    "sources": ctx["sources"],
-                    "steps": collected_steps,
-                    "progress_summaries": single_progress,
-                    "artifacts": collected_artifacts,
-                    "model_id": selected_model.id,
-                    "model_name": selected_model.name,
-                    "skills": skill_payload,
-                }, ensure_ascii=False)
-                await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
-                await session.commit()
-        except Exception as exc:
-            logger.warning("[chat/stream] persist answer failed: %s", exc)
-
-        yield _sse({
-            "type": "done",
-            "sources": ctx["sources"],
-            "intent": ctx["intent"],
-            "agent_mode": agent_mode,
-            "steps": collected_steps,
-            "progress_summaries": single_progress,
-            "artifacts": collected_artifacts,
-            "elapsed_seconds": elapsed,
-            "model_id": selected_model.id,
-            "model_name": selected_model.name,
-            "skills": skill_payload,
-        })
-
-        # 4. 新会话标题生成 — 在 done 之后的后台协程里做，不阻塞 SSE 流。
-        #    LLM 生成语义化标题(非原文截取)，前端下次轮询会话列表时即可见。
-        if is_new and answer:
-            async def _gen_title():
-                try:
-                    title = await generate_conversation_title(req.query, answer)
-                    async with get_session() as session:
-                        c = await get_conversation(session, conv_id)
-                        if c:
-                            c.title = title
-                            await session.commit()
-                    logger.info("[chat/stream] title generated: %s", title)
-                except Exception as exc:
-                    logger.warning("[chat/stream] title gen failed: %s", exc)
-
-            asyncio.get_event_loop().create_task(_gen_title())
 
     async def event_gen():
         """Ensure an interrupted stream cannot leave a run permanently active,

@@ -1,6 +1,6 @@
 # EasyRAG 整体架构详解
 
-> 版本：基于当前 `y` 分支代码（2026-08-31 核对）
+> 版本：基于当前 `y` 分支代码（2026-08-25 核对）
 > 本文是对 [ARCHITECTURE.md](./ARCHITECTURE.md)（宏观总览）的深度补充，逐模块讲「怎么实现、为什么这么实现」。
 
 ---
@@ -69,8 +69,7 @@ EasyRAG 是一个面向真实业务场景的**企业知识库智能问答平台*
 ```
 EasyRAG/
 ├── app/                          # Agent 内核（纯逻辑层）
-│   ├── agents/                   # 多智能体层（DeepAgents 统一，2026-08-26 退役 Orchestrator；
-│   │                              #   workers/ 目录已清空，仅留 __pycache__ 痕迹）
+│   ├── agents/                   # 多智能体层（DeepAgents 统一，2026-08-26 退役 Orchestrator）
 │   │   ├── events.py             #   统一事件流（请求级 trace + span + emit + sink）
 │   │   ├── progress.py           #   进度投影器（SSE 进度摘要）
 │   │   └── deep/                 #   DeepAgents：主 Agent + task/spawn_tasks 委派 +
@@ -85,12 +84,11 @@ EasyRAG/
 │   │   ├── client.py             #   LLMClient: sync/async/JSON/stream 四接口 + 分级(tier)
 │   │   └── models.py             #   模型目录（DeepSeek/MiniMax/Qwen/GLM + 自定义）
 │   ├── rag/                      # RAG 管线（核心）
-│   │   ├── chunker.py            #   文本提取 + 6 种分块策略（recursive/fixed/markdown/
-│   │   │                         #   parent_child/legal/structured——2026-08-27 通用结构感知）
+│   │   ├── chunker.py            #   文本提取 + 5 种分块策略（含 legal）
 │   │   ├── embeddings.py         #   BGE-M3 embedding（local/ollama/api 三实现）
 │   │   ├── vector_store.py       #   向量库三后端（Milvus/Chroma/Memory）
 │   │   ├── retriever.py          #   检索器（MilvusRetriever 等，父块回填）
-│   │   ├── enhanced_retriever.py #   ★ 增强检索引擎（2001 行，五步流水线）
+│   │   ├── enhanced_retriever.py #   ★ 增强检索引擎（1962 行，五步流水线）
 │   │   ├── bm25.py               #   Okapi BM25 + jieba 分词
 │   │   ├── reranker.py           #   交叉编码器精排（local/api/disabled）
 │   │   ├── graph_cache.py        #   进程级图谱内存缓存（避免 PG 线程冲突）
@@ -111,23 +109,16 @@ EasyRAG/
 │   └── api/                      # [遗留] 旧版路由 /health /chat /kb/*
 ├── backend/                      # 业务后端（分层架构）
 │   ├── server/
-│   │   ├── main.py               #   FastAPI 装配 + lifespan（建表/增量迁移/种子/MCP 启动/
-│   │   │                         #   ingestion worker 内嵌启停）
+│   │   ├── main.py               #   FastAPI 装配 + lifespan（建表/增量迁移/种子/MCP 启动）
 │   │   ├── routers/              #   auth / chat / knowledge / evaluation / mcp
 │   │   └── seed.py
 │   ├── services/                 # chat / knowledge / graph / evaluation / model_config
-│   │   │                         # skill_config / ragas_evaluator / ragas_worker / agent_run
-│   │   │                         # ingestion_service.run_ingestion（原 _run_ingestion 迁入）
-│   │   │                         # ingestion_queue（Redis Stream 发布/ACK）/ delegation_service
-│   ├── worker/
-│   │   └── ingestion_worker.py   # 索引任务消费者（XREADGROUP + XAUTOCLAIM + RedisLock 闸门；
-│   │                             #   默认内嵌 uvicorn lifespan，独立进程模式可选）
+│   │                             # skill_config / ragas_evaluator / ragas_worker / agent_run
 │   ├── repositories/             # BaseRepository[T] 泛型 + 各实体仓库
-│   └── storage/                  # postgres(models_*.py) / redis(manager 单例 + lock 工厂)
-│                                 # / minio 客户端
+│   └── storage/                  # postgres(models_*.py) / redis / minio 客户端
 ├── frontend/                     # Vue 3 SPA
 │   ├── src/views/                # ChatView / KnowledgeView / EvaluationView / Login / Register / Layout
-│   ├── src/components/           # WorkProgress(工作进度面板) / ProgressJournal / AgentActivity
+│   ├── src/components/           # AgentActivity(任务面板) / ProgressJournal
 │   ├── src/stores/               # Pinia（auth / chat）
 │   ├── src/api/index.js          # axios 封装 + fetch SSE 流式封装
 │   └── src/router/               # 路由 + 登录守卫
@@ -163,8 +154,7 @@ send_message (chat_router.py)
   ├─ 3. 会话：复用或创建 conversations 行；保存用户消息（metadata 带 skills 快照）
   ├─ 4. get_compressed_history：情景记忆压缩（有 summary = 摘要 + 最近 N 轮）
   ├─ 5. _load_knowledge_scope：查用户全部知识库授权范围
-  ├─ 6. 多智能体判定：AGENT_MODE ∈ {deepagents, multi} 直接走 DeepAgents；
-  │     auto 且 _should_use_multi(query) 命中 → 同样走 DeepAgents
+  ├─ 6. 多智能体判定：use_multi = AGENT_MODE=="multi" 或 (auto 且 _should_use_multi)
   │     → 命中则先创建 agent_runs 记录（前端任务面板数据）
   ├─ 7. agent.run(...)  ← AgentService 三层路由（见 5.4）
   └─ 8. 答案落库（assistant 消息 + 引用 sources JSON）+ run 收尾
@@ -172,18 +162,7 @@ send_message (chat_router.py)
 
 ### 5.3 流式路径 /chat/stream（SSE）
 
-事件序列（实际可能出现的事件全集，顺序随路径而异）：
-
-```
-conversation_id
-  ├─ [multi/deep 路径] sub_tasks → status(task_started/step_started/action/step_done)
-  │                     → worker_output → tool_call
-  ├─ [single 路径]     status(understand/intent/retrieve/generate/... 及 _done)
-  │                     → artifact（推理/工具调用/工具返回/检索片段）
-  ├─ 两条路径都可能    progress_summary（WorkProgress 面板步骤时间线）
-  ├─ delta（多次，逐 token）
-  └─ done（sources/intent/elapsed/run_id）→ 出错时 error
-```
+事件序列：`conversation_id` → `delta`（多次）→ `done`（sources/intent/elapsed）→ 出错时 `error`。
 
 ```
 send_message_stream
@@ -317,7 +296,7 @@ LLM 输出 `QueryDecomposition`：
 | A 实体 | `_retrieve_entity_path` | 查询实体 → GraphCache 精确/子串匹配 → 一跳邻居，`GRAPH_QUERY_TOP_ENTITIES=3` 展开 |
 | B 语义 | `_retrieve_semantic_path` | 逐子问题（+关键词扩展）→ Milvus 向量检索 → 反向追溯图谱实体（过滤 `_STRUCTURAL_NODE_TYPES` 结构节点） |
 | C 关系 | `_retrieve_relation_path` | 关系模式 → GraphCache 关系链多跳（引导式） |
-| D BM25 | `_retrieve_bm25_path`（主链路） | **逐子问题独立任务**（原始 query 一个任务 + 每个子问题一个任务，与语义路径同编排），jieba 分词 + Okapi。`_retrieve_bm25_multi_path`（遍历多个 query 串行合并）是备用封装，当前无调用点 |
+| D BM25 | `_retrieve_bm25_multi_path` | 遍历 `[query] + 子问题` 独立 BM25 检索合并去重（jieba 分词 + Okapi） |
 
 关键规则：
 - **BM25 命中必须向量二次确认**：BM25 分数（稀疏检索分，内部 ×0.5）不能冒充余弦相似度混入融合——`_vector_rerank_candidates` 对 BM25 命中重新算 embedding 余弦，低于 `RAG_SCORE_THRESHOLD` 的直接剔除，embedding 失败才回退 BM25 分
@@ -396,7 +375,7 @@ final_score = fusion_score × answerability   (answerability 下限 max(0.1, ans
 - 解析失败且 `MINERU_FALLBACK_TO_LOCAL=True` 时降级本地解析
 - OCR：`app/rag/ocr.py` 扫描件识别（图片 OCR + PDF 按页渲染再 OCR）
 
-### 8.2 分块（chunker.py）——6 种策略
+### 8.2 分块（chunker.py）——5 种策略
 
 | 策略 | 机制 | 适用 |
 |------|------|------|
@@ -405,9 +384,7 @@ final_score = fusion_score × answerability   (answerability 下限 max(0.1, ans
 | markdown | 按标题层级聚合，代码块不拆 | Markdown 文档 |
 | parent_child | 小块（500）索引，命中回填父块（1500）上下文 | 长文档 |
 | **legal** | 按「第X条」正则切分 + 章节标题前缀 `[第十二章 借款合同]` | 法律文本 |
-| **structured** | 通用结构感知一级切分（markdown 标题 / 第X章·节·条·款·项 / 一、二、/ 1. /（1）/ A.）+ 超长 section 滑动窗口二级切分（2026-08-27 新增） | 任何带层级结构的文档（合同/规章/条款/教程） |
 
-- **通用设计（用户红线）**：structured 识别的是**通用文档结构**（标题/编号条目/章节词），不是法律专用；「第X条」只是 `_ITEM_RE` 的一种模式（条目是通用文档概念）。切分后每块带**标题路径前缀**（如 `[第二章 自然人 > 第一节 民事权利能力和民事行为能力 > 第十三条] 自然人从出生时…`），超长 section 用滑动窗口（带 overlap）切分保上下文
 - **法律文本自动检测**：`_looks_like_legal`（≥20 个「第X条」判定，避免误判普通文本），`CHUNK_STRATEGY` 未指定时自动走 legal
 - 效果：民法典 272 chunks → 1313 chunks（平均 100 字/条），第 675 条独立成块且带章节上下文
 - **改分块策略后必须重新索引才生效**（Milvus 里是旧 chunk），已提供 `POST /files/{id}/reindex` 入口
@@ -431,40 +408,19 @@ final_score = fusion_score × answerability   (answerability 下限 max(0.1, ans
 - 数据源同步自 Milvus chunk（`sync_bm25_from_vector_store`）或直接喂 chunks
 - **定位是锦上添花**：永远不阻塞主链路（后台构建 + 0.5s 等待 + 失败静默跳过）
 
-### 8.6 上传-索引队列管线（Redis Stream，2026-08-27 落地）
-
-原 BackgroundTasks 进程内任务已迁到 Redis Stream 队列（uvicorn 重启即丢任务 / N 文件 = N 条链路无并发闸门 两个问题一起解决；Kafka 对单机部署过剩，等量级到了再迁）。**消息只带定位信息（file_id/kb_id/filename/strategy/content_type/parser），文件字节不入消息**——上传时已存 MinIO，消费端按 minio_object 拉取，发布快且小。
+### 8.6 上传-索引异步管线（knowledge_router.py `_run_ingestion`）
 
 ```
-POST /bases/{kb_id}/upload
-  ├─ 登记 DB（knowledge_files 行，status=processing）→ 存 MinIO 原始字节
-  ├─ publish_ingestion → XADD kb:ingestion（消息 ≈ 200B）
-  │     └─ 发布失败 → 回退 background_tasks.add_task(run_ingestion)（保底不丢任务）
-  └─ 返回 202 + file_id（立刻返回）
-        │
-        ▼ ingestion worker（backend/worker/ingestion_worker.py）
-   XREADGROUP 消费组 kb:ingestion:grp（id="0" 从头投递，重复投递由幂等兜底）
-   → handle_message：
-     ① 幂等检查（file 已 completed/failed → 直接 ACK skip）
-     ② Semaphore 并发闸门（INGESTION_CONCURRENCY=3，全局，N 文件不再无上限）
-     ③ RedisLock.acquire("ingestion:lock:{file_id}", ttl=30)（短 TTL + 持有者自动续期，
-        防 XAUTOCLAIM 误认领重入；拿不到锁 → skip + ACK）
-     ④ 拉 MinIO 原始字节 → run_ingestion → XACK
-     ⑤ XAUTOCLAIM（INGESTION_PENDING_CLAIM_MS=180000=3 分钟）认领崩溃遗留任务
-   run_ingestion（backend/services/ingestion_service.py，原 _run_ingestion 迁入）：
-     ├─ 10% parsing     记录解析器选择 → 调 parser_router.parse()
-     ├─ 30% chunking    存全文 text_content（供预览）+ chunk_parsed_document()
-     ├─ 80% embedding   批量向量化 + Milvus upsert（每批 64）
-     ├─ 90% graph       若 GRAPH_ENABLED：双层图谱抽取入库
-     └─ 100% completed  前端 2s 轮询 GET /files 直到 status 非 processing
+POST /bases/{kb_id}/upload → 202 + file_id（立刻返回）
+  │
+  ├─ 10% parsing     记录解析器选择 → 调 parser_router.parse()
+  ├─ 30% chunking    存全文 text_content（供预览）+ chunk_parsed_document()
+  ├─ 80% embedding   批量向量化 + Milvus upsert（每批 64）
+  ├─ 90% graph       若 GRAPH_ENABLED：双层图谱抽取入库
+  └─ 100% completed  前端 2s 轮询 GET /files 直到 status 非 processing
 ```
 
-- **部署形态（用户要求「仍按前后端两个终端启动」）**：worker 默认**内嵌 uvicorn 进程**——main.py lifespan 启动 `start_worker(INGESTION_CONCURRENCY)` 创建后台任务（异常只记日志不拖垮 API），shutdown `stop_worker()` 排空存量再 `close_redis()`（顺序不能反，worker 要用 redis）。uvicorn 重启 = worker 重启，消息在 Redis 持久化不丢，重启后 XAUTOCLAIM 认领。独立进程模式（`python -m backend.worker.ingestion_worker [--concurrency N]`）保留为多机/多 worker 扩展选项（消费组内负载均衡，实测 4 worker 并发消费正常）
-- 每阶段独立 session 提交 `progress/progress_message/processing_stage`，前端两阶段进度条（传输 0-100% + 索引 0-100%）——**进度仍写 DB + 前端轮询，消费改造完全不动前端**
-- **验证「消费成功」看 `XPENDING=0` / `XINFO GROUPS` 的 lag=0，别用 XLEN**（XACK 只移出 PEL，XLEN 不变）
-- **uvicorn 必须 `--reload-exclude tests`**，否则改测试文件触发 reload 打断后台任务（文件卡 processing，前端按钮永久 disabled）
-- **处理锁 + 认领超时配套设计**：短 TTL 锁（30s，持有者每 10s 经 Lua 比对 token 续期）+ 短认领超时（3 分钟）——worker 活锁持续刷新 → 认领被锁挡住 skip；worker 真死 → 锁 30s 过期、消息 3 分钟后重跑。**长 TTL + 长认领超时是「防误伤但恢复慢」的笨方案**（曾因 30min/30min 组合导致处理中的文件被误认领重跑 2-3 遍，进度互相覆盖）
-- 锁实现抽在 `backend/storage/redis/lock.py` 的 `RedisLock` 类（工厂 acquire + release + async with；释放/续期都是 Lua 比对持有者 token 的原子操作，锁过期被抢走后原持有者不误删新持有者）
+每阶段独立 session 提交 `progress/progress_message/processing_stage`，前端两阶段进度条（传输 0-100% + 索引 0-100%）。**uvicorn 必须 `--reload-exclude tests`**，否则改测试文件触发 reload 打断后台任务（文件卡 processing，前端按钮永久 disabled）。
 
 ---
 
@@ -478,8 +434,6 @@ POST /bases/{kb_id}/upload
 2. **结构抽取**（保留给检索用）：法律文本走 `_extract_graph_rule_based`（正则抽「第X条」+章节，**description 含正文**——检索 `match_entities` 靠它命中正文）；其余走 `_extract_graph_generic`（jieba NER，词性映射排除 eng 词性避免英文停用词淹没）
 
 - **实体跨 chunk 去重按 `name`**（不是 `(name, type)`）：同名实体在不同 chunk 被抽成不同 type 时只保留第一个，否则 PG 同名多 type 实体会让前端 ECharts 渲染报 `dataIndex` 错误
-- **实体身份 = `(kb_id, source_file, name)` 命名空间隔离（2026-08-25）**：`KnowledgeEntity/Relation.source_file` 字段（Text, nullable, index），同名不同文件各自成独立节点——跨文件同名实体（「第六章」/「生产经营单位」）不再合并污染；lifespan 增量迁移回填老实体 source_file（`split_part(source_chunks,'#',1)`），老关系无来源保持 NULL 走降级路径
-- **库级预查去重（2026-08-27 三防线之二）**：`extract_graph_from_chunks` 入口查库已有 key 集合（实体 `(name, source_file)`、关系 `(source, relation_type, target, source_file)`）传给三个抽取函数，`seen_* = set(existing_* or ())`——**库中已有 ∪ 批内新插共用一个集合**，同文件无论 reindex/重复上传多少次都不产生重复行（局部 seen set 只防批内重复、防不了跨批次；曾实测 4005 行实体 = 1679 组重复、1486 关系 = 137 组严格重复，清理 + 防复发 + 前端兜底三管齐下）
 - 判定用 `_looks_like_legal_chunks`（前 10 chunk ≥3 个「第X条」）
 - 入库 PG `knowledge_entities` / `knowledge_relations` 表（kb_id 隔离）
 
@@ -492,12 +446,11 @@ POST /bases/{kb_id}/upload
 
 | 端点 | 说明 |
 |------|------|
-| `GET /bases/{kb_id}/graph` | 实体+关系。**按 `(name, source_file)` 去重**（同名不同文件各自成节点）；`limit`（默认 300）按**连接度 degree 降序**取 top-N（只返回选中节点间的边，全量 1500+ 会拖垮前端）；`semantic_only` 过滤结构编号实体（article/chapter）；孤立节点（degree=0）始终过滤 |
-| `GET /bases/{kb_id}/graph/neighbors?entity=&source_file=` | 点实体 → 右侧栏罗列邻居（方向箭头 out/in + 关系类型 + 描述），不受 top-N 截断影响；`source_file` 可选参数——给定 → 只查该文件内的同名实体（命名空间隔离），缺省 → 按 name 查全部（老数据兜底） |
+| `GET /bases/{kb_id}/graph` | 实体+关系。`limit`（默认 300）按**连接度 degree 降序**取 top-N（只返回选中节点间的边，全量 1500+ 会拖垮前端）；`semantic_only` 过滤结构编号实体（article/chapter）；孤立节点（degree=0）始终过滤 |
+| `GET /bases/{kb_id}/graph/neighbors?entity=` | 点实体 → 右侧栏罗列邻居（方向箭头 out/in + 关系类型 + 描述），不受 top-N 截断影响 |
 | `GET .../graph/config` / `status` / `entities` / `search` | 图谱构建配置查询、构建状态、实体列表、语义搜索 |
 | `POST .../graph`（构建） / `DELETE .../graph`（重置） | 手动触发全库图谱构建 / 清空 |
 | `POST /files/{id}/reindex` | 单文件重新索引（清旧向量+图谱 → 重新分块 → 重新抽取） |
-| `DELETE /files/{id}` | 删除文件**级联清理图谱**（2026-08-27 修复）：向量索引 + MinIO 对象 + knowledge_files 记录之外，按 `source_file == filename` 删除 `knowledge_relations`/`knowledge_entities`（命名空间维度精确，不误伤其他文件）+ `graph_cache.delete_by_source` 重建内存关系索引。曾漏清导致「文件全删了图谱还有实体关系」 |
 
 ### 9.4 前端可视化（KnowledgeView.vue）
 
@@ -506,8 +459,6 @@ POST /bases/{kb_id}/upload
 - 交互：force 布局（`layoutAnimation:false`）、roam 缩放平移、拖节点、`focus: 'adjacency'` 点击高亮邻居、边 label 显示关系类型
 - **图例/颜色动态生成**：从实际返回数据的 entity_type 去重后按出现顺序从 PALETTE 取色——绝不硬编码领域类型（用户硬性要求）
 - 节点点击 → 右侧详情栏（label/type/description + 关联关系列表，点击邻居可继续跳转高亮）
-- **命名空间展示（2026-08-25 五轮打磨终版）**：节点 id 用唯一键 `graphKey(source_file, name)`（ECharts id 唯一），label 保持纯名——**内部隔离、展示精简，图面零 filename 文字**；来源文件只在 hover tooltip 与点击详情栏展示；边端点用 `resolveEdgeKey` 三级解析（精确 `file::name` → name 在图中唯一 → 同名多节点才丢边）
-- **按文件筛选面板（2026-08-25/27）**：左侧卡片 checkbox 勾选 = 展示该文件的实体与关系。`fileOptions` 从实体 source_file 去重收集（跳过空值，无「未知文件」选项——老数据 NULL 永远隐藏）；`filteredGraphData` computed 过滤（**过滤规则 `e.source_file && sel.has(e.source_file)`，NULL 不参与筛选**——写 `sel.has(r.source_file || '')` 会把所有老关系滤光）；**右上角计数与图渲染共用 `filteredGraphData` 同一数据源**（曾因计数读全量 graphData 导致勾选后数字不变）；全不选 → 返回空数组 + 「未勾选任何文件」空态；筛选后按同 key 去重（实体 `(sf,name)`、关系 `(sf,src,type,tgt)`），统计与渲染共用去重后数组
 
 ---
 
@@ -600,8 +551,8 @@ POST /bases/{kb_id}/upload
 
 ### 13.3 Redis / MinIO / 外部服务
 
-- Redis：**上传索引任务队列核心**——`kb:ingestion` Stream + 消费组 `kb:ingestion:grp`（XREADGROUP/XAUTOCLAIM/XPENDING），以及 `RedisLock`（`ingestion:lock:{file_id}`，短 TTL + Lua 续期）分布式锁；其余缓存/会话能力保留
-- MinIO（easyrag-minio :9090 Console / 9091 API）：上传文件原始二进制对象存储（队列消息只带定位信息，消费端按对象拉取）
+- Redis：缓存/会话（当前主要为生命周期预留，核心状态在 PG）
+- MinIO（easyrag-minio :9090 Console / 9091 API）：上传文件原始二进制对象存储
 - Tavily：web_search 工具
 - Ollama：本地 embedding（可选）
 
@@ -613,9 +564,7 @@ postgres(pgvector/pg17):5432     redis:7:6379
 minio:9090(Console)/9091(API)    mineru-api:18000(→容器8000, GPU, 仅 127.0.0.1)
 ```
 
-- **全部 7 服务都有 `restart: unless-stopped`**（2026-08-27 给 etcd/minio-s3/milvus 补上——之前缺策略，Docker 重启后 Milvus 三件套静默 Exited，上传到向量阶段报 `MilvusException: Fail connecting to server on localhost:19530`；同 compose 里其他服务 Up 而它 Exited 时优先怀疑缺 restart 策略）
-- 数据卷在 `volumes/`（Docker Desktop WSL2 下注意 C 盘写爆，可 junction 迁移到 D 盘）。MinerU 已合并进主 compose（`MINERU_VERSION=3.4.4`，清华源拉模型，CUDA_VISIBLE_DEVICES=0）
-- **MinerU 并发固定 1**（`MINERU_MAX_CONCURRENT_REQUESTS=${MINERU_MAX_CONCURRENT_REQUESTS:-1}`）——RTX A2000 8GB 显存上限，用户明确决定勿改；PDF 批量上传排队是预期行为
+数据卷在 `volumes/`（Docker Desktop WSL2 下注意 C 盘写爆，可 junction 迁移到 D 盘）。MinerU 已合并进主 compose（`MINERU_VERSION=3.4.4`，清华源拉模型，CUDA_VISIBLE_DEVICES=0）。
 
 ---
 
@@ -625,11 +574,11 @@ minio:9090(Console)/9091(API)    mineru-api:18000(→容器8000, GPU, 仅 127.0.
 
 | 视图 | 职责 |
 |------|------|
-| ChatView.vue | SSE 逐 token 渲染、引用来源可点击跳转、模型切换、Skill 标签、任务状态栏（可收起）、停止生成、深度研究开关、多智能体任务产出面板（workItems/tasks） |
-| KnowledgeView.vue | 知识库 CRUD、多文件并行上传（独立进度+失败留列表+可关弹窗）、文件预览/删除/重新索引、**检索测试工作台**（basic/enhanced 双模式 + 子问题 tab + 图谱可视化 + 邻居详情 + 按文件筛选） |
+| ChatView.vue | SSE 逐 token 渲染、引用来源可点击跳转、模型切换、Skill 标签、任务状态栏（可收起）、停止生成、深度研究开关 |
+| KnowledgeView.vue | 知识库 CRUD、两阶段上传进度条、文件预览/删除/重新索引、**检索测试工作台**（basic/enhanced 双模式 + 子问题 tab + 图谱可视化 + 邻居详情） |
 | EvaluationView.vue | 检索评估运行列表/明细（HitRate/MRR/avg_score） |
 | LoginView / RegisterView / LayoutView | 认证与布局 |
-| WorkProgress.vue / ProgressJournal.vue / AgentActivity.vue | 工作进度面板（progress_summary 步骤时间线，步骤完成折叠）/ 深度研究进度日志 / 多智能体任务面板 |
+| AgentActivity.vue / ProgressJournal.vue | 多智能体任务面板 / 深度研究进度日志 |
 
 - Pinia：`auth.js`（token/user）+ `chat.js`（会话列表、活跃会话）
 - `api/index.js`：axios 封装（JWT 拦截器、401 跳登录、`get` 已解包 `r.data`）+ `streamChat()`（fetch + ReadableStream 手写 SSE 解析，`AbortController` 支持停止生成）
@@ -655,13 +604,8 @@ minio:9090(Console)/9091(API)    mineru-api:18000(→容器8000, GPU, 仅 127.0.
   - `RERANKER_TYPE=disabled|local|openai_compatible`：精排
   - `AGENT_MODE=auto|single|multi|deepagents`：执行路径
   - `FAST_INTENT_ENABLED=true`：规则快速意图
-  - `CHUNK_STRATEGY=recursive|fixed|markdown|parent_child|legal|structured`（6 种，2026-08-27 加 structured）
+  - `CHUNK_STRATEGY=recursive|fixed|markdown|parent_child|legal`
   - `EMBEDDING_TYPE=local|ollama|openai_compatible`
-  - `INGESTION_CONCURRENCY=3`：索引 worker 全局并发闸门
-  - `INGESTION_PENDING_CLAIM_MS=180000`：队列消息认领超时（3 分钟，与短 TTL 锁配套）
-  - `INGESTION_LOCK_TTL=30`：单文件处理锁 TTL（秒，持有者自动续期）
-  - `ENHANCED_DECOMPOSITION_CACHE_TTL=3600`：查询分解 LRU 缓存 TTL（规则回退结果不缓存）
-  - `MINERU_MAX_CONCURRENT_REQUESTS=1`：MinerU 解析并发（GPU 显存约束，勿调高）
 - 模型目录：DeepSeek / MiniMax / Qwen / GLM 内置配置（浏览器只拿到 public ID，endpoint/API key 永远留在服务端）
 - 启动时 `no_proxy` 注入：把 127.0.0.1/localhost 加入 no_proxy（否则 grpcio 经 Windows 系统代理连 Milvus 会握手超时；外部 API 仍走代理）
 
@@ -697,9 +641,6 @@ minio:9090(Console)/9091(API)    mineru-api:18000(→容器8000, GPU, 仅 127.0.
 12. **图谱实体按 name 去重**：同名多 type 会让 ECharts 报 dataIndex 错误
 13. **MinerU 旁路部署**：解析服务 Docker 独立运行（GPU），不污染主 Python 环境；失败降级本地解析
 14. **Skill 执行层强制**：工具白名单在后端校验，指令注入系统上下文——自定义 Skill 无需改代码/重启
-15. **上传队列进程化（Redis Stream）**：任务消息出 API 进程（uvicorn 重启不丢、可横向扩展）；**消息只带定位信息不带文件字节**（MinIO 已存）；发布失败回退进程内后台任务保底；消费端幂等检查 + 全局并发闸门 + 短 TTL 自续期锁 + 短认领超时四层防护——「队列化改造」的正确形态是**内嵌现有进程**（worker 并入 uvicorn lifespan），不为后台任务引入第三终端
-16. **图谱命名空间隔离**：实体身份 = `(kb_id, source_file, name)`——同名跨文件各自成节点，删除/重索引按文件维度精确清理（级联图谱表 + 内存缓存），统计与渲染共用同一去重数据源（「数量对不上」类问题先查 NULL 归属与重复计数）
-17. **通用结构化分块**：结构感知切分识别通用文档层级（标题/编号条目/章节词），「第X条」只是条目模式之一；**结构行 = 编号进路径 + 正文进内容**，超长 section 统一走滑动窗口（带 overlap）——领域词只允许出现在可选分支，通用层零领域词（用户最高优先级红线）
 
 ---
 
@@ -723,8 +664,7 @@ minio:9090(Console)/9091(API)    mineru-api:18000(→容器8000, GPU, 仅 127.0.
  │  结构化黑板收集产出 → 主 Agent 整合最终回答；
  │  委派事件流 → 桥接任务面板协议 + Run/Task/AgentRun 落库（best-effort）
  ▼ SSE 事件流
- │  conversation_id → sub_tasks/status/worker_output（委派面板 + WorkProgress 进度）
- │  → tool_call → delta(逐token) → done(sources+intent+run_id)
+ │  conversation_id → sub_tasks/worker_output(委派面板) → delta(逐token) → done(sources+intent+run_id)
  ▼ 前端
  │  回答逐 token 渲染，引用来源可点击 → 跳转文档预览
  │  任务面板展示委派进度（done/total）与各子智能体产出
