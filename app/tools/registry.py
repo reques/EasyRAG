@@ -79,6 +79,25 @@ def _build_progress_emitter(name: str, callback: Callable[..., Any]):
     return _emit_progress
 
 
+def _skill_allows(tool: "ToolDefinition") -> bool:
+    """Skill 门控裁决（第二层，ContextVar 侧）。
+
+    2026-09-04 Skill 重构：判据从"静态白名单"改为"已激活 Skill 的工具并集
+    + 公共工具"（渐进式披露）。第一层门控在 ``app/skills/middleware.py`` 的
+    ``wrap_tool_call``；这一层覆盖 middleware 触达不到的路径 —— 子 Agent 的
+    ThreadPoolExecutor 线程、graph 节点、MCP 桥接。两层判据同为
+    ``SkillRuntimeContext.allows_tool``，不存在两套真相。
+
+    ``public`` 直接从已持有的 ToolDefinition 取，避免注册表回查（否则
+    list_all 遍历 N 个工具会产生 N 次带锁 get）。
+    """
+    from app.skills.runtime import get_active_skill_context
+
+    return get_active_skill_context().allows_tool(
+        tool.name, public=bool((tool.metadata or {}).get("public"))
+    )
+
+
 @dataclass
 class ToolDefinition:
     name: str
@@ -172,14 +191,7 @@ class ToolRegistry:
             candidates = snapshot
         else:
             candidates = [t for t in snapshot if t.is_available()]
-        from app.skills.context import get_active_skill_context
-
-        skill_context = get_active_skill_context()
-        return [
-            tool.name
-            for tool in candidates
-            if skill_context.allows_tool(tool.name)
-        ]
+        return [tool.name for tool in candidates if _skill_allows(tool)]
 
     def list_all(self, available_only: bool = True) -> List[ToolDefinition]:
         """Return all ToolDefinition objects (for schema/prompt building).
@@ -189,12 +201,7 @@ class ToolRegistry:
         candidates = snapshot if not available_only else [
             tool for tool in snapshot if tool.is_available()
         ]
-        from app.skills.context import get_active_skill_context
-
-        skill_context = get_active_skill_context()
-        return [
-            tool for tool in candidates if skill_context.allows_tool(tool.name)
-        ]
+        return [tool for tool in candidates if _skill_allows(tool)]
 
     def invoke(self, name: str, **kwargs: Any) -> str:
         """Execute a registered tool by name.
@@ -231,9 +238,7 @@ class ToolRegistry:
             ToolExecutionError:  Tool unavailable (check_fn failed) or raised during execution.
         """
         tool = self.get(name)  # acquires+releases lock internally
-        from app.skills.context import get_active_skill_context
-
-        if not get_active_skill_context().allows_tool(name):
+        if not _skill_allows(tool):
             raise ToolExecutionError(
                 f"Tool '{name}' is not allowed by the selected Skills. "
                 f"Available tools: {', '.join(self.list_names()) or '(none)'}"

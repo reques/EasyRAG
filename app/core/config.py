@@ -207,6 +207,19 @@ class Settings(BaseSettings):
     # 只能收窄不能放大——仍需通过配置白名单与请求级权限裁决）
     DEEP_DYNAMIC_TOOLS: bool = False
 
+    # ── Skill 系统（2026-09-04 重构：SKILL.md 文件 + 渐进式披露）─────────
+    # 内置 Skill 目录（随代码发布，只读）。相对路径按项目根解析。
+    SKILLS_BUILTIN_DIR: str = "./skills"
+    # 个人 Skill 根目录：实际路径为 <root>/<user_id>/<slug>/SKILL.md
+    SKILLS_PERSONAL_DIR: str = "./volumes/user-skills"
+    # 单次请求可选的 Skill 上限（有效集合大小；渐进式披露下摘要行很短，
+    # 因此从旧的 3 放宽——模型只在需要时才 read_skill 展开正文）
+    SKILLS_MAX_SELECTED: int = 10
+    # skill_dependencies 闭包展开的最大深度（超限截断并告警）
+    SKILLS_MAX_DEPENDENCY_DEPTH: int = 5
+    # 目录扫描结果缓存 TTL（秒）。0 = 不缓存（每次重扫，开发调试用）
+    SKILLS_SCAN_CACHE_TTL: float = 30.0
+
     # ── 快速路径（简单问题零成本分流）──────────────────────────────────
     # 简单常识/问候/计算/时间问题先用规则预判直接回答，跳过 LLM 意图分类、
     # 检索与工具调用（避免"吃坏肚子怎么办"这类问题被误判成联网搜索）。

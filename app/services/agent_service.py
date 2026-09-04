@@ -286,7 +286,6 @@ class AgentService:
         from app.agents.events import emit
         from app.services.knowledge_catalog import format_knowledge_catalog
         from app.services.knowledge_context import use_authorised_kb_ids
-        from app.skills.context import get_active_skill_prompt
         from langgraph.errors import GraphRecursionError
 
         context = context or _Ctx(thread_id="default")
@@ -329,10 +328,9 @@ class AgentService:
                     pass
 
         # ── 组装消息（复用 prepare_context 的注入链，保证行为一致）──────
+        # 2026-09-04 Skill 重构：Skill 区块由 SkillsMiddleware 按 activated_skills
+        # 每轮动态渲染，不在此手工注入（见 app/skills/middleware.py）。
         messages: List[Dict[str, str]] = []
-        skill_prompt = get_active_skill_prompt()
-        if skill_prompt:
-            messages.append({"role": "system", "content": skill_prompt})
         if knowledge_catalog:
             messages.append({
                 "role": "system",
@@ -763,9 +761,13 @@ class AgentService:
         messages = [{"role": t["role"], "content": t["content"]} for t in history]
 
         from app.services.knowledge_catalog import format_knowledge_catalog
-        from app.skills.context import get_active_skill_prompt
+        # Skill 指令注入（2026-09-04 重构）：prepare_context 是**非 Agent 路径**
+        # （固定编排 + 单次生成调用，无 read_skill、无多轮循环），渐进式披露在
+        # 这里无从发生，因此 eager=True 直接展开全文。Agent 路径（dynamic /
+        # deep）由 SkillsMiddleware 按 activated_skills 渐进渲染。
+        from app.skills.runtime import get_active_skill_context
 
-        skill_prompt = get_active_skill_prompt()
+        skill_prompt = get_active_skill_context().render_prompt(eager=True)
         if skill_prompt:
             messages.insert(0, {"role": "system", "content": skill_prompt})
 

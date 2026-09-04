@@ -84,7 +84,7 @@ def intent_recognition(state):
     if cfg.FAST_INTENT_ENABLED:
         try:
             from app.graph.fast_intent import fast_intent_detect
-            from app.skills.context import get_active_skill_context
+            from app.skills.runtime import get_active_skill_context
 
             if not get_active_skill_context().active:
                 fast = fast_intent_detect(query, history)
@@ -111,9 +111,12 @@ def intent_recognition(state):
         query=query,
         available_tools=available_tools,
     )
-    from app.skills.context import get_active_skill_prompt
+    # Skill 指令注入（2026-09-04 重构）：意图识别是**单次 LLM 调用**，没有
+    # read_skill 工具也没有多轮循环，渐进式披露在这里无从发生 —— 只给摘要行
+    # 等于什么约束都没给。因此用 eager=True 直接展开全文（见 runtime.py）。
+    from app.skills.runtime import get_active_skill_context
 
-    skill_prompt = get_active_skill_prompt()
+    skill_prompt = get_active_skill_context().render_prompt(eager=True)
     if skill_prompt:
         prompt = skill_prompt + "\n\n" + prompt
     try:

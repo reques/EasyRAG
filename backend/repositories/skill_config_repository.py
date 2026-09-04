@@ -1,4 +1,4 @@
-"""Owner-scoped persistence for custom Skill configurations."""
+"""个人 Skill 索引表的 owner-scoped 持久化（内容在磁盘，见 skill_config_service）。"""
 from __future__ import annotations
 
 import uuid
@@ -30,18 +30,20 @@ class CustomSkillConfigRepository(BaseRepository[CustomSkillConfig]):
         )
         return (await self.session.execute(stmt)).scalars().all()
 
-    async def get_by_public_id(
-        self, owner_id: uuid.UUID, public_id: str
+    async def get_by_slug(
+        self, owner_id: uuid.UUID, slug: str
     ) -> Optional[CustomSkillConfig]:
-        if not public_id.startswith("custom:"):
-            return None
-        try:
-            record_id = uuid.UUID(public_id.split(":", 1)[1])
-        except (ValueError, IndexError):
+        """按 slug 取索引行（owner 隔离）。
+
+        重构前是 ``get_by_public_id`` 解析 ``custom:<uuid>``；现在 slug 就是
+        对外标识，不再需要前缀解析与 UUID 转换。
+        """
+        normalized = (slug or "").strip().lower()
+        if not normalized:
             return None
         stmt = select(CustomSkillConfig).where(
-            CustomSkillConfig.id == record_id,
             CustomSkillConfig.owner_id == owner_id,
+            CustomSkillConfig.slug == normalized,
             CustomSkillConfig.is_active.is_(True),
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()

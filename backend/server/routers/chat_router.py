@@ -21,8 +21,9 @@ from app.llm.models import (
     get_chat_model_profile,
     list_chat_model_profiles,
 )
-from app.skills.catalog import SkillProfile, get_builtin_skill, list_builtin_skills
-from app.skills.context import SkillRuntimeContext
+from app.skills.loader import SkillDefinition
+from app.skills.registry import list_builtin_skills, merge_available_skills
+from app.skills.runtime import SkillRuntimeContext, resolve_dependency_closure
 from backend.services.chat_service import (
     create_conversation,
     add_message,
@@ -47,8 +48,11 @@ from backend.storage.postgres.models_model_config import CustomModelConfig
 from backend.repositories.skill_config_repository import CustomSkillConfigRepository
 from backend.services.skill_config_service import (
     SkillConfigValidationError,
-    encode_tool_names,
-    profile_from_custom_skill,
+    definition_from_record,
+    delete_personal_skill_files,
+    slugify,
+    validate_slug,
+    write_personal_skill,
 )
 from backend.storage.postgres.models_skill_config import CustomSkillConfig
 
@@ -71,7 +75,10 @@ class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096)
     conversation_id: Optional[str] = None  # None = 创建新会话
     model_id: Optional[str] = Field(default=None, max_length=64)
-    skill_ids: list[str] = Field(default_factory=list, max_length=3)
+    # 2026-09-04 Skill 重构：语义从"注入这些 Skill 的指令"改为"本次请求可用的
+    # Skill 范围"。上限由 SKILLS_MAX_SELECTED 控制（默认 10；渐进式披露下首轮
+    # 只给摘要行，放宽不会撑爆上下文）。运行时上限校验在 _resolve_request_skills。
+    skill_ids: list[str] = Field(default_factory=list, max_length=32)
     # 2026-08-21：深度研究开关 — 用户显式选择时强制走 DeepAgents 工作流
     # （主 Agent + SubAgent），不依赖全局 AGENT_MODE 配置
     deep_research: bool = False
@@ -131,14 +138,32 @@ class CustomModelCreate(BaseModel):
 
 
 class ChatSkillInfo(BaseModel):
-    id: str
+    """Skill 列表项。**不含正文** —— 渐进式披露：正文只经 read_skill 工具
+    （模型侧）或 ``GET /skills/{slug}/content``（编辑器侧）获取。"""
+
+    id: str  # = slug（兼容前端既有 selectedSkillIds 字段名）
+    slug: str
     name: str
     description: str
-    instructions: str
     tool_names: list[str] = Field(default_factory=list)
+    skill_dependencies: list[str] = Field(default_factory=list)
     category: str = "通用"
     icon: str = "sparkles"
-    source: str = "builtin"
+    source: str = "builtin"  # builtin | personal
+    can_edit: bool = False
+    body_available: bool = False
+
+
+class ChatSkillContent(BaseModel):
+    """单个 Skill 的完整正文（配置弹窗编辑用）。"""
+
+    slug: str
+    name: str
+    description: str
+    body: str
+    tool_names: list[str] = Field(default_factory=list)
+    category: str = "自定义"
+    icon: str = "sparkles"
     can_edit: bool = False
 
 
@@ -146,10 +171,12 @@ class ChatSkillToolInfo(BaseModel):
     name: str
     description: str
     available: bool
+    # 公共工具不受 Skill 门控（kb_search / calculator / datetime_tool）
+    public: bool = False
 
 
 class ChatSkillListResponse(BaseModel):
-    max_selected: int = 3
+    max_selected: int = 10
     skills: list[ChatSkillInfo]
     tools: list[ChatSkillToolInfo]
 
@@ -157,10 +184,13 @@ class ChatSkillListResponse(BaseModel):
 class CustomSkillUpsert(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
     description: str = Field(default="", max_length=300)
-    instructions: str = Field(..., min_length=1, max_length=6000)
+    # SKILL.md 正文（旧字段名保留，前端表单不用改）
+    instructions: str = Field(..., min_length=1, max_length=20000)
     tool_names: list[str] = Field(default_factory=list, max_length=8)
     category: str = Field(default="自定义", max_length=32)
     icon: str = Field(default="sparkles", max_length=32)
+    # 目录名；省略时由 name 生成（中文名回退为 skill-<uuid8>）
+    slug: Optional[str] = Field(default=None, max_length=128)
 
 
 async def _resolve_request_model(
@@ -198,63 +228,113 @@ async def _resolve_request_model(
         ) from exc
 
 
+async def _accessible_skills(
+    user_id: uuid.UUID, session: AsyncSession
+) -> list[SkillDefinition]:
+    """用户可访问的全部 Skill = 内置（磁盘）+ 自己的个人 Skill（索引 → 磁盘）。
+
+    索引行存在但磁盘文件缺失时跳过并告警 —— 给用户一个点开是空的 Skill 比
+    少一项更糟。同 slug 时个人版本覆盖内置（对齐 Yuxi）。
+    """
+    records = await CustomSkillConfigRepository(session).list_by_owner(user_id)
+    personal: list[SkillDefinition] = []
+    for record in records:
+        definition = definition_from_record(record, owner_id=user_id)
+        if definition is None:
+            logger.warning(
+                "[chat/skills] skipped personal skill %s (file missing)", record.slug
+            )
+            continue
+        personal.append(definition)
+
+    return merge_available_skills(personal)
+
+
 async def _resolve_request_skills(
     skill_ids: list[str], user_id: uuid.UUID, session: AsyncSession
-) -> list[SkillProfile]:
-    """Resolve selected built-in/custom Skills with owner checks."""
-    normalized = list(dict.fromkeys(skill_id.strip() for skill_id in skill_ids if skill_id.strip()))
-    if len(normalized) > 3:
-        raise HTTPException(status_code=400, detail="每次最多选择 3 个 Skill")
+) -> list[SkillDefinition]:
+    """把请求的 slug 列表解析为**有效集合**（含 skill_dependencies 闭包）。
 
-    repo = CustomSkillConfigRepository(session)
-    profiles: list[SkillProfile] = []
-    for skill_id in normalized:
-        if len(skill_id) > 64:
-            raise HTTPException(status_code=400, detail="Skill ID 格式不正确")
-        profile = get_builtin_skill(skill_id)
-        if profile is None and skill_id.startswith("custom:"):
-            record = await repo.get_by_public_id(user_id, skill_id)
-            if record is not None:
-                try:
-                    profile = profile_from_custom_skill(record)
-                except SkillConfigValidationError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if profile is None:
+    语义变更（2026-09-04）：返回值不再是"要注入的指令"，而是"本次请求可用的
+    Skill 范围"。正文是否进 prompt、工具是否解锁，由 SkillsMiddleware 按
+    ``activated_skills`` 逐轮裁决。
+
+    依赖闭包只在用户可访问集合内展开 —— 因此不会扩大用户权限（对齐 Yuxi）。
+    """
+    normalized = list(
+        dict.fromkeys(
+            skill_id.strip().lower() for skill_id in skill_ids if skill_id.strip()
+        )
+    )
+    max_selected = cfg.SKILLS_MAX_SELECTED
+    if len(normalized) > max_selected:
+        raise HTTPException(
+            status_code=400, detail=f"每次最多选择 {max_selected} 个 Skill"
+        )
+    if not normalized:
+        return []
+
+    available = await _accessible_skills(user_id, session)
+    catalog = {skill.slug: skill for skill in available}
+    for slug in normalized:
+        if len(slug) > 128:
+            raise HTTPException(status_code=400, detail="Skill slug 格式不正确")
+        if slug not in catalog:
             raise HTTPException(
-                status_code=404,
-                detail=f"Skill {skill_id} 不存在或无权访问",
+                status_code=404, detail=f"Skill {slug} 不存在或无权访问"
             )
-        profiles.append(profile)
 
-    if sum(len(profile.instructions) for profile in profiles) > 12000:
-        raise HTTPException(status_code=400, detail="所选 Skill 指令总长度超过限制")
-    return profiles
+    closure = resolve_dependency_closure(normalized, catalog)
+    return [catalog[slug] for slug in closure]
 
 
 def _selected_skill_payload(
-    profiles: list[SkillProfile],
+    definitions: list[SkillDefinition],
 ) -> list[dict[str, str]]:
-    return [{"id": profile.id, "name": profile.name} for profile in profiles]
+    """随消息落库与 SSE 返回的 Skill 快照（历史消息展示用）。"""
+    return [{"id": d.slug, "slug": d.slug, "name": d.name} for d in definitions]
 
 
 def _normalize_custom_skill_request(
-    req: CustomSkillUpsert,
+    req: CustomSkillUpsert, *, existing_slug: Optional[str] = None
 ) -> dict[str, Any]:
+    """校验并归一化个人 Skill 的写入请求（DB 索引字段 + 磁盘内容字段分离）。
+
+    ``existing_slug``：更新时沿用原 slug —— 改 slug 等于换目录，会让历史消息
+    里的 Skill 快照指向不存在的标识，因此更新不允许改 slug。
+    """
     name = req.name.strip()
-    instructions = req.instructions.strip()
-    if not name or not instructions:
+    body = req.instructions.strip()
+    if not name or not body:
         raise HTTPException(status_code=400, detail="Skill 名称和工作指令不能为空")
+
     try:
-        tool_names_json = encode_tool_names(req.tool_names)
+        if existing_slug:
+            slug = existing_slug
+        elif req.slug:
+            slug = validate_slug(req.slug)
+        else:
+            slug = slugify(name, fallback=f"skill-{uuid.uuid4().hex[:8]}")
     except SkillConfigValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return {
-        "name": name,
-        "description": req.description.strip(),
-        "instructions": instructions,
-        "tool_names_json": tool_names_json,
-        "category": req.category.strip() or "自定义",
-        "icon": req.icon.strip() or "sparkles",
+        "index": {
+            "slug": slug,
+            "name": name,
+            "description": req.description.strip(),
+            "category": req.category.strip() or "自定义",
+            "icon": req.icon.strip() or "sparkles",
+        },
+        "content": {
+            "slug": slug,
+            "name": name,
+            "description": req.description.strip(),
+            "body": body,
+            "tool_names": list(req.tool_names),
+            "category": req.category.strip() or "自定义",
+            "icon": req.icon.strip() or "sparkles",
+        },
     }
 
 
@@ -264,17 +344,13 @@ def _normalize_custom_skill_request(
 async def list_chat_skills(
     current_user: User = Depends(get_current_user),
 ):
-    """Return built-in and owner-scoped custom Skills plus tool metadata."""
-    profiles = list_builtin_skills()
+    """Return built-in and owner-scoped personal Skills plus tool metadata.
+
+    响应**不含 Skill 正文**（渐进式披露）：编辑器需要正文时单独请求
+    ``GET /skills/{slug}/content``。
+    """
     async with get_session() as session:
-        records = await CustomSkillConfigRepository(session).list_by_owner(
-            current_user.id
-        )
-    for record in records:
-        try:
-            profiles.append(profile_from_custom_skill(record))
-        except SkillConfigValidationError:
-            logger.warning("[chat/skills] skipped invalid custom Skill %s", record.id)
+        definitions = await _accessible_skills(current_user.id, session)
 
     from app.tools.registry import get_tool_registry
 
@@ -284,12 +360,37 @@ async def list_chat_skills(
             name=tool.name,
             description=tool.description,
             available=tool.is_available(),
+            public=bool((tool.metadata or {}).get("public")),
         )
         for tool in registry.list_all(available_only=False)
     ]
     return ChatSkillListResponse(
-        skills=[ChatSkillInfo(**profile.to_public_dict()) for profile in profiles],
+        max_selected=cfg.SKILLS_MAX_SELECTED,
+        skills=[ChatSkillInfo(**d.to_public_dict()) for d in definitions],
         tools=tools,
+    )
+
+
+@router.get("/skills/{slug}/content", response_model=ChatSkillContent)
+async def get_chat_skill_content(
+    slug: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Return one Skill's full SKILL.md body (配置弹窗编辑 / 内置只读查看)。"""
+    async with get_session() as session:
+        definitions = await _accessible_skills(current_user.id, session)
+    target = next((d for d in definitions if d.slug == slug.strip().lower()), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Skill 不存在或无权访问")
+    return ChatSkillContent(
+        slug=target.slug,
+        name=target.name,
+        description=target.description,
+        body=target.body,
+        tool_names=list(target.tool_dependencies),
+        category=target.category,
+        icon=target.icon,
+        can_edit=target.can_edit,
     )
 
 
@@ -302,59 +403,105 @@ async def create_custom_chat_skill(
     req: CustomSkillUpsert,
     current_user: User = Depends(get_current_user),
 ):
+    """创建个人 Skill：先写磁盘 SKILL.md，再落 DB 索引行。
+
+    顺序见 ``skill_config_service`` 模块文档 —— 反过来会在文件写失败时留下
+    一条指向空目录的索引行。
+    """
     values = _normalize_custom_skill_request(req)
+    index_values, content_values = values["index"], values["content"]
+
+    if any(s.slug == index_values["slug"] for s in list_builtin_skills()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"slug {index_values['slug']} 与内置 Skill 冲突，请换一个",
+        )
+
     async with get_session() as session:
         repo = CustomSkillConfigRepository(session)
-        if await repo.get_by_name(current_user.id, values["name"]):
+        if await repo.get_by_name(current_user.id, index_values["name"]):
             raise HTTPException(status_code=409, detail="已存在同名自定义 Skill")
-        record = CustomSkillConfig(owner_id=current_user.id, **values)
+        if await repo.get_by_slug(current_user.id, index_values["slug"]):
+            raise HTTPException(status_code=409, detail="已存在相同 slug 的 Skill")
+
+        try:
+            definition = write_personal_skill(
+                owner_id=current_user.id, **content_values
+            )
+        except SkillConfigValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        record = CustomSkillConfig(owner_id=current_user.id, **index_values)
         try:
             await repo.add(record)
             await session.commit()
         except IntegrityError as exc:
             await session.rollback()
+            # 索引行没落成 → 回滚磁盘，避免留下无索引的孤儿目录
+            delete_personal_skill_files(current_user.id, index_values["slug"])
             raise HTTPException(status_code=409, detail="已存在同名自定义 Skill") from exc
-    return ChatSkillInfo(**profile_from_custom_skill(record).to_public_dict())
+    return ChatSkillInfo(**definition.to_public_dict())
 
 
-@router.put("/skills/{skill_id}", response_model=ChatSkillInfo)
+@router.put("/skills/{slug}", response_model=ChatSkillInfo)
 async def update_custom_chat_skill(
-    skill_id: str,
+    slug: str,
     req: CustomSkillUpsert,
     current_user: User = Depends(get_current_user),
 ):
-    values = _normalize_custom_skill_request(req)
+    """更新个人 Skill。slug 不可改 —— 换 slug 等于换目录，会让历史消息里的
+    Skill 快照指向不存在的标识。"""
     async with get_session() as session:
         repo = CustomSkillConfigRepository(session)
-        record = await repo.get_by_public_id(current_user.id, skill_id)
+        record = await repo.get_by_slug(current_user.id, slug)
         if record is None:
             raise HTTPException(status_code=404, detail="自定义 Skill 不存在或无权访问")
-        duplicate = await repo.get_by_name(current_user.id, values["name"])
+
+        values = _normalize_custom_skill_request(req, existing_slug=record.slug)
+        index_values, content_values = values["index"], values["content"]
+
+        duplicate = await repo.get_by_name(current_user.id, index_values["name"])
         if duplicate is not None and duplicate.id != record.id:
             raise HTTPException(status_code=409, detail="已存在同名自定义 Skill")
-        for key, value in values.items():
+
+        try:
+            definition = write_personal_skill(
+                owner_id=current_user.id, **content_values
+            )
+        except SkillConfigValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        for key, value in index_values.items():
             setattr(record, key, value)
         try:
             await session.commit()
         except IntegrityError as exc:
             await session.rollback()
             raise HTTPException(status_code=409, detail="已存在同名自定义 Skill") from exc
-    return ChatSkillInfo(**profile_from_custom_skill(record).to_public_dict())
+    return ChatSkillInfo(**definition.to_public_dict())
 
 
-@router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/skills/{slug}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_custom_chat_skill(
-    skill_id: str,
+    slug: str,
     current_user: User = Depends(get_current_user),
 ):
+    """删除个人 Skill：先删 DB 索引，再删目录。
+
+    文件删除失败只 warn —— 留下的孤儿目录由
+    ``prune_orphan_directories`` 兜底，不阻塞用户操作。
+    """
     async with get_session() as session:
         repo = CustomSkillConfigRepository(session)
-        record = await repo.get_by_public_id(current_user.id, skill_id)
+        record = await repo.get_by_slug(current_user.id, slug)
         if record is None:
             raise HTTPException(status_code=404, detail="自定义 Skill 不存在或无权访问")
+        target_slug = record.slug
         await repo.delete(record)
         await session.commit()
+    delete_personal_skill_files(current_user.id, target_slug)
     return None
+
 
 @router.get("/models", response_model=ChatModelListResponse)
 async def list_chat_models(
@@ -546,20 +693,20 @@ async def send_message(
         agent = get_agent_service()
         # 阶段 2：请求参数收拢为 ChatContext，模型/Skill/KB 授权/trace 由
         # use_request_context 一次性铺设（门面，见 app/agents/request_context.py）。
-        # skill_profiles 传入已解析的 SkillProfile（含 custom:* 校验），避免
-        # 门面内按 skill_ids 回查目录时丢失自定义 Skill。
+        # skill_definitions 传入已解析的有效集合（含个人 Skill 的 owner 校验
+        # 与依赖闭包），避免门面内按 slug 回查目录时丢失个人 Skill。
         chat_ctx = ChatContext.from_request(
             effective_query,
             thread_id=str(conv_id),
             user_id=current_user.id,
             model_id=selected_model.id,
-            skill_ids=[p.id for p in selected_skills],
+            skill_ids=[d.slug for d in selected_skills],
             knowledge_base_ids=knowledge_base_ids,
             knowledge_catalog=knowledge_catalog,
             image_data=image_for_context,
             history=db_history,          # ← 关键：传入 DB 历史
         )
-        with use_request_context(chat_ctx, skill_profiles=selected_skills, model_profile=selected_model):
+        with use_request_context(chat_ctx, skill_definitions=selected_skills, model_profile=selected_model):
             result = agent.run(query=effective_query, context=chat_ctx)
         answer = result.get("final_answer", "")
     except Exception as exc:
@@ -605,11 +752,14 @@ async def send_message(
                     ),
                 },
             ]
-            _skill_rt = SkillRuntimeContext.from_profiles(selected_skills)
+            # 直连 LLM 兜底是**非 Agent 路径**（单次调用，无 read_skill 循环），
+            # 因此 eager=True 展开全部有效 Skill 的正文 —— 渐进式披露在这里
+            # 无从发生（见 app/skills/runtime.py 的 render_prompt）。
+            _skill_rt = SkillRuntimeContext.from_definitions(selected_skills)
             if _skill_rt.active:
                 fallback_messages.insert(0, {
                     "role": "system",
-                    "content": _skill_rt.render_prompt(),
+                    "content": _skill_rt.render_prompt(eager=True),
                 })
             fallback_answer = llm.chat_sync(fallback_messages)
             if fallback_answer and fallback_answer.strip():
@@ -772,7 +922,7 @@ async def send_message_stream(
 
     # 阶段 2：请求上下文声明层只建一次（两个分支共享）。query 为模型选型 /
     # deep_research 裁决后的 effective_query；skill 回查等归属路由层职责，
-    # 这里直接把已解析的 SkillProfile 透传给门面，避免丢失 custom:* 内容。
+    # 这里直接把已解析的有效集合透传给门面，避免丢失个人 Skill 内容。
     from app.agents.context import ChatContext
 
     _chat_ctx = ChatContext.from_request(
@@ -780,7 +930,7 @@ async def send_message_stream(
         thread_id=str(conv_id),
         user_id=current_user.id,
         model_id=selected_model.id,
-        skill_ids=[p.id for p in selected_skills],
+        skill_ids=[d.slug for d in selected_skills],
         knowledge_base_ids=knowledge_base_ids,
         knowledge_catalog=knowledge_catalog,
         image_data=image_for_context,
@@ -876,7 +1026,7 @@ async def send_message_stream(
             def _run_deep_in_thread():
                 from app.agents.request_context import use_request_context
 
-                with use_request_context(_deep_ctx, skill_profiles=selected_skills, model_profile=selected_model), \
+                with use_request_context(_deep_ctx, skill_definitions=selected_skills, model_profile=selected_model), \
                         use_event_sink(_bridge_event):
                     return agent._run_deep(_deep_ctx.query, context=_deep_ctx)
 
@@ -1037,7 +1187,7 @@ async def send_message_stream(
         def _run_dynamic_in_thread():
             from app.agents.request_context import use_request_context
 
-            with use_request_context(_dyn_ctx, skill_profiles=selected_skills, model_profile=selected_model):
+            with use_request_context(_dyn_ctx, skill_definitions=selected_skills, model_profile=selected_model):
                 return agent._run_dynamic(_dyn_ctx.query, context=_dyn_ctx)
 
         _dyn_start = time.perf_counter()
