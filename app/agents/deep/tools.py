@@ -4,7 +4,7 @@ EasyRAG 的工具中心是 ``app/tools/registry.py`` 的 ``ToolRegistry``（自�
 ``app/tools/*.py`` 导出的 ``TOOL`` + MCP 桥接），工具函数签名统一为
 ``fn(**kwargs) -> str``。langchain ``create_agent`` 需要 langchain
 BaseTool。这里把 ``ToolDefinition`` 包装成 ``StructuredTool``（执行时仍走
-``registry.invoke``，因此技能白名单、check_fn 可用性检查、MCP 动态注册
+``registry.invoke``，因此 Skill 调用门控、check_fn 可用性检查、MCP 动态注册
 全部自动生效，不复制任何工具实现）。
 """
 from __future__ import annotations
@@ -80,7 +80,7 @@ def _to_structured(tool: ToolDefinition) -> Any:
 def registry_to_langchain_tools(
     tool_names: Optional[List[str]] = None,
 ) -> List[Any]:
-    """把注册表（可用 + 技能白名单放行）的工具转换为 langchain 工具列表。
+    """把注册表（可用）工具转换为 langchain 工具列表（不含 Skill 门控）。
 
     Args:
         tool_names: 白名单过滤（None = 全部可用工具）。SubAgent 用它做
@@ -88,7 +88,10 @@ def registry_to_langchain_tools(
     """
     registry = get_tool_registry()
     tools = []
-    for t in registry.list_all():  # 已含 check_fn + 技能白名单过滤
+    # 不含 Skill 门控（渐进式披露）：构建期视图必须是稳定的全量集，否则首个
+    # 请求（激活集为空）会把未激活工具从进程级缓存的 Agent 里永久剔除，
+    # read_skill 之后也无从解锁。调用时门控在 registry.invoke + SkillsMiddleware。
+    for t in registry.list_all():
         if tool_names is not None and t.name not in tool_names:
             continue
         try:

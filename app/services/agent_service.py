@@ -316,10 +316,11 @@ class AgentService:
                     pass
 
         def _artifact(kind: str, stage: str, title: str, content: str):
-            if not content:
+            if not content and kind != "answer":
                 return
             ev = {"kind": kind, "stage": stage, "title": title[:80], "content": content}
-            artifacts.append(ev)
+            if content:
+                artifacts.append(ev)
             emit("artifact", stage, title, content, artifact_kind=kind)
             if on_artifact:
                 try:
@@ -423,13 +424,42 @@ class AgentService:
             tool_called: Optional[str] = None
             final_state: Optional[Dict[str, Any]] = None
             recursion_hit = False
+            # 最终回答逐 token 流式（2026-09-04）：stream_mode 混用 values +
+            # messages。values 维持逐轮 step/artifact 解析；messages 吐出 LLM
+            # token，只透传最终轮纯文本（tool_call_chunks / reasoning_content
+            # 不是正文）。degraded / error 路径在收尾处补发流结束标记。
+            streamed_any = False
             try:
-                # stream_mode="values"：每个 chunk 是全量 state，最后一个即最终状态
-                for chunk in agent.stream(
+                # stream_mode 混用：values 的 payload 是全量 state，messages
+                # 的 payload 是 (token, metadata) 二元组。真实 langgraph 产出
+                # (mode, payload)；测试 fake 可能直接产出 values chunk（旧契约），
+                # 一并兼容。
+                for stream_item in agent.stream(
                     {"messages": messages},
                     config={"recursion_limit": cfg.DEEP_MAIN_RECURSION_LIMIT},
-                    stream_mode="values",
+                    stream_mode=["values", "messages"],
                 ):
+                    if isinstance(stream_item, tuple) and len(stream_item) == 2:
+                        mode, payload = stream_item
+                    else:
+                        mode, payload = "values", stream_item
+                    if mode == "messages":
+                        token_msg, _meta = payload
+                        text = str(getattr(token_msg, "content", "") or "")
+                        if not text:
+                            continue
+                        if getattr(token_msg, "tool_call_chunks", None):
+                            continue
+                        if (getattr(token_msg, "additional_kwargs", None) or {}).get(
+                            "reasoning_content"
+                        ):
+                            continue
+                        streamed_any = True
+                        _artifact(
+                            "answer", "generate", "回答", text,
+                        )
+                        continue
+                    chunk = payload
                     final_state = chunk
                     msgs = chunk.get("messages") or []
                     if not msgs:
@@ -521,6 +551,12 @@ class AgentService:
                 break
         if not answer and msgs:
             answer = str(getattr(msgs[-1], "content", "") or "")
+
+        # 正文流收尾：已流过 token 时补一个 streaming=False 标记（前端把
+        # "回答"行折叠为完成态）。降级回答与已流正文不一致时，前端以 done
+        # 的整段 delta 为准覆盖气泡（chat_router 补发整段 delta 的既有逻辑）。
+        if streamed_any:
+            _artifact("answer", "generate", "回答", "")
 
         if recursion_hit:
             # S4：部分状态里通常没有最终 AI 消息——用已收集的工具结果拼接

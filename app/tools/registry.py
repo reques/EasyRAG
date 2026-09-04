@@ -80,16 +80,19 @@ def _build_progress_emitter(name: str, callback: Callable[..., Any]):
 
 
 def _skill_allows(tool: "ToolDefinition") -> bool:
-    """Skill 门控裁决（第二层，ContextVar 侧）。
+    """Skill 门控（执行层，ContextVar 侧）。
 
-    2026-09-04 Skill 重构：判据从"静态白名单"改为"已激活 Skill 的工具并集
-    + 公共工具"（渐进式披露）。第一层门控在 ``app/skills/middleware.py`` 的
-    ``wrap_tool_call``；这一层覆盖 middleware 触达不到的路径 —— 子 Agent 的
-    ThreadPoolExecutor 线程、graph 节点、MCP 桥接。两层判据同为
-    ``SkillRuntimeContext.allows_tool``，不存在两套真相。
+    2026-09-04 Skill 重构 + 同日回归修复：本判据**只用于 ``invoke``**——
+    覆盖 middleware 触达不到的路径（子 Agent 的 ThreadPoolExecutor 线程、
+    graph 节点、MCP 桥接）。可见性门控在 ``app/skills/middleware.py`` 的
+    ``wrap_model_call``（每轮从绑定工具集里过滤）。
 
-    ``public`` 直接从已持有的 ToolDefinition 取，避免注册表回查（否则
-    list_all 遍历 N 个工具会产生 N 次带锁 get）。
+    列表/构建视图（``list_names`` / ``list_all`` / ``to_llm_schema`` /
+    ``to_react_prompt`` / ``discover``）**不得**套用本判据：这些视图会被
+    进程级缓存的 Agent 构建所消费（``build_main_agent`` / ``build_dynamic_agent``
+    / ``build_subagent``），而构建发生在首个请求的上下文里——渐进式披露下
+    首轮激活集为空，构建期门控会把未激活工具从缓存 Agent 里永久剔除，
+    ``read_skill`` 解锁的只是一个不存在的工具（线上故障：web_search 不可用）。
     """
     from app.skills.runtime import get_active_skill_context
 
@@ -184,24 +187,31 @@ class ToolRegistry:
             return self._tools[name]
 
     def list_names(self, available_only: bool = True) -> List[str]:
-        """Return tool names. available_only=True 时只含 check_fn 通过的工具。"""
+        """Return tool names. available_only=True 时只含 check_fn 通过的工具。
+
+        不含 Skill 门控（渐进式披露只管调用，见 ``invoke``）；模块级 Agent
+        构建缓存需要稳定的全量视图。
+        """
         with self._lock:
             snapshot = list(self._tools.values())
         if not available_only:
             candidates = snapshot
         else:
             candidates = [t for t in snapshot if t.is_available()]
-        return [tool.name for tool in candidates if _skill_allows(tool)]
+        return [tool.name for tool in candidates]
 
     def list_all(self, available_only: bool = True) -> List[ToolDefinition]:
         """Return all ToolDefinition objects (for schema/prompt building).
-        available_only=True 时只含 check_fn 通过的工具。"""
+        available_only=True 时只含 check_fn 通过的工具。
+
+        不含 Skill 门控（同 ``list_names``）。
+        """
         with self._lock:
             snapshot = list(self._tools.values())
         candidates = snapshot if not available_only else [
             tool for tool in snapshot if tool.is_available()
         ]
-        return [tool for tool in candidates if _skill_allows(tool)]
+        return candidates
 
     def invoke(self, name: str, **kwargs: Any) -> str:
         """Execute a registered tool by name.
@@ -241,7 +251,7 @@ class ToolRegistry:
         if not _skill_allows(tool):
             raise ToolExecutionError(
                 f"Tool '{name}' is not allowed by the selected Skills. "
-                f"Available tools: {', '.join(self.list_names()) or '(none)'}"
+                f"请先调用 read_skill 读取声明该工具的 Skill。"
             )
         if not tool.is_available():
             raise ToolExecutionError(
@@ -348,8 +358,9 @@ class ToolRegistry:
           - metadata["scenarios"] 短语出现在任务描述中：+2/条；
           - metadata["tags"] 以 ``@tag`` 显式提及：+3；作为单词出现：+1；
           - 工具名（或其中较长的词）出现在描述中：+1。
-        候选池为 ``list_all()``（已过 check_fn + skills 白名单——发现结果只能收窄权限，
-        不能放大）。只返回得分 > 0 的工具，按得分降序、名称稳定排序，截断至 limit。
+        候选池为 ``list_all()``（已过 check_fn；不含 Skill 门控——发现结果
+        供动态绑定收窄用，与 ``invoke`` 门控正交）。只返回得分 > 0 的工具，
+        按得分降序、名称稳定排序，截断至 limit。
         无任何匹配时返回空列表（由调用方决定回退全量）。"""
         text = (task_description or "").lower()
         if not text.strip():

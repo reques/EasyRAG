@@ -1591,6 +1591,17 @@ async function send() {
         const last = list[list.length - 1]
         const lastWi = wl[wl.length - 1]
         const artId = ev.id || `art-${Date.now()}-${list.length}`
+        // 回答正文流（kind=answer）：逐 token 追加进气泡 content 本身，
+        // 与 done 的整段 delta（content: m.content || ev.content 兜底）衔接。
+        if (ev.kind === 'answer' || (ev.stage === 'generate' && ev.stream_id === 'final-answer')) {
+          const cm = messages.value[msgIndex]
+          if (ev.streaming !== false && ev.content) {
+            cm.content += ev.content
+            messages.value[msgIndex] = { ...cm }
+            scrollBottom()
+          }
+          return
+        }
         if (ev.streaming && last && ev.id && last.id === ev.id) {
           last.content += ev.content || ''
           if (lastWi && lastWi.t === 'artifact' && lastWi.id === ev.id) {
@@ -1626,9 +1637,16 @@ async function send() {
         scrollBottom()
       } else if (ev.type === 'done') {
         const m = messages.value[msgIndex]
+        // 正文已逐 token 流过（kind=answer 流）→ 气泡内容即最终回答；
+        // 未流过（无 on_artifact 的降级路径/旧缓存）→ 用 done 的整段兜底。
+        // 已流正文与最终回答不一致（超限降级拼接）时以 done 为准覆盖。
+        const streamed = !!(m.content && m.content.trim())
+        const finalContent = (streamed && m.content === ev.content)
+          ? m.content
+          : (ev.content || m.content || '')
         messages.value[msgIndex] = {
           ...m,
-          content: m.content || ev.content || '',
+          content: finalContent,
           sources: ev.sources || [],
           meta: {
             intent: ev.intent,

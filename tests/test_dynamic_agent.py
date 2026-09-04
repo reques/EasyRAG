@@ -244,3 +244,76 @@ def test_deepagents_mode_still_routes_to_deep(monkeypatch):
     svc = object.__new__(AgentService)
     result = svc.run("测试", session_id="s1")
     assert result["final_answer"] == "deep"
+
+
+# ── 最终回答逐 token 流式（2026-09-04）────────────────────────────────────
+def _msg_stream(stream_chunks, token_chunks):
+    """混合 fake：values chunk 与 ('messages', (token, meta)) 按 stream_mode 分发。
+
+    stream_mode 传列表时产出 (mode, payload) 元组（对齐真实 langgraph 契约）。
+    """
+    def fake_stream(inputs, config=None, stream_mode=None):
+        want_messages = isinstance(stream_mode, (list, tuple)) and "messages" in stream_mode
+        for tc in token_chunks:
+            if want_messages:
+                yield ("messages", (tc, {"langgraph_node": "model"}))
+        for chunk in stream_chunks:
+            if want_messages:
+                yield ("values", chunk)
+            else:
+                yield chunk
+    return types.SimpleNamespace(stream=fake_stream)
+
+
+def test_run_dynamic_agent_streams_final_answer_tokens(monkeypatch):
+    """正文 token 经 on_artifact 以 kind=answer 逐段透出，且不落 artifacts 列表。"""
+    from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+
+    agent = _msg_stream(
+        [{"messages": [HumanMessage(content="q"), AIMessage(content="你好呀")]}],
+        [AIMessageChunk(content="你好"), AIMessageChunk(content="呀")],
+    )
+    monkeypatch.setattr(dyn, "get_dynamic_agent", lambda: agent)
+    monkeypatch.setattr(dyn, "cfg", _simple_cfg())
+    received = []
+    result = dyn.run_dynamic_agent(
+        "q", session_id="s1",
+        on_artifact=lambda ev: received.append(ev),
+    )
+    answer_evs = [e for e in received if e.get("kind") == "answer"]
+    assert "".join(e.get("content", "") for e in answer_evs if e.get("streaming")) == "你好呀"
+    # 结束标记：streaming=False
+    assert any(e.get("kind") == "answer" and e.get("streaming") is False for e in answer_evs)
+    # 正文流不进 artifacts 列表（与 done 整段重复）
+    assert not any(a.get("kind") == "answer" for a in result["artifacts"])
+    assert result["final_answer"] == "你好呀"
+
+
+def test_run_dynamic_agent_token_stream_filters_toolcall_chunks(monkeypatch):
+    """tool_call 参数增量与 reasoning token 不进正文流。"""
+    from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+
+    param_chunk = AIMessageChunk(
+        content="",
+        tool_call_chunks=[{"name": "web_search", "args": "{\"query\"", "id": "c1", "index": 0}],
+    )
+    think_chunk = AIMessageChunk(content="")
+    think_chunk.additional_kwargs["reasoning_content"] = "思考中"
+    agent = _msg_stream(
+        [{"messages": [HumanMessage(content="q"), AIMessage(content="答")]},
+         {"messages": [HumanMessage(content="q"), AIMessage(content="", tool_calls=[
+             {"name": "web_search", "args": {"query": "x"}, "id": "c1"}])]}],
+        [param_chunk, think_chunk, AIMessageChunk(content="答")],
+    )
+    monkeypatch.setattr(dyn, "get_dynamic_agent", lambda: agent)
+    monkeypatch.setattr(dyn, "cfg", _simple_cfg())
+    received = []
+    result = dyn.run_dynamic_agent(
+        "q", session_id="s1",
+        on_artifact=lambda ev: received.append(ev),
+    )
+    streamed = "".join(
+        e.get("content", "") for e in received
+        if e.get("kind") == "answer" and e.get("streaming")
+    )
+    assert streamed == "答", f"只应透出最终轮正文 token，实际：{streamed!r}"
