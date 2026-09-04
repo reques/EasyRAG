@@ -1,7 +1,7 @@
 """DeepAgents 集成 — 主 Agent 构建。
 
 主 Agent = langchain ``create_agent``（1.x 标准构建入口）：
-- 项目全量工具（ToolRegistry → StructuredTool，含技能白名单）
+- 项目全量工具（ToolRegistry → StructuredTool；Skill 门控在调用时生效）
 - ``task`` 委派工具（→ 配置化 SubAgent）
 - ``spawn_tasks`` 批量委派工具（阶段 3：DAG 依赖 + 分层并发）
 - ``revise_plan`` 计划修订工具（阶段 4：追加/取消/细化重发）
@@ -87,7 +87,7 @@ def build_main_agent(
         model = get_langchain_model()
     if recursion_limit is None:
         recursion_limit = get_settings().DEEP_SUBAGENT_RECURSION_LIMIT
-    tools = registry_to_langchain_tools()  # 全量（技能门控生效）
+    tools = registry_to_langchain_tools()  # 全量（Skill 门控在调用时生效）
     tools.append(build_task_tool(model=subagent_model or model, recursion_limit=recursion_limit))
     tools.append(build_spawn_tasks_tool(model=subagent_model or model))
     tools.append(build_revise_plan_tool(model=subagent_model or model))

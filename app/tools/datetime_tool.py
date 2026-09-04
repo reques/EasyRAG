@@ -32,17 +32,20 @@ def datetime_tool(
     """
     logger.debug("datetime_tool: fmt=%s tz=%s ts=%s", fmt, tz, timestamp)
     effective_fmt = fmt or _DEFAULT_FMT
+    # pydantic 参数模型会把可选字段以显式 None 传入（模型省略参数时也是如此），
+    # 不能直接用 tz="local" 的默认值 —— None 会走进 tz.lower() 崩掉整个 Agent 轮。
+    effective_tz = tz or "local"
 
     try:
         if timestamp is not None:
             dt = datetime.fromtimestamp(float(timestamp))
-        elif tz.lower() == "utc":
+        elif effective_tz.lower() == "utc":
             dt = datetime.now(timezone.utc).replace(tzinfo=None)
         else:
             dt = datetime.now()
 
         result = dt.strftime(effective_fmt)
-        label = "UTC" if tz.lower() == "utc" else "local time"
+        label = "UTC" if effective_tz.lower() == "utc" else "local time"
         return f"Current {label}: {result}"
     except ValueError as exc:
         raise ToolExecutionError(f"Invalid format string '{effective_fmt}': {exc}") from exc

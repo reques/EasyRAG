@@ -11,8 +11,8 @@ DeepAgents 底层同款 harness），每次 invoke 独立 state —— 子 Agent
 tools 声明语法（2026-08-26 阶段 2 扩展，见 ``resolve_tool_spec``）：
   - 普通名称 ``"web_search"``；  - ``"*"`` 全量；
   - ``"except:<name>"`` 排除；   - ``"@tag"`` 按 metadata 能力标签。
-权限硬边界不变：候选池始终是 registry.list_all()（已过 check_fn + skills
-白名单 + KB 授权 ContextVar），动态绑定只能收窄不能放大。
+候选池是 registry.list_all()（check_fn 可用性过滤，不含 Skill 门控——
+渐进式披露只约束调用时的 ``registry.invoke``，不影响构建期绑定）。
 """
 from __future__ import annotations
 
@@ -46,8 +46,9 @@ def resolve_tool_spec(specs: Tuple[str, ...]) -> Tuple[str, ...]:
       - ``"@tag"``     → metadata["tags"] 含该标签的工具；
       - ``"except:x"`` → 从结果中剔除（可与任意包含语法组合）；
       - 普通名       → 已注册且可用则保留，未注册静默忽略（与旧行为一致）。
-    候选池为 ``registry.list_all()``——已过 check_fn / skills 白名单过滤，
-    解析结果只能收窄权限，不能放大。返回按名称排序的 tuple（可作缓存指纹）。"""
+    候选池为 ``registry.list_all()``——已过 check_fn 过滤（不含 Skill 门控，
+    门控在调用时的 ``registry.invoke``），解析结果只能收窄权限，不能放大。
+    返回按名称排序的 tuple（可作缓存指纹）。"""
     from app.tools.registry import get_tool_registry
 
     available = get_tool_registry().list_all()
@@ -215,9 +216,9 @@ def build_subagent(config: SubAgentConfig, model=None):
     """构建 SubAgent 的 langgraph compiled graph（langchain create_agent）。
 
     - 工具子集 = ``resolve_tool_spec(config.tools)`` 解析结果（经注册表转换，
-      技能/可用性检查生效）
-    - 缓存 key 含解析后的工具集指纹：工具集变化（配置改动 / 技能白名单 /
-      MCP 动态注册）时自动重建（阶段 2）
+      check_fn 可用性过滤生效；Skill 门控在调用时）
+    - 缓存 key 含解析后的工具集指纹：工具集变化（配置改动 / MCP 动态注册）
+      时自动重建（阶段 2）
     - 每次 invoke 独立 state → 子 Agent 上下文隔离
     - model: 测试可注入 mock（此时不缓存）；None = 项目配置的真实模型
     """

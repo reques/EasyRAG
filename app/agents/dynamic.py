@@ -175,10 +175,12 @@ def run_dynamic_agent(
                 pass
 
     def _artifact(kind: str, stage: str, title: str, content: str):
-        if not content:
+        # kind="answer" 且 content 为空 = 正文流结束标记，仍需透出（不落 artifacts）
+        if not content and kind != "answer":
             return
         ev = {"kind": kind, "stage": stage, "title": title[:80], "content": content}
-        artifacts.append(ev)
+        if content:
+            artifacts.append(ev)
         emit("artifact", stage, title, content, artifact_kind=kind)
         if on_artifact:
             try:
@@ -222,14 +224,84 @@ def run_dynamic_agent(
     final_answer = ""
     degraded = False
     final_state: Optional[Dict[str, Any]] = None
+
+    # ── 最终回答逐 token 流式（2026-09-04）────────────────────────────────
+    # langgraph stream_mode="messages" 吐出每个 LLM token；只有最终轮的纯文本
+    # token 进正文流（工具调用轮的 ai 正文是推理思考，走 _artifact 的 thought）。
+    # streamed_any: 是否流过正文 token（收尾标记用）；回调异常一律吞掉。
+    streamed_any = [False]
+
+    def _emit_stream_end() -> None:
+        """正文流结束标记（前端把"回答"流标记为完成；未流过则 no-op）。"""
+        if not streamed_any[0]:
+            return
+        if on_artifact is not None:
+            try:
+                on_artifact({
+                    "kind": "answer", "stage": "generate",
+                    "title": "回答", "content": "",
+                    "streaming": False, "stream_id": "final-answer",
+                })
+            except Exception:
+                pass
+        try:
+            emit("artifact", "generate", "回答", "",
+                 artifact_kind="answer", streaming=False, stream_id="final-answer")
+        except Exception:
+            pass
+
+    def _emit_token(text: str) -> None:
+        if not text:
+            return
+        streamed_any[0] = True
+        if on_artifact is not None:
+            try:
+                on_artifact({
+                    "kind": "answer", "stage": "generate",
+                    "title": "回答", "content": text, "streaming": True,
+                    "stream_id": "final-answer",
+                })
+            except Exception:
+                pass
+        # emit 进统一事件流（trace 消费）；不落 artifacts（会与 done 整段重复）
+        try:
+            emit("artifact", "generate", "回答", text,
+                 artifact_kind="answer", streaming=True, stream_id="final-answer")
+        except Exception:
+            pass
+
     try:
         with use_authorised_kb_ids(knowledge_base_ids):
             agent = get_dynamic_agent()
-            for chunk in agent.stream(
+            # stream_mode 混用：values 维持逐轮 step/artifact 解析（原逻辑），
+            # messages 提供 LLM token 级增量（最终回答逐字流式到前端）。
+            for stream_item in agent.stream(
                 {"messages": messages},
                 config={"recursion_limit": recursion_limit or cfg.AGENT_MAX_ITERATIONS},
-                stream_mode="values",
+                stream_mode=["values", "messages"],
             ):
+                # 真实 langgraph：stream_mode 为列表时产出 (mode, payload)；
+                # 测试 fake（旧契约）：直接产出 values chunk。统一适配。
+                if isinstance(stream_item, tuple) and len(stream_item) == 2:
+                    mode, payload = stream_item
+                else:
+                    mode, payload = "values", stream_item
+                if mode == "messages":
+                    token_msg, _meta = payload
+                    text = str(getattr(token_msg, "content", "") or "")
+                    if not text:
+                        continue
+                    # 推理模型的思考 token 与 tool_call 参数增量不是正文：
+                    # tool_call_chunks 非空 = 参数流；reasoning_content = 思考流。
+                    if getattr(token_msg, "tool_call_chunks", None):
+                        continue
+                    if (getattr(token_msg, "additional_kwargs", None) or {}).get(
+                        "reasoning_content"
+                    ):
+                        continue
+                    _emit_token(text)
+                    continue
+                chunk = payload
                 final_state = chunk
                 msgs = chunk.get("messages") or []
                 if not msgs:
@@ -280,6 +352,7 @@ def run_dynamic_agent(
         logger.error("[dynamic] agent error: %s", exc)
         steps.append(f"dynamic agent error: {exc}")
         _step("fallback", f"执行失败: {str(exc)[:80]}")
+        _emit_stream_end()
         return {
             "query": query,
             "session_id": session_id,
@@ -323,6 +396,7 @@ def run_dynamic_agent(
             )
 
     _step("generate_done", f"回答完成（{len(final_answer)} 字符）")
+    _emit_stream_end()
     return {
         "query": query,
         "session_id": session_id,

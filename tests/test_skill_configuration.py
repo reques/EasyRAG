@@ -254,10 +254,36 @@ def test_public_tools_bypass_the_gate():
     registry.register(_tool("web_search"))
     runtime = SkillRuntimeContext.from_definitions([_definition("writing", tools=("text_tool",))])
     with use_skill_context(runtime):
-        assert registry.list_names() == ["kb_search"]
         assert registry.invoke("kb_search") == "kb_search"
         with pytest.raises(ToolExecutionError, match="not allowed"):
             registry.invoke("web_search")
+
+
+def test_registry_list_views_are_never_gated():
+    """列表/构建视图不受 Skill 门控（2026-09-04 回归修复）。
+
+    进程级缓存的 Agent（build_main_agent / build_dynamic_agent /
+    build_subagent）在构建时消费 ``list_all`` —— 构建发生在首个请求的
+    上下文里，若列表视图套用渐进式披露门控，首轮激活集为空，未激活工具
+    会被从缓存 Agent 里永久剔除，read_skill 解锁的只是不存在的工具。
+    门控只属于 invoke（可见性在 middleware 的 wrap_model_call）。
+    """
+    registry = ToolRegistry()
+    registry.register(_tool("kb_search", public=True))
+    registry.register(_tool("web_search"))
+    runtime = SkillRuntimeContext.from_definitions([_definition("writing", tools=("text_tool",))])
+    with use_skill_context(runtime):
+        assert set(registry.list_names()) == {"kb_search", "web_search"}
+        assert {t.name for t in registry.list_all()} == {"kb_search", "web_search"}
+        assert {s["function"]["name"] for s in registry.to_llm_schema()} == {
+            "kb_search", "web_search",
+        }
+    # 未激活任何 Skill 的请求里同样全量可见（故障现场：构建期列表被清空）
+    with use_skill_context(SkillRuntimeContext.from_definitions([
+        _definition("writing", tools=("text_tool",)),
+    ])):
+        assert "web_search" in registry.list_names()
+        assert "web_search" in registry.to_react_prompt()
 
 
 def test_public_flag_wins_over_skill_declaration():
@@ -283,21 +309,23 @@ def test_public_flag_wins_over_skill_declaration():
 
 
 def test_gated_tool_blocked_in_registry_until_activated():
-    """第二层门控（ContextVar 侧）：子 Agent 线程 / graph 节点 / MCP 桥接。"""
+    """invoke 层门控（ContextVar 侧）：子 Agent 线程 / graph 节点 / MCP 桥接。
+
+    注意 list_names / list_all 不再反映门控（构建视图必须稳定全量，见
+    ``test_registry_list_views_are_never_gated``），这里只验证 invoke。"""
     registry = ToolRegistry()
     registry.register(_tool("web_search"))
     registry.register(_tool("calculator", public=True))
     runtime = SkillRuntimeContext.from_definitions([_definition("research", tools=("web_search",))])
 
     with use_skill_context(runtime):
-        assert registry.list_names() == ["calculator"]
+        assert registry.invoke("calculator") == "calculator"
         with pytest.raises(ToolExecutionError, match="not allowed"):
             registry.invoke("web_search")
         runtime.activate("research")
-        assert set(registry.list_names()) == {"web_search", "calculator"}
         assert registry.invoke("web_search") == "web_search"
     # 退出上下文后恢复无门控状态
-    assert set(registry.list_names()) == {"web_search", "calculator"}
+    assert registry.invoke("web_search") == "web_search"
 
 
 def test_sync_activated_only_accepts_effective_slugs():
