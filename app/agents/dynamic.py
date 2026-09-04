@@ -78,6 +78,7 @@ def build_dynamic_agent(
 
     from app.agents.deep.llm import get_langchain_model
     from app.agents.deep.tools import registry_to_langchain_tools
+    from app.skills.middleware import build_skills_middleware
 
     global _dynamic_agent_cache
     cacheable = model is None
@@ -95,6 +96,8 @@ def build_dynamic_agent(
         model=model,
         tools=tools,
         system_prompt=prompt,
+        # 2026-09-04 Skill 重构：Skill 注入 + 渐进式门控（含 read_skill）
+        middleware=[build_skills_middleware()],
         name="easyrag_dynamic_agent",
     )
     if cacheable:
@@ -134,7 +137,6 @@ def run_dynamic_agent(
     from app.agents.events import emit
     from app.services.knowledge_catalog import format_knowledge_catalog
     from app.services.knowledge_context import use_authorised_kb_ids
-    from app.skills.context import get_active_skill_prompt
 
     context = context or ChatContext(thread_id=session_id)
     if history is not None:
@@ -185,10 +187,10 @@ def run_dynamic_agent(
                 pass
 
     # ── 组装消息（对齐 prepare_context / _run_deep 的注入链）──────────────
+    # 2026-09-04 Skill 重构：Skill 区块不再在这里手工拼 —— SkillsMiddleware
+    # 每轮按 activated_skills 动态渲染（未激活给摘要行、已激活给正文），
+    # 手工注入会与之重复且拿不到激活状态。
     messages: List[Any] = []
-    skill_prompt = get_active_skill_prompt()
-    if skill_prompt:
-        messages.append(SystemMessage(content=skill_prompt))
     if knowledge_catalog:
         messages.append(
             SystemMessage(content=format_knowledge_catalog(list(knowledge_catalog)))

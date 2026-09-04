@@ -131,6 +131,26 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("[lifespan] MCP init skipped: %s", exc)
 
+    # Skill 目录自检（2026-09-04 重构）：内置 SKILL.md 解析结果与依赖可解析性。
+    # 只告警不阻塞 —— 一个坏的 SKILL.md 不该拦住整个应用启动（与 MCP 同策略）。
+    try:
+        from app.skills.registry import (
+            builtin_dir,
+            list_builtin_skills,
+            validate_builtin_dependencies,
+        )
+
+        builtin_skills = list_builtin_skills()
+        logger.info(
+            "[lifespan] builtin skills loaded from %s: %s",
+            builtin_dir(),
+            ", ".join(s.slug for s in builtin_skills) or "(none)",
+        )
+        for problem in validate_builtin_dependencies():
+            logger.warning("[lifespan] skill dependency problem — %s", problem)
+    except Exception as exc:
+        logger.warning("[lifespan] skill catalog init skipped: %s", exc)
+
     # DeepAgents 可发现性（2026-08-21, S2）：启动时打印执行路径与 SubAgent 名册
     logger.info("[lifespan] AGENT_MODE=%s (auto=智能路由 | single | multi | deepagents)", cfg.AGENT_MODE)
     if cfg.AGENT_MODE == "deepagents":

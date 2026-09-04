@@ -113,6 +113,7 @@ import {
   Workflow,
   Info,
   Terminal,
+  WandSparkles,
   ChevronRight,
   ChevronDown,
   ChevronLeft,
@@ -164,6 +165,8 @@ const STEP_DEFS = {
   generate: { key: 'generate', label: '生成', icon: PenLine, kind: 'generate' },
   synthesize: { key: 'synthesize', label: '汇总', icon: Merge, kind: 'synthesize' },
   fallback: { key: 'fallback', label: '回退', icon: AlertTriangle, kind: 'fallback' },
+  // 渐进式披露：模型读取 SKILL.md 激活了某个 Skill（2026-09-04）
+  skill: { key: 'skill', label: '激活 Skill', icon: WandSparkles, kind: 'skill' },
   info: { key: 'info', label: '步骤', icon: Info, kind: 'info' },
 }
 const SEARCH_TOOLS = new Set(['kb_search', 'web_search', 'search', 'tavily_search', 'duckduckgo'])
@@ -175,6 +178,7 @@ function stepDef(action) {
   }
   if (action === 'task_started' || action === 'dispatch' || action === 'decompose') return STEP_DEFS.delegate
   if (action === 'intent_recognition') return STEP_DEFS.intent
+  if (action === 'skill_activated') return STEP_DEFS.skill
   return STEP_DEFS[action] || { key: action || 'info', label: action || '步骤', icon: Info, kind: 'info' }
 }
 

@@ -24,7 +24,7 @@ EasyRAG 是一个面向真实业务场景的企业知识库智能问答平台：
 │                    Backend (FastAPI async)                           │
 │   routers: auth / chat / knowledge / evaluation / mcp                │
 │   services: chat · knowledge · graph · evaluation · model_config     │
-│             skill_config · ragas · agent_run                         │
+│             skill_config(索引) · ragas · agent_run                   │
 │   repositories: 数据访问层                                            │
 └───────┬────────────────┬────────────────┬────────────────┬───────────┘
         │                │                │                │
@@ -33,7 +33,7 @@ EasyRAG 是一个面向真实业务场景的企业知识库智能问答平台：
 │ app/agents     │ │ app/rag      │ │ app/tools    │ │                 │
 │ app/graph      │ │ (chunker/    │ │ registry     │ │ Postgres(pgvector│
 │ (LangGraph)    │ │  embedding/  │ │ + MCP 桥接   │ │  +图谱+业务)     │
-│ DeepAgents     │ │  retriever/  │ │ app/skills   │ │ Milvus(向量)     │
+│ DeepAgents     │ │  retriever/  │ │ skills/*.md  │ │ Milvus(向量)     │
 │ 委派协同        │ │  bm25/rerank/│ │              │ │ Redis · MinIO    │
 │                │ │  ocr/parsers)│ │              │ │ Ollama(embedding)│
 └────────────────┘ └──────────────┘ └──────────────┘ │ MinerU(旁路解析) │
@@ -49,7 +49,7 @@ EasyRAG 是一个面向真实业务场景的企业知识库智能问答平台：
 | 前端 | Vue 3.5 · Vite 6 · Pinia · Axios · lucide 图标 |
 | 后端 | FastAPI（async）· SQLAlchemy 2.0 async · LangGraph 工作流 |
 | Agent | LangGraph StateGraph（意图分流 / ReAct 循环 / 校验重试）· DeepAgents 统一多智能体（主 Agent + SubAgent + DAG 委派 + 结构化黑板） |
-| 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 配置）· Redis · MinIO（文件对象存储） |
+| 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 索引）· Redis · MinIO（文件对象存储）· 本地文件系统（Skill 定义 `SKILL.md`） |
 | 向量 | Milvus 2.5（etcd + MinIO 依赖）· BGE-M3 embedding（Ollama 本地 / API） |
 | LLM | DeepSeek / MiniMax / Qwen(DashScope) / GLM / 任意 OpenAI 兼容 API（可配置 base_url，支持自定义模型） |
 | 文档解析 | 本地解析器 + 旁路部署 MinerU Pipeline API（Docker，见 `deploy/mineru`） |
@@ -85,7 +85,12 @@ EasyRAG/
 │   │   ├── registry.py           #     线程安全工具注册表（RLock）
 │   │   ├── web_search_tool.py / calculator.py / datetime_tool.py / text_tool.py
 │   │   └── mcp/                  #     MCP 客户端桥接（config/manager/demo_server）
-│   ├── skills/                   #   Skill 系统（catalog 内置 + context 注入）
+│   ├── skills/                   #   Skill 系统（SKILL.md 文件 + 渐进式披露）
+│   │   ├── loader.py             #     SKILL.md 解析 + frontmatter 校验
+│   │   ├── registry.py           #     两来源磁盘索引（builtin / personal）
+│   │   ├── runtime.py            #     三层集合 + activated_skills 工具门控
+│   │   ├── read_tool.py          #     read_skill 工具（激活入口）
+│   │   └── middleware.py         #     SkillsMiddleware（挂 create_agent）
 │   ├── memory/                   #   分层记忆管理
 │   ├── prompts/                  #   Prompt 模板（意图/规划/ReAct/生成/校验）
 │   ├── services/                 #   agent_service（编排入口）、knowledge_catalog
@@ -194,10 +199,16 @@ Agent（``create_react_agent`` + 注册表工具，无委派工具）：
 
 ### 5.5 Skill 系统（app/skills + backend skill_config）
 
-- **内置 Skill**：知识库研究、联网研究、数据分析、专业写作、法律分析（`catalog.py` 的 `SkillProfile`）
-- **自定义 Skill**：用户可创建/复制/编辑（名称、用途、详细指令 + 最小权限工具白名单），存 PostgreSQL（`models_skill_config`），API Key 等敏感配置加密
-- **注入机制**：`context.py` 把选中 Skill 的指令作为本次请求的系统上下文注入；工具白名单在后端执行层强制校验——取消工具权限不是前端展示变化
-- 同一条消息最多组合 3 个 Skill；历史消息保留 Skill 名称快照
+2026-09-04 参照 [Yuxi](https://xerrors.github.io/Yuxi/agents/skills-management.html) 重构为**文件定义 + 渐进式披露**（设计稿：`docs/plans/2026-09-04-skill-management-refactor-yuxi.md`）。
+
+- **定义格式**：一个 Skill = 一个目录，根级 `SKILL.md`（YAML frontmatter + Markdown 正文），可选 `prompts/` 与 `tools/`。必填 `name` / `description`；`slug` 是稳定标识（省略时用 name，此时 name 必须是 slug 形态）
+- **两来源，文件为真相**：内置随代码发布在 `skills/`（只读）；个人 Skill 在 `volumes/user-skills/<user_id>/<slug>/`。PostgreSQL `custom_skill_configs` 降级为索引表（slug / owner / 展示元数据），不再存指令正文
+- **渐进式披露**：用户勾选定义"本次可用范围"（≤ `SKILLS_MAX_SELECTED`，默认 10），首轮 prompt 只给名称 + 用途摘要；模型判断相关时调 `read_skill(slug)` 读全文，该 Skill 进 `activated_skills`，其 `tool_dependencies` 在**下一轮**解锁
+- **依赖闭包**：`skill_dependencies` 只展开进"描述范围"，不等于工具立即暴露；闭包只在用户可访问集合内展开，不能借依赖扩大权限
+- **双层工具门控**：`SkillsMiddleware.wrap_tool_call`（Agent 路径）+ `ToolRegistry.invoke` 的 ContextVar 检查（子 Agent 线程 / graph 节点 / MCP 桥接）。未激活 Skill 的工具即使已注册也不能调用
+- **公共工具**：`metadata["public"]` 标记的基础工具（`kb_search` / `calculator` / `datetime_tool`）不受 Skill 门控——否则启用 Skill 的请求首轮无工具可用。该标记优先于 Skill 声明
+- **注入机制**：`middleware.py` 挂在三处 `create_agent` 上，按 `activated_skills` 逐轮渲染 Skill 区块。非 Agent 路径（意图识别 / 直连兜底）无 read_skill 循环，用 `render_prompt(eager=True)` 直接展开全文
+- 历史消息保留 Skill 名称快照；`read_skill` 激活时发 `skill_activated` 事件到 SSE，前端任务状态栏可见
 
 ### 5.6 LLM 层（app/llm）
 
@@ -229,7 +240,7 @@ Agent（``create_react_agent`` + 注册表工具，无委派工具）：
 3. **多智能体统一**：DeepAgents 主 Agent 自主委派（task / spawn_tasks DAG 并行 + 黑板共享），取代旧 Orchestrator-Worker 手工拆解派发
 4. **SSE 流式**：`/chat/stream` 边生成边推送，前端逐 token 渲染
 5. **异步索引**：202 + 阶段进度轮询（10%→30%→80%→100%），大文件可关弹窗后台继续
-6. **Skill 执行层强制**：工具白名单在后端校验，指令注入系统上下文，自定义 Skill 无需改代码/重启
+6. **Skill 执行层强制**：工具门控在后端双层校验（middleware + 注册表），未激活 Skill 的工具不可调用；Skill 以文件定义，新增/修改无需改代码或重启
 7. **MCP 桥接**：常驻线程事件循环隔离 async 生命周期，同步桥接暴露给工具执行层
 8. **引用可溯源**：检索结果携带 `knowledge_base_id + file_id`，点击跳转文档预览
 9. **评估体系**：本地确定性指标（HitRate/MRR/avg_score）+ 可选 Ragas 独立 venv worker（避免升级主服务依赖，见 docs/ragas-evaluator.md）
@@ -258,7 +269,8 @@ Agent（``create_react_agent`` + 注册表工具，无委派工具）：
 | `GET /chat/conversations/{id}/history` | 会话历史 |
 | `POST /chat/conversations/{id}/summarize` | 会话摘要 |
 | `GET /chat/conversations/{id}/runs` | 会话的 agent run（任务面板数据） |
-| `GET/POST/PUT/DELETE /chat/skills` | Skill 目录 / 自定义 Skill CRUD |
+| `GET/POST/PUT/DELETE /chat/skills` | Skill 目录 / 个人 Skill CRUD（列表不含正文） |
+| `GET /chat/skills/{slug}/content` | 单个 Skill 的 SKILL.md 全文（编辑器用） |
 | `GET/POST/DELETE /chat/models` | 自定义模型配置 CRUD |
 | `GET /chat/tools` | 可用工具列表 |
 
@@ -305,7 +317,7 @@ Agent（``create_react_agent`` + 注册表工具，无委派工具）：
 | **知识库管理** | 多知识库隔离 · txt/md/pdf/docx/图片上传 · 多文件并行上传（独立进度）· 队列化索引（Redis Stream，重启不丢）· 扫描件 OCR · 本地/MinerU 双解析 · 文件预览 · 图谱级联删除 |
 | **检索增强** | Milvus 向量检索 · 多策略分块 · BM25 混合 + 重排 · 知识图谱实体关系抽取与查询注入 |
 | **Agent 工具** | web_search（Tavily）· calculator · datetime · text_tool · MCP 外部工具 |
-| **Skill 系统** | 内置 + 自定义 Skill，指令注入 + 工具白名单执行层强制 |
+| **Skill 系统** | SKILL.md 文件定义 + 渐进式披露（read_skill 激活）+ 双层工具门控 |
 | **评估体系** | 命名评估运行（HitRate / MRR / avg_score）· 逐条命中明细 · 可选 Ragas |
 | **用户体系** | JWT 注册登录 · 会话历史持久化 · 知识库按用户隔离 · 自定义模型/Skill 按用户存储 |
 

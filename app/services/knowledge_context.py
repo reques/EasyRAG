@@ -1,6 +1,6 @@
 """请求级知识库授权范围（Request-local authorised KB scope）。
 
-与 ``app/skills/context.py`` 同一模式：用 ContextVar 在请求内携带"当前用户
+与 ``app/skills/runtime.py`` 同一模式：用 ContextVar 在请求内携带"当前用户
 已授权的知识库 UUID 列表"，供需要访问知识库的注册表工具（如 ``kb_search``）
 读取 —— 工具函数签名统一为 ``fn(**kwargs) -> str``，没有渠道接收请求上下文，
 必须从 contextvar 取。

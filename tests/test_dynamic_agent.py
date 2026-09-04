@@ -37,8 +37,11 @@ def test_build_dynamic_agent_creates_agent(monkeypatch):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    def fake_create(model=None, tools=None, system_prompt=None, name=None):
-        return FakeAgent(model=model, tools=tools, system_prompt=system_prompt, name=name)
+    def fake_create(model=None, tools=None, system_prompt=None, name=None, middleware=None):
+        return FakeAgent(
+            model=model, tools=tools, system_prompt=system_prompt,
+            name=name, middleware=middleware,
+        )
 
     monkeypatch.setattr("langchain.agents.create_agent", fake_create)
     fake_model = object()
@@ -55,6 +58,10 @@ def test_build_dynamic_agent_creates_agent(monkeypatch):
         names = [getattr(t, "name", "") for t in captured["tools"]]
         assert "task" not in names
         assert "spawn_tasks" not in names
+        # 2026-09-04 Skill 重构：SkillsMiddleware 必须挂上（Skill 注入 + 渐进式
+        # 门控 + read_skill 工具都在它上面；漏挂 = Skill 功能静默失效）
+        middleware_names = [type(m).__name__ for m in (captured["middleware"] or [])]
+        assert "SkillsMiddleware" in middleware_names
     finally:
         dyn._dynamic_agent_cache = None
 

@@ -222,8 +222,8 @@
             <div v-if="skillMenuOpen" class="skill-dropdown">
               <div class="skill-dropdown-head">
                 <div>
-                  <strong>为本次对话选择 Skill</strong>
-                  <small>最多选择 {{ maxSelectedSkills }} 个</small>
+                  <strong>选择本次对话可用的 Skill</strong>
+                  <small>最多 {{ maxSelectedSkills }} 个；模型按需展开其指令</small>
                 </div>
                 <button type="button" title="管理 Skill" @click="openSkillConfigModal">
                   <Settings2 :size="15" />
@@ -555,7 +555,7 @@
               </label>
               <label>
                 <span>工作指令</span>
-                <textarea v-model="customSkillForm.instructions" rows="8" maxlength="6000" placeholder="描述工作步骤、质量标准、输出格式和边界…" :disabled="skillFormReadOnly" required></textarea>
+                <textarea v-model="customSkillForm.instructions" rows="8" maxlength="20000" placeholder="描述工作步骤、质量标准、输出格式和边界…" :disabled="skillFormReadOnly" required></textarea>
                 <small class="model-form-hint">建议写清：先做什么、如何核验、最终交付什么，以及不能做什么。</small>
               </label>
 
@@ -977,7 +977,7 @@ try {
 const skillOptions = ref([])
 const skillTools = ref([])
 const selectedSkillIds = ref(storedSkillIds)
-const maxSelectedSkills = ref(3)
+const maxSelectedSkills = ref(10)
 const skillsLoading = ref(true)
 const skillLoadError = ref('')
 const skillMenuOpen = ref(false)
@@ -985,6 +985,7 @@ const skillPickerEl = ref(null)
 const skillSearch = ref('')
 const skillConfigModalOpen = ref(false)
 const savingCustomSkill = ref(false)
+const skillBodyLoading = ref(false)
 const skillConfigError = ref('')
 const editingSkillId = ref('')
 const skillFormReadOnly = ref(false)
@@ -1022,7 +1023,7 @@ async function loadSkills(preferredSkillId = '') {
     const data = await api.get('/chat/skills')
     skillOptions.value = data.skills || []
     skillTools.value = data.tools || []
-    maxSelectedSkills.value = data.max_selected || 3
+    maxSelectedSkills.value = data.max_selected || 10
     const validIds = new Set(skillOptions.value.map(skill => skill.id))
     selectedSkillIds.value = selectedSkillIds.value
       .filter(id => validIds.has(id))
@@ -1067,11 +1068,27 @@ function assignSkillForm(skill = null) {
   Object.assign(customSkillForm, {
     name: skill?.name || '',
     description: skill?.description || '',
-    instructions: skill?.instructions || '',
+    // 渐进式披露：列表接口不返回正文，需要时经 /skills/{slug}/content 单独拉取
+    instructions: skill?.body || '',
     tool_names: [...(skill?.tool_names || [])],
     category: skill?.category || '自定义',
     icon: skill?.icon || 'sparkles',
   })
+}
+
+// 编辑/预览时按需拉取 SKILL.md 正文（列表响应只有摘要，见后端 ChatSkillInfo）
+async function loadSkillBody(skill) {
+  if (!skill?.slug && !skill?.id) return skill
+  skillBodyLoading.value = true
+  try {
+    const detail = await api.get(`/chat/skills/${skill.slug || skill.id}/content`)
+    return { ...skill, ...detail }
+  } catch (error) {
+    skillConfigError.value = error.response?.data?.detail || `Skill 正文加载失败：${error.message}`
+    return skill
+  } finally {
+    skillBodyLoading.value = false
+  }
 }
 
 function startNewSkill() {
@@ -1081,18 +1098,18 @@ function startNewSkill() {
   assignSkillForm()
 }
 
-function previewBuiltinSkill(skill) {
+async function previewBuiltinSkill(skill) {
   editingSkillId.value = skill.id
   skillFormReadOnly.value = true
   skillConfigError.value = ''
-  assignSkillForm(skill)
+  assignSkillForm(await loadSkillBody(skill))
 }
 
-function editSkill(skill) {
+async function editSkill(skill) {
   editingSkillId.value = skill.id
   skillFormReadOnly.value = false
   skillConfigError.value = ''
-  assignSkillForm(skill)
+  assignSkillForm(await loadSkillBody(skill))
 }
 
 function duplicateBuiltinSkill() {
@@ -1102,11 +1119,11 @@ function duplicateBuiltinSkill() {
   skillConfigError.value = ''
 }
 
-function openSkillConfigModal() {
+async function openSkillConfigModal() {
   skillMenuOpen.value = false
   skillConfigModalOpen.value = true
   const firstCustom = skillOptions.value.find(skill => skill.can_edit)
-  if (firstCustom) editSkill(firstCustom)
+  if (firstCustom) await editSkill(firstCustom)
   else startNewSkill()
 }
 

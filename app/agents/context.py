@@ -56,7 +56,13 @@ class BaseContext:
     """请求选择的 chat model（Yuxi 把 model 放 Context：执行期只读、不进 State）。"""
 
     skill_ids: Tuple[str, ...] = ()
-    """显式启用的 Skill（权限白名单来源，传播层由 skills/context.py 消费）。"""
+    """有效集合的 Skill slug（2026-09-04 重构：语义从"要注入的指令"改为"本次
+    请求可用的 Skill 范围"；正文与工具由 SkillsMiddleware 按 activated_skills
+    逐轮裁决，传播层见 app/skills/runtime.py）。"""
+
+    preload_skill_slugs: Tuple[str, ...] = ()
+    """预加载的 Skill（对齐 Yuxi ``preload_skills``）：Run 开始时就进激活集，
+    首轮即展开正文与工具，不走渐进式披露。必须是 skill_ids 的子集。"""
 
     knowledge_base_ids: Tuple[str, ...] = ()
     """已授权知识库 UUID（工具侧 kb_search 授权边界）。"""
@@ -102,6 +108,7 @@ class ChatContext(BaseContext):
         user_id: Optional[str] = None,
         model_id: Optional[str] = None,
         skill_ids: Optional[Sequence[str]] = None,
+        preload_skill_slugs: Optional[Sequence[str]] = None,
         knowledge_base_ids: Optional[Sequence[str]] = None,
         knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
         image_data: Optional[str] = None,
@@ -120,6 +127,7 @@ class ChatContext(BaseContext):
             user_id=uid,
             model_id=model_id or "",
             skill_ids=tuple(skill_ids or ()),
+            preload_skill_slugs=tuple(preload_skill_slugs or ()),
             knowledge_base_ids=tuple(knowledge_base_ids or ()),
             knowledge_catalog=tuple(knowledge_catalog or ()),
             image_data=image_data,

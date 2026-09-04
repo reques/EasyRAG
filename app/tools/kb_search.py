@@ -73,5 +73,10 @@ TOOL = ToolDefinition(
     metadata={
         "scenarios": ["知识库", "内部资料", "内部文档", "规章制度", "产品文档", "文档检索", "资料"],
         "tags": ["search", "kb", "retrieval", "knowledge"],
+        # 公共工具（2026-09-04 Skill 重构）：知识库问答是本平台的基础能力，
+        # 不该被 Skill 选择挡住。授权边界由 use_authorised_kb_ids 的 KB
+        # ContextVar 独立把控（与 Skill 门控是两套正交机制），因此放行
+        # 不会扩大用户的知识库访问范围。
+        "public": True,
     },
 )

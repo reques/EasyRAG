@@ -4,8 +4,8 @@
 """
 from __future__ import annotations
 
-from app.skills.catalog import SkillProfile
-from app.skills.context import use_skill_context
+from app.skills.loader import SkillDefinition
+from app.skills.runtime import use_skill_context
 from app.tools.registry import ToolDefinition, ToolRegistry
 
 
@@ -91,16 +91,33 @@ def test_discover_respects_limit():
 # ── 权限：发现结果只能收窄不能放大 ─────────────────────────────────────────
 
 
-def test_discover_honours_skill_whitelist():
-    """skills 白名单只放行 calculator → discover 不应返回被禁工具。"""
+def test_discover_honours_skill_gate():
+    """Skill 门控只解锁 calculator → discover 不应返回被门控的工具。
+
+    2026-09-04 渐进式披露：Skill 必须**先激活**才解锁其工具，因此这里显式
+    activate 后再 discover（未激活时连 calculator 都不会返回）。
+    """
     reg = _registry()
-    profile = SkillProfile(
-        id="test:math-only", name="仅计算", description="", instructions="",
-        tool_names=("calculator",),
+    definition = SkillDefinition(
+        slug="math-only", name="仅计算", description="d",
+        tool_dependencies=("calculator",),
     )
-    with use_skill_context([profile]):
+    with use_skill_context([definition]) as rt:
+        rt.activate("math-only")
         out = reg.discover("联网搜索 计算")
     assert [t.name for t in out] == ["calculator"]
+
+
+def test_discover_hides_tools_of_unactivated_skill():
+    """未激活的 Skill 其工具不参与发现（渐进式披露的核心约束）。"""
+    reg = _registry()
+    definition = SkillDefinition(
+        slug="math-only", name="仅计算", description="d",
+        tool_dependencies=("calculator",),
+    )
+    with use_skill_context([definition]):
+        out = reg.discover("联网搜索 计算")
+    assert "calculator" not in [t.name for t in out]
 
 
 def test_discover_ignores_unavailable_tools():

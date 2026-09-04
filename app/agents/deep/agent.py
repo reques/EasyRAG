@@ -76,6 +76,7 @@ def build_main_agent(
 
     from app.agents.deep.llm import get_langchain_model
     from app.agents.deep.planner import build_revise_plan_tool, build_spawn_tasks_tool
+    from app.skills.middleware import build_skills_middleware
 
     global _main_agent_cache
     cacheable = model is None  # 修复（2026-08-26 阶段 3）：model 随后会被重赋值，
@@ -86,7 +87,7 @@ def build_main_agent(
         model = get_langchain_model()
     if recursion_limit is None:
         recursion_limit = get_settings().DEEP_SUBAGENT_RECURSION_LIMIT
-    tools = registry_to_langchain_tools()  # 全量（技能白名单生效）
+    tools = registry_to_langchain_tools()  # 全量（技能门控生效）
     tools.append(build_task_tool(model=subagent_model or model, recursion_limit=recursion_limit))
     tools.append(build_spawn_tasks_tool(model=subagent_model or model))
     tools.append(build_revise_plan_tool(model=subagent_model or model))
@@ -99,6 +100,10 @@ def build_main_agent(
         model=model,
         tools=tools,
         system_prompt=prompt,
+        # 2026-09-04 Skill 重构：Skill 区块注入与渐进式工具门控由
+        # SkillsMiddleware 接管（含 read_skill 工具），取代此前在
+        # agent_service / dynamic / graph.nodes 三处的手工 prompt 拼接。
+        middleware=[build_skills_middleware()],
         name="easyrag_deep_agent",
     )
     if cacheable:
