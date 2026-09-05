@@ -19,10 +19,10 @@
     <!-- 展开态：无边框日志流 -->
     <template v-else>
       <div v-if="error" class="process-error-line"><CircleAlert :size="12" /> {{ error }}</div>
-      <div v-if="!timeline.rows.length && running" class="process-empty">正在分析你的问题…</div>
+      <div v-if="!displayRows.length && running" class="process-empty" role="status" aria-label="正在准备回复"><Loader2 :size="12" class="spin" /></div>
 
       <!-- 旧消息兜底：无步骤时间线时退化为工作日志列表 -->
-      <ol v-else-if="!timeline.rows.length && summaries.length" class="process-journal">
+      <ol v-else-if="!displayRows.length && summaries.length" class="process-journal">
         <li v-for="(s, si) in summaries" :key="s.id || si" :class="`phase-${s.phase || 'info'} status-${s.status || 'running'}`">
           <span class="process-journal-marker"><component :is="phaseIcon(s.phase)" :size="12" /></span>
           <span class="process-journal-text">{{ s.text }}</span>
@@ -31,10 +31,21 @@
 
       <ol v-if="timeline.rows.length || timeline.thoughts.length" class="process-log" ref="logEl">
         <template v-for="row in displayRows" :key="row.uid">
-          <!-- 思考流：弱化灰字段落，不属于步骤行 -->
-          <li v-if="row.isThought" class="process-thought" :class="{ 'is-streaming': row.streaming }">
+          <!-- 思考流：弱化灰字，默认折叠为一行，点击展开全文 -->
+          <li
+            v-if="row.isThought"
+            class="process-thought"
+            :class="{ 'is-streaming': row.streaming, 'is-expanded': row.expanded }"
+            role="button"
+            tabindex="0"
+            :aria-expanded="row.expanded"
+            @click="toggleThought(row)"
+            @keydown.enter.prevent="toggleThought(row)"
+            @keydown.space.prevent="toggleThought(row)"
+          >
             <span class="process-thought-marker"><Brain :size="11" /></span>
             <span class="process-thought-text">{{ row.content }}<span v-if="row.streaming" class="process-thought-caret" aria-hidden="true"></span></span>
+            <ChevronDown :size="11" class="process-thought-chevron" :class="{ flipped: !row.expanded }" />
           </li>
           <!-- 步骤/工具行：⏺ 标记 + 动词 + 对象，可展开结果 -->
           <li
@@ -183,8 +194,17 @@ function stepDef(action) {
 }
 
 function toolNameOf(text) {
-  const m = String(text || '').match(/调用\s*([a-zA-Z_]+)/)
+  const m = String(text || '').match(/调用\s*([a-zA-Z0-9_-]+)/)
   return m ? m[1] : ''
+}
+
+function toolObject(item) {
+  try {
+    const args = JSON.parse(item.content || '{}')
+    const subject = args.query || args.expression || args.skill_name || args.slug
+    if (typeof subject === 'string') return subject
+  } catch { /* 旧产出可能只有纯文本 */ }
+  return cleanObject(item.title || '')
 }
 
 function artifactToDef(kind, item) {
@@ -193,7 +213,11 @@ function artifactToDef(kind, item) {
   if (kind === 'tool') {
     const name = toolNameOf(item.title || item.content || '')
     if (DELEGATE_TOOLS.has(name)) return STEP_DEFS.delegate
-    if (SEARCH_TOOLS.has(name)) return { ...STEP_DEFS.tool, label: '搜索', icon: Search }
+    if (name === 'kb_search') return { ...STEP_DEFS.tool, label: '检索知识库', icon: BookOpen }
+    if (SEARCH_TOOLS.has(name)) return { ...STEP_DEFS.tool, label: '搜索网页', icon: Search }
+    if (name === 'calculator') return { ...STEP_DEFS.tool, label: '计算' }
+    if (name === 'datetime_tool') return { ...STEP_DEFS.tool, label: '查询日期时间' }
+    if (name === 'read_skill') return { ...STEP_DEFS.tool, label: '读取技能', icon: WandSparkles }
     return STEP_DEFS.tool
   }
   if (kind === 'tool_result') return { ...STEP_DEFS.tool, label: '工具返回', icon: Terminal }
@@ -246,6 +270,23 @@ function stateFor(wid) {
   return s
 }
 
+/* 思考段落独立存展开态（键为 streamId，与步骤行的 ownerWid 命名空间不冲突） */
+function thoughtStateFor(streamId) {
+  const key = `thought:${streamId}`
+  let s = stateMap.get(key)
+  if (!s) {
+    s = { expanded: false }
+    stateMap.set(key, s)
+  }
+  return s
+}
+
+function toggleThought(row) {
+  const s = thoughtStateFor(row.streamId)
+  s.expanded = !s.expanded
+  row.expanded = s.expanded
+}
+
 function newRow(def, wid, startedAt, createdBy = 'artifact', order = null) {
   const s = stateFor(wid)
   if (s.startedAt == null) s.startedAt = startedAt || Date.now()
@@ -271,6 +312,7 @@ function newRow(def, wid, startedAt, createdBy = 'artifact', order = null) {
     auto: s.auto,
     streaming: s.streaming,
     streamSrc: s.streamSrc,
+    toolCallId: '',
   })
   return row
 }
@@ -314,11 +356,14 @@ const timeline = computed(() => {
   const rows = []
   const thoughts = []
   const seen = new Set()
+  const hasToolIds = props.items.some(item => item.kind === 'tool' && item.tool_call_id)
   props.items.forEach((item, order) => {
     if (!item || seen.has(item.wid)) return
     seen.add(item.wid)
     if (item.t === 'step') {
       const { action, done, subagent } = parseStep(item.step)
+      // 新动态事件以带调用 id 的产出为准，status 仍供兼容客户端和诊断使用。
+      if (hasToolIds && action === 'tool' && !subagent) return
       const def = stepDef(action)
       // task_started 属于主 Agent 的委派动作，归入主链路（subagent=''）
       const sg = action === 'task_started' ? '' : (item.task_id || subagent)
@@ -351,8 +396,10 @@ const timeline = computed(() => {
       const sg = subagentFromStage(item.stage)
       const def = artifactToDef(kind, item)
       if (kind === 'thought') {
-        // 思考流 → 弱化文本段落（独立于步骤行），记录 _order 用于时序交织
+        // 思考流 → 弱化文本段落（独立于步骤行），记录 _order 用于时序交织；
+        // 默认收起为单行，点击展开全文（状态按 streamId 存 stateMap，重建不丢）
         const streamId = item.id || item.wid
+        const s = thoughtStateFor(streamId)
         const last = thoughts[thoughts.length - 1]
         if (item.streaming && last && last.streamSrc === streamId) {
           last.content += item.content || ''
@@ -366,29 +413,36 @@ const timeline = computed(() => {
             streamSrc: streamId,
             _order: order,
             content: item.content || '',
-            streaming: !!item.streaming,
+            streaming: !!item.streaming && props.running,
+            expanded: s.expanded,
           }))
         }
       } else if (kind === 'tool' || kind === 'delegate') {
-        const target = findRow(rows, def.key, sg)
+        const target = item.tool_call_id
+          ? rows.find(row => row.toolCallId === item.tool_call_id)
+          : findRow(rows, def.key, sg)
         if (target && target.status === 'running') {
-          target.object = target.object || cleanObject(item.title || '')
+          target.object = target.object || toolObject(item)
           target.content = appendText(target.content, item.content)
         } else {
           const r = newRow({ ...def, subagent: sg }, item.wid, Date.now(), 'artifact', order)
-          r.object = cleanObject(item.title || '')
+          r.object = toolObject(item)
           r.content = item.content || ''
+          r.toolCallId = item.tool_call_id || ''
           rows.push(r)
-          closeOthers(rows, r)
+          if (!r.toolCallId) closeOthers(rows, r)
         }
       } else if (kind === 'tool_result') {
-        const target = findRow(rows, 'tool', sg) || findRow(rows, 'delegate', sg)
+        const target = item.tool_call_id
+          ? rows.find(row => row.toolCallId === item.tool_call_id)
+          : findRow(rows, 'tool', sg) || findRow(rows, 'delegate', sg)
         if (target) {
           target.results.push({
             label: item.title || '',
             text: item.content || '',
-            isError: /失败|错误|error/i.test(item.title || ''),
+            isError: !!item.is_error || /失败|错误|error/i.test(item.title || ''),
           })
+          if (item.is_error) target.isFallback = true
           if (target.status === 'running') markDone(target)
         } else {
           const r = newRow({ ...STEP_DEFS.tool, subagent: sg, label: '工具返回', icon: Terminal }, item.wid, Date.now(), 'artifact', order)
@@ -540,12 +594,16 @@ watch(
 const KIND_LABELS = { retrieve: '检索', tool: '工具', reason: '推理', delegate: '委派', generate: '生成' }
 const collapsedSummary = computed(() => {
   const rows = timeline.value.rows
+  const thoughts = timeline.value.thoughts
+  if (props.running && thoughts.length) return previewText(thoughts[thoughts.length - 1].content, 80)
   if (!rows.length) {
+    if (thoughts.length) return `${props.error ? '遇到问题' : props.stopped ? '已停止' : '已完成'} · ${thoughts.length} 条行动说明`
     const last = props.summaries[props.summaries.length - 1]
     if (last) return props.running ? `${last.text}…` : last.text
     return props.running ? '正在执行…' : '无执行记录'
   }
   const counts = {}
+  if (thoughts.length) counts['行动说明'] = thoughts.length
   for (const r of rows) {
     const label = KIND_LABELS[r.kind]
     if (label) counts[label] = (counts[label] || 0) + 1
@@ -698,24 +756,47 @@ function phaseIcon(phase) {
 .process-result-text { min-width: 0; white-space: pre-wrap; word-break: break-word; color: var(--gray-600); }
 .process-result.is-error .process-result-text { color: var(--color-error-700); }
 
-/* ── 思考流：弱化灰字段落 ── */
+/* ── 思考流：弱化灰字，默认收起为单行截断，点击展开全文 ── */
 .process-thought {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 3px 0;
+  padding: 3px 8px;
   margin-left: 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s ease;
 }
+.process-thought:hover { background: var(--gray-25); }
 .process-thought-marker { flex: 0 0 auto; display: inline-flex; padding-top: 3px; color: var(--gray-300); }
 .process-thought-text {
   min-width: 0;
+  flex: 1 1 auto;
   color: var(--gray-400);
   font-size: 11.5px;
   line-height: 1.7;
+  /* 收起态单行截断；展开后完整铺开 */
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   white-space: pre-wrap;
   word-break: break-word;
 }
+.process-thought.is-expanded { cursor: pointer; }
+.process-thought.is-expanded .process-thought-text {
+  display: block;
+  white-space: pre-wrap;
+}
 .process-thought.is-streaming .process-thought-text { color: var(--gray-500); }
+.process-thought-chevron {
+  flex: 0 0 auto;
+  margin-top: 4px;
+  color: var(--gray-300);
+  transition: transform .2s ease;
+}
+.process-thought-chevron.flipped { transform: rotate(-90deg); }
 .process-thought-caret {
   display: inline-block;
   width: 2px;
@@ -762,5 +843,6 @@ function phaseIcon(phase) {
 
 @media (prefers-reduced-motion: reduce) {
   .process-thought-caret { animation: none; }
+  .process-thought-chevron { transition: none; }
 }
 </style>

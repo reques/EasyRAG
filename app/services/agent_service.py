@@ -319,7 +319,9 @@ class AgentService:
             if not content and kind != "answer":
                 return
             ev = {"kind": kind, "stage": stage, "title": title[:80], "content": content}
-            if content:
+            # answer 是逐 token 正文流（正文随 done 整段下发/进气泡），
+            # 只透传 SSE，不落 artifacts —— 落了会在历史回放里每个 token 刷一行"回答"
+            if content and kind != "answer":
                 artifacts.append(ev)
             emit("artifact", stage, title, content, artifact_kind=kind)
             if on_artifact:
