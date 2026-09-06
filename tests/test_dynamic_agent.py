@@ -317,3 +317,113 @@ def test_run_dynamic_agent_token_stream_filters_toolcall_chunks(monkeypatch):
         if e.get("kind") == "answer" and e.get("streaming")
     )
     assert streamed == "答", f"只应透出最终轮正文 token，实际：{streamed!r}"
+
+
+def test_dynamic_streams_question_specific_progress_before_tools_and_observations(monkeypatch):
+    from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+
+    events = []
+    state = [HumanMessage(content="合同的付款期限和违约责任是什么？")]
+
+    def stream(*args, **kwargs):
+        yield "values", {"messages": list(state)}
+        summary = "<progress>先核对合同中的付款期限和违约条款。</progress>"
+        for char in summary:
+            yield "messages", (AIMessageChunk(content=char), {"langgraph_node": "model"})
+        assert "".join(e["content"] for e in events if e["kind"] == "thought") == "先核对合同中的付款期限和违约条款。"
+        assert not any(e["kind"] == "answer" for e in events)
+        state.append(AIMessage(content=summary, tool_calls=[
+            {"name": "kb_search", "args": {"query": "付款期限"}, "id": "c1"},
+            {"name": "kb_search", "args": {"query": "违约责任"}, "id": "c2"},
+        ]))
+        yield "values", {"messages": list(state)}
+        # Batch results, reverse order: both must be preserved and associated by ID.
+        state.extend([
+            ToolMessage(content="未找到违约责任", tool_call_id="c2"),
+            ToolMessage(content="付款期限 30 天", tool_call_id="c1"),
+        ])
+        yield "values", {"messages": list(state)}
+        state.append(AIMessage(content="<progress>付款期限已确认，改用逾期付款补查责任条款。</progress>", tool_calls=[
+            {"name": "kb_search", "args": {"query": "逾期付款"}, "id": "c3"},
+        ]))
+        yield "values", {"messages": list(state)}
+        state.append(ToolMessage(content="违约金按日计算", tool_call_id="c3"))
+        yield "values", {"messages": list(state)}
+        answer = "<answer>付款期限为 30 天，违约金按日计算。</answer>"
+        for char in answer:
+            yield "messages", (AIMessageChunk(content=char), {"langgraph_node": "model"})
+        state.append(AIMessage(content=answer))
+        yield "values", {"messages": list(state)}
+        yield "values", {"messages": list(state)}  # middleware state repeat
+
+    monkeypatch.setattr(dyn, "get_dynamic_agent", lambda: types.SimpleNamespace(stream=stream))
+    result = dyn.run_dynamic_agent("合同的付款期限和违约责任是什么？", on_artifact=events.append)
+    assert result["final_answer"] == "付款期限为 30 天，违约金按日计算。"
+    assert "".join(e["content"] for e in events if e["kind"] == "answer") == result["final_answer"]
+    artifacts = result["artifacts"]
+    assert [a["kind"] for a in artifacts] == ["thought", "tool", "tool", "tool_result", "tool_result", "thought", "tool", "tool_result"]
+    assert [a["tool_call_id"] for a in artifacts if a["kind"] == "tool_result"] == ["c2", "c1", "c3"]
+    assert not any("understand" in s or "动态 Agent" in s for s in result["steps"])
+
+
+def test_dynamic_never_treats_untagged_tool_preamble_as_final_answer(monkeypatch):
+    from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+    from langgraph.errors import GraphRecursionError
+
+    def stream(*args, **kwargs):
+        yield "messages", (AIMessageChunk(content="我会先检索付款条件。"), {})
+        state = [HumanMessage(content="付款条件"), AIMessage(
+            content="我会先检索付款条件。",
+            tool_calls=[{"name": "kb_search", "args": {"query": "付款条件"}, "id": "c1"}],
+        )]
+        yield "values", {"messages": list(state)}
+        state.append(ToolMessage(content="付款期限 30 天", tool_call_id="c1"))
+        yield "values", {"messages": list(state)}
+        raise GraphRecursionError("limit")
+
+    monkeypatch.setattr(dyn, "get_dynamic_agent", lambda: types.SimpleNamespace(stream=stream))
+    events = []
+    result = dyn.run_dynamic_agent("付款条件", on_artifact=events.append)
+    assert result["degraded"]
+    assert "30 天" in result["final_answer"]
+    assert "我会先检索" not in result["final_answer"]
+    assert not any(e["kind"] == "answer" and e["content"] for e in events)
+
+
+def test_dynamic_with_real_create_agent_graph(monkeypatch):
+    """Exercise real messages/values timing and tool execution, without an API request."""
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+
+    class ToolModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            function = tools[0]["function"]
+            assert dyn.SUMMARY_ARG in function["parameters"]["required"]
+            return self
+
+    @tool
+    def calculator(expression: str) -> str:
+        """Calculate the supplied expression."""
+        assert expression == "17 * 23"
+        return "391"
+
+    model = ToolModel(responses=[
+        AIMessage(content="", tool_calls=[
+            {"name": "calculator", "args": {"expression": "17 * 23", dyn.SUMMARY_ARG: "我会计算 17 乘以 23。"}, "id": "calc-1"},
+        ]),
+        AIMessage(content="<answer>17 × 23 = 391。</answer>"),
+    ])
+    agent = create_agent(model=model, tools=[calculator], system_prompt=dyn.DYNAMIC_SYSTEM_PROMPT,
+                         middleware=[dyn.build_action_progress_middleware()])
+    monkeypatch.setattr(dyn, "get_dynamic_agent", lambda: agent)
+    events = []
+    result = dyn.run_dynamic_agent("17 乘以 23", on_artifact=events.append)
+    assert not result["is_fallback"]
+    assert result["final_answer"] == "17 × 23 = 391。"
+    assert "".join(e["content"] for e in events if e["kind"] == "answer") == result["final_answer"]
+    assert [a["kind"] for a in result["artifacts"]] == ["thought", "tool", "tool_result"]
+    assert result["artifacts"][2]["content"] == "391"
+    assert result["artifacts"][0]["content"] == "我会计算 17 乘以 23。"
+    assert dyn.SUMMARY_ARG not in result["artifacts"][1]["content"]

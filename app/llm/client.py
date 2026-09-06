@@ -38,9 +38,8 @@ from app.llm.models import ChatModelProfile
 logger = get_logger(__name__)
 
 
-# Empty-response retry hints. deepseek-v4-flash and other reasoning models can
-# spend the whole token budget on reasoning_content and return an empty content;
-# appending a direct-output instruction makes the retry far more likely to work.
+# Generic retry hints. Structured DeepSeek V4 calls also explicitly disable
+# thinking by default: a prompt nudge alone does not change the API mode.
 _EMPTY_RESPONSE_NUDGE = (
     "Note: your previous reply was empty. Please output your final answer"
     " directly, without any thinking/reasoning text or extra questions."
@@ -98,6 +97,23 @@ class LLMClient:
         kwargs.update(extra)
         return kwargs
 
+    def _json_call_options(self, extra: Dict[str, Any]) -> Dict[str, Any]:
+        """Give structured helper calls a final-output budget, not a thinking budget.
+
+        DeepSeek V4 enables thinking by default, including for json_object.
+        Keep this provider-specific setting out of ordinary chat / ReAct calls,
+        preserve explicit caller overrides, and never mutate shared extra_body.
+        See https://api-docs.deepseek.com/guides/thinking_mode/
+        """
+        options = dict(extra)
+        model = str(options.get("model") or self.model).lower().rsplit("/", 1)[-1]
+        if model.startswith("deepseek-v4"):
+            body = dict(options.get("extra_body") or {})
+            if "thinking" not in body and "reasoning_effort" not in options and "reasoning_effort" not in body:
+                body["thinking"] = {"type": "disabled"}
+                options["extra_body"] = body
+        return options
+
     @staticmethod
     def _nudge_messages(
         messages: List[Dict[str, str]], hint: str
@@ -111,6 +127,7 @@ class LLMClient:
     def _extract_text(response) -> str:
         message = response.choices[0].message
         text = message.content or ""
+        finish_reason = getattr(response.choices[0], "finish_reason", None)
         if not text.strip():
             reasoning = getattr(message, "reasoning_content", None)
             if not reasoning:
@@ -119,12 +136,13 @@ class LLMClient:
                 )
             if reasoning:
                 logger.warning(
-                    "LLM returned empty content with %d chars of reasoning_content; "
-                    "all tokens were likely spent on thinking. Consider raising "
-                    "max_tokens or disabling reasoning for this call.",
+                    "LLM returned empty content | reasoning_chars=%d | "
+                    "finish_reason=%s | completion_tokens=%s; "
+                    "check the thinking mode and output budget for this call.",
                     len(reasoning),
+                    finish_reason,
+                    getattr(getattr(response, "usage", None), "completion_tokens", None),
                 )
-        finish_reason = getattr(response.choices[0], "finish_reason", None)
         if finish_reason == "length" and text:
             logger.warning(
                 "LLM response truncated by token limit! finish_reason=length, "
@@ -172,6 +190,8 @@ class LLMClient:
     def chat_sync(
         self,
         messages: List[Dict[str, str]],
+        *,
+        _retry_empty: bool = True,
         **extra,
     ) -> str:
         """Synchronous chat completion. Returns the assistant text.
@@ -180,7 +200,7 @@ class LLMClient:
         """
         import time as _time
         prompt = list(messages)
-        for attempt in range(2):
+        for attempt in range(2 if _retry_empty else 1):
             try:
                 logger.debug("LLM sync call | model=%s | msgs=%d | attempt=%d",
                              self.model, len(prompt), attempt + 1)
@@ -192,18 +212,19 @@ class LLMClient:
                 if text.strip():
                     return text
                 # 空响应：重试
-                if attempt == 0:
+                if attempt == 0 and _retry_empty:
                     logger.warning("LLM returned empty, retrying after 1.5s backoff")
                     _time.sleep(1.5)
                     # Reasoning models may burn all tokens on reasoning_content and
                     # return empty content; nudge the retry to emit content directly.
                     prompt = self._nudge_messages(prompt, _EMPTY_RESPONSE_NUDGE)
                     continue
-                # 两次都空：记录详细错误信息
-                logger.error(
-                    "LLM returned empty after 2 attempts | model=%s | prompt_len=%d",
-                    self.model, len(str(prompt))
-                )
+                # JSON 调用由外层统一重试；避免空响应和解析失败各重试一次。
+                if _retry_empty:
+                    logger.error(
+                        "LLM returned empty after 2 attempts | model=%s | prompt_len=%d",
+                        self.model, len(str(prompt))
+                    )
                 return text  # 返回空字符串
             except APITimeoutError as exc:
                 raise LLMTimeoutError("LLM request timed out") from exc
@@ -222,12 +243,14 @@ class LLMClient:
         back to plain text), and mirrors the async ``chat_json`` retry behavior:
         on empty/non-JSON output it appends a direct-output instruction and retries.
         """
+        extra = self._json_call_options(extra)
         text = self._chat_with_json_mode_sync(messages, **extra)
         try:
             return self._parse_json(text)
         except LLMOutputParseError:
             logger.warning(
-                "[llm] JSON parse failed, retrying once (head: %s)", text[:80]
+                "[llm] JSON output empty or invalid, retrying once | model=%s | chars=%d",
+                self.model, len(text),
             )
             text = self._chat_with_json_mode_sync(
                 self._nudge_messages(messages, _EMPTY_JSON_NUDGE), **extra
@@ -242,19 +265,21 @@ class LLMClient:
         """``response_format=json_object`` on sync calls; degrade gracefully."""
         try:
             return self.chat_sync(
-                messages, response_format={"type": "json_object"}, **extra
+                messages, _retry_empty=False, response_format={"type": "json_object"}, **extra
             )
         except (BadRequestError, UnprocessableEntityError):
             logger.warning(
                 "[llm] response_format=json_object unsupported (sync), retrying without it"
             )
-            return self.chat_sync(messages, **extra)
+            return self.chat_sync(messages, _retry_empty=False, **extra)
 
     # ── async interface ───────────────────────────────────────────────────
 
     async def chat(
         self,
         messages: List[Dict[str, str]],
+        *,
+        _retry_empty: bool = True,
         **extra,
     ) -> str:
         """Async chat completion. Returns the assistant text.
@@ -268,7 +293,7 @@ class LLMClient:
                 messages=messages, **self._call_kwargs(**extra)
             )
             text = self._extract_text(resp)
-            if text.strip():
+            if text.strip() or not _retry_empty:
                 return text
             logger.warning(
                 "LLM async returned empty, retrying once with direct-output instruction"
@@ -293,12 +318,14 @@ class LLMClient:
         - 默认请求 ``response_format=json_object``（模型/网关不支持时自动降级重试）；
         - JSON 解析失败时整体重试一次（模型偶发输出非 JSON 内容）。
         """
+        extra = self._json_call_options(extra)
         text = await self._chat_with_json_mode(messages, **extra)
         try:
             return self._parse_json(text)
         except LLMOutputParseError:
             logger.warning(
-                "[llm] JSON parse failed, retrying once (head: %s)", text[:80]
+                "[llm] JSON output empty or invalid, retrying once | model=%s | chars=%d",
+                self.model, len(text),
             )
             text = await self._chat_with_json_mode(
                 self._nudge_messages(messages, _EMPTY_JSON_NUDGE), **extra
@@ -313,13 +340,13 @@ class LLMClient:
         """带 ``response_format=json_object`` 请求；不支持时（400/422）去掉参数重试。"""
         try:
             return await self.chat(
-                messages, response_format={"type": "json_object"}, **extra
+                messages, _retry_empty=False, response_format={"type": "json_object"}, **extra
             )
         except (BadRequestError, UnprocessableEntityError):
             logger.warning(
                 "[llm] response_format=json_object unsupported, retrying without it"
             )
-            return await self.chat(messages, **extra)
+            return await self.chat(messages, _retry_empty=False, **extra)
 
     async def chat_stream(
         self,

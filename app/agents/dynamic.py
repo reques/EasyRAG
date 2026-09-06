@@ -20,6 +20,8 @@ import time
 from typing import Any, Dict, List, Optional, Sequence
 
 from app.agents.context import ChatContext
+from app.agents.action_progress import SUMMARY_ARG, build_action_progress_middleware
+from app.agents.response_stream import ProgressEventCollector, ResponseStream, message_text
 from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.tools.registry import get_tool_registry
@@ -47,8 +49,19 @@ DYNAMIC_SYSTEM_PROMPT = """你是一名智能助手，运行在 EasyRAG 企业�
 可用工具：
 {tools_prompt}
 
-工作方式：每一步你选择「调用工具」或「直接给出最终回答」。简单问题一次调用即可回答，
-绝不为简单问题启动检索或工具链等复杂流程。
+工作方式（根据问题和工具观察结果逐步决策）：
+- 简单问题直接输出 <answer>最终回答</answer>，不必写进度，也不必调用工具。
+- 需要工具时，先输出 <progress>一句面向用户的行动说明</progress>，随后正常调用工具。
+  说明要紧扣当前问题，指出要查什么、核对什么；只写简短行动摘要，不输出内部推理过程。
+- 每次工具调用还必须填写 _action_summary 参数，用一句话说明该次行动；
+  若模型只支持工具调用参数而无法同时输出正文，就通过此参数提供行动说明。
+- 收到工具结果后，判断是否足够回答。若还需补充，用新的 <progress> 简述已有发现或
+  缺口及接下来的具体动作，再调用工具。不得预先宣称尚未执行的检索或核验已经完成。
+- 例如用户问合同违约责任，可以说“先查合同中的违约条款，确认适用条件”；检索无结果后
+  可以说“当前资料没有覆盖逾期付款，我会换用该条款的关键词补查”。例子不应机械照搬。
+- 信息足够时直接输出 <answer>最终回答</answer>，保留正常 Markdown 格式。
+  <progress> 和 <answer> 是输出通道标记，不要放在代码块里；不要在标记外添加开场白。
+绝不为简单问题启动检索或工具链，不为了展示进度增加额外调用。
 """
 
 
@@ -97,7 +110,7 @@ def build_dynamic_agent(
         tools=tools,
         system_prompt=prompt,
         # 2026-09-04 Skill 重构：Skill 注入 + 渐进式门控（含 read_skill）
-        middleware=[build_skills_middleware()],
+        middleware=[build_skills_middleware(), build_action_progress_middleware()],
         name="easyrag_dynamic_agent",
     )
     if cacheable:
@@ -163,7 +176,8 @@ def run_dynamic_agent(
 
     start = time.perf_counter()
     steps: List[str] = []
-    artifacts: List[Dict[str, Any]] = []
+    collected = ProgressEventCollector()
+    artifacts = collected.artifacts
 
     def _step(step: str, detail: str = ""):
         steps.append(f"{step}: {detail}")
@@ -174,14 +188,13 @@ def run_dynamic_agent(
             except Exception:
                 pass
 
-    def _artifact(kind: str, stage: str, title: str, content: str):
+    def _artifact(kind: str, stage: str, title: str, content: str, **extra):
         # kind="answer" 且 content 为空 = 正文流结束标记，仍需透出（不落 artifacts）
-        if not content and kind != "answer":
+        if not content and kind != "answer" and "streaming" not in extra:
             return
-        ev = {"kind": kind, "stage": stage, "title": title[:80], "content": content}
-        if content:
-            artifacts.append(ev)
-        emit("artifact", stage, title, content, artifact_kind=kind)
+        ev = {"kind": kind, "stage": stage, "title": title[:80], "content": content, **extra}
+        collected.artifact(ev)
+        emit("artifact", stage, title, content, artifact_kind=kind, **extra)
         if on_artifact:
             try:
                 on_artifact(dict(ev))
@@ -215,66 +228,49 @@ def run_dynamic_agent(
     else:
         messages.append(HumanMessage(content=query))
 
-    _step("understand", "动态 Agent 开始处理…")
-
     sources: List[Dict[str, str]] = []
     tool_names: List[str] = []
     tool_results: List[str] = []
     retrieval_triggered = False
     final_answer = ""
     degraded = False
-    final_state: Optional[Dict[str, Any]] = None
 
-    # ── 最终回答逐 token 流式（2026-09-04）────────────────────────────────
-    # langgraph stream_mode="messages" 吐出每个 LLM token；只有最终轮的纯文本
-    # token 进正文流（工具调用轮的 ai 正文是推理思考，走 _artifact 的 thought）。
-    # streamed_any: 是否流过正文 token（收尾标记用）；回调异常一律吞掉。
-    streamed_any = [False]
+    # 每轮分别解析行动摘要和回答；未声明通道的文本待 tool_calls 确定后再分类。
+    streamed_any = False
+    response_stream = None
+    round_number = 0
+    processed_count = len(messages)
+    calls_by_id: dict[str, str] = {}
 
     def _emit_stream_end() -> None:
         """正文流结束标记（前端把"回答"流标记为完成；未流过则 no-op）。"""
-        if not streamed_any[0]:
+        if not streamed_any:
             return
-        if on_artifact is not None:
-            try:
-                on_artifact({
-                    "kind": "answer", "stage": "generate",
-                    "title": "回答", "content": "",
-                    "streaming": False, "stream_id": "final-answer",
-                })
-            except Exception:
-                pass
-        try:
-            emit("artifact", "generate", "回答", "",
-                 artifact_kind="answer", streaming=False, stream_id="final-answer")
-        except Exception:
-            pass
+        _artifact("answer", "generate", "回答", "", streaming=False, stream_id="final-answer")
 
     def _emit_token(text: str) -> None:
+        nonlocal streamed_any
         if not text:
             return
-        streamed_any[0] = True
-        if on_artifact is not None:
-            try:
-                on_artifact({
-                    "kind": "answer", "stage": "generate",
-                    "title": "回答", "content": text, "streaming": True,
-                    "stream_id": "final-answer",
-                })
-            except Exception:
-                pass
-        # emit 进统一事件流（trace 消费）；不落 artifacts（会与 done 整段重复）
-        try:
-            emit("artifact", "generate", "回答", text,
-                 artifact_kind="answer", streaming=True, stream_id="final-answer")
-        except Exception:
-            pass
+        if not streamed_any:
+            _step("generate", "正在组织回答")
+        streamed_any = True
+        _artifact("answer", "generate", "回答", text, streaming=True, stream_id="final-answer")
+
+    def _new_response_stream() -> ResponseStream:
+        nonlocal round_number
+        round_number += 1
+        stream_id = f"dynamic-progress-{round_number}"
+
+        def _progress(text: str, done: bool):
+            _artifact("thought", "reason", "行动说明", text, id=stream_id, streaming=not done)
+
+        return ResponseStream(_progress, _emit_token)
 
     try:
         with use_authorised_kb_ids(knowledge_base_ids):
             agent = get_dynamic_agent()
-            # stream_mode 混用：values 维持逐轮 step/artifact 解析（原逻辑），
-            # messages 提供 LLM token 级增量（最终回答逐字流式到前端）。
+            # values 提供完整工具调用和观察；messages 按声明的输出通道流式分发。
             for stream_item in agent.stream(
                 {"messages": messages},
                 config={"recursion_limit": recursion_limit or cfg.AGENT_MAX_ITERATIONS},
@@ -288,62 +284,73 @@ def run_dynamic_agent(
                     mode, payload = "values", stream_item
                 if mode == "messages":
                     token_msg, _meta = payload
-                    text = str(getattr(token_msg, "content", "") or "")
-                    if not text:
+                    if getattr(token_msg, "type", "") not in {"ai", "AIMessageChunk"}:
                         continue
-                    # 推理模型的思考 token 与 tool_call 参数增量不是正文：
-                    # tool_call_chunks 非空 = 参数流；reasoning_content = 思考流。
-                    if getattr(token_msg, "tool_call_chunks", None):
+                    if _meta.get("langgraph_node") not in {None, "model"}:
                         continue
-                    if (getattr(token_msg, "additional_kwargs", None) or {}).get(
-                        "reasoning_content"
-                    ):
-                        continue
-                    _emit_token(text)
+                    # 只读公开 content 文本；reasoning_content/工具参数不会进入解析器。
+                    text = message_text(getattr(token_msg, "content", ""))
+                    if text:
+                        if response_stream is None:
+                            response_stream = _new_response_stream()
+                        response_stream.feed(text)
                     continue
                 chunk = payload
-                final_state = chunk
                 msgs = chunk.get("messages") or []
                 if not msgs:
                     continue
-                last = msgs[-1]
-                mtype = getattr(last, "type", "")
-                tc = getattr(last, "tool_calls", None)
-                if tc:
-                    name = tc[0].get("name", "")
-                    tool_names.append(name)
-                    args = tc[0].get("args") or {}
-                    try:
-                        args_text = json.dumps(args, ensure_ascii=False)[:800]
-                    except Exception:
-                        args_text = str(args)[:800]
-                    args_short = " ".join(args_text.split())[:160]
-                    if len(args_text) > 160:
-                        args_short += "…"
-                    _step("tool", f"调用 {name} {args_short}".rstrip())
-                    _artifact("tool", "tool", f"调用 {name}", args_text)
-                    if name == "kb_search":
-                        retrieval_triggered = True
-                elif mtype == "tool":
-                    content = str(getattr(last, "content", "") or "")
-                    tool_results.append(content)
-                    flat = " ".join(content.split())
-                    _step("tool_done", f"工具返回: {flat[:120]}")
-                    _artifact(
-                        "tool_result", "tool", "工具返回",
-                        flat[:300] + ("…" if len(flat) > 300 else ""),
-                    )
-                    # 联网搜索的来源标注 → 前端引用区
-                    try:
-                        from app.tools.web_search_tool import extract_sources
+                new_messages = msgs[processed_count:]
+                processed_count = len(msgs)
+                for last in new_messages:
+                    mtype = getattr(last, "type", "")
+                    tc = getattr(last, "tool_calls", None) or []
+                    if mtype == "ai":
+                        if response_stream is None:
+                            response_stream = _new_response_stream()
+                        content = message_text(getattr(last, "content", ""))
+                        # values-only 模型和未通过 messages 发出的尾部文本都需要补齐。
+                        if content.startswith(response_stream.raw):
+                            response_stream.feed(content[len(response_stream.raw):])
+                        answer = response_stream.finish(tool_calls=bool(tc))
+                        had_progress = bool(response_stream.progress.strip())
+                        response_stream = None
+                        if not tc:
+                            final_answer = answer
+                        for call in tc:
+                            name = call.get("name", "")
+                            call_id = call.get("id", "")
+                            calls_by_id[call_id] = name
+                            tool_names.append(name)
+                            args = dict(call.get("args") or {})
+                            summary = args.pop(SUMMARY_ARG, "")
+                            if not had_progress and isinstance(summary, str) and summary.strip():
+                                _artifact("thought", "reason", "行动说明", summary.strip()[:600])
+                            args_text = json.dumps(args, ensure_ascii=False)[:800]
+                            _step("tool", f"调用 {name}")
+                            _artifact("tool", "tool", f"调用 {name}", args_text, tool_call_id=call_id)
+                            if name == "kb_search":
+                                retrieval_triggered = True
+                    elif mtype == "tool":
+                        content = message_text(getattr(last, "content", ""))
+                        tool_results.append(content)
+                        call_id = getattr(last, "tool_call_id", "")
+                        name = calls_by_id.get(call_id) or getattr(last, "name", "") or "工具"
+                        flat = " ".join(content.split())
+                        _step("tool_done", f"{name} 返回: {flat[:120]}")
+                        _artifact(
+                            "tool_result", "tool", f"{name} 返回",
+                            flat[:300] + ("…" if len(flat) > 300 else ""),
+                            tool_call_id=call_id,
+                            is_error=getattr(last, "status", "") == "error",
+                        )
+                        try:
+                            from app.tools.web_search_tool import extract_sources
 
-                        for s in extract_sources(content) or []:
-                            if s not in sources:
-                                sources.append(s)
-                    except Exception:
-                        pass
-                elif mtype == "ai" and getattr(last, "content", ""):
-                    _step("generate", "动态 Agent 生成回答中…")
+                            for source in extract_sources(content) or []:
+                                if source not in sources:
+                                    sources.append(source)
+                        except Exception:
+                            pass
     except GraphRecursionError:
         degraded = True
         steps.append("dynamic agent hit recursion limit, forced answer from partial state")
@@ -374,16 +381,6 @@ def run_dynamic_agent(
             "error_message": str(exc),
             "elapsed_seconds": round(time.perf_counter() - start, 3),
         }
-
-    # ── 从最终状态提取回答 ────────────────────────────────────────────────
-    msgs = (final_state or {}).get("messages") or []
-    for m in reversed(msgs):
-        content = getattr(m, "content", "") or ""
-        if getattr(m, "type", "") == "ai" and content:
-            final_answer = content if isinstance(content, str) else str(content)
-            break
-    if not final_answer and msgs:
-        final_answer = str(getattr(msgs[-1], "content", "") or "")
 
     if degraded and not final_answer.strip():
         observations = "\n".join(t for t in tool_results if t.strip())

@@ -1153,17 +1153,17 @@ async def send_message_stream(
         # 调工具 / 检索 / 直接回答）；通过安全队列把每一步
         # 状态实时桥接回事件循环，SSE 逐步推给前端。
         from app.agents.progress import ProgressProjector
+        from app.agents.response_stream import ProgressEventCollector
         import queue as _dyn_queue
         _dyn_status_queue: "_dyn_queue.Queue" = _dyn_queue.Queue()
-        _dyn_collected_steps: list[dict] = []
-        _dyn_collected_artifacts: list[dict] = []
+        _dyn_events = ProgressEventCollector()
+        _dyn_collected_steps = _dyn_events.steps
+        _dyn_collected_artifacts = _dyn_events.artifacts
         _dyn_progress: list[dict] = []
         _dyn_projector = ProgressProjector()
 
         def _dyn_status(step: str, detail: str = ""):
-            ev = {"step": step, "detail": detail}
-            _dyn_collected_steps.append(ev)
-            _dyn_status_queue.put({"type": "status", **ev})
+            _dyn_status_queue.put(_dyn_events.step(step, detail))
             try:
                 progress = _dyn_projector.feed(step, detail)
                 if progress:
@@ -1174,8 +1174,8 @@ async def send_message_stream(
                 pass
 
         def _dyn_artifact(ev: dict):
-            _dyn_collected_artifacts.append(dict(ev))
-            _dyn_status_queue.put({"type": "artifact", **ev})
+            # 行动摘要按 id 合并落库；SSE 仍逐段发送。正文不进入过程历史。
+            _dyn_status_queue.put(_dyn_events.artifact(ev))
 
         # 阶段 2：on_step/on_artifact 在 executor 线程经 use_request_context 铺设
         # 前不属于 _chat_ctx（不能跨线程携带 closure），故在 _run_dynamic_in_thread
@@ -1252,11 +1252,8 @@ async def send_message_stream(
         except Exception as exc:
             logger.warning("[chat/stream] dynamic persist failed: %s", exc)
 
-        # 动态 Agent 路径的最终回答不走 LLM 流式（run_dynamic_agent 是整段返回），
-        # 此前没有任何 delta 事件 —— 前端在 done 前始终显示"思考中"，正文一直
-        # 空白，直到刷新从历史里恢复。这里补发一个整段 delta，让回答实时出现。
-        # （deep 路径同理补发，见下。）
-        if answer:
+        # values-only/异常路径兜底；已经流过正文则由 done 校准，避免整段追加两次。
+        if answer and not _dyn_events.answer_streamed:
             yield _sse({"type": "delta", "content": answer})
 
         yield _sse({

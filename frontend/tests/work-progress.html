@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReAct 过程回归检查</title>
+<div id="app"></div>
+<script type="module">
+  import { createApp, h, ref } from 'vue'
+  import WorkProgress from '../src/components/WorkProgress.vue'
+  import { appendWorkArtifact, buildHistoryWorkItems } from '../src/utils/work-progress.js'
+  import '../src/style.css'
+
+  // 本地组件回归夹具；不登录、不写会话、不调用模型或知识库。
+  const events = [
+    { kind: 'thought', id: 'p1', content: '先核对合同中的付款期限', streaming: true },
+    { kind: 'thought', id: 'p1', content: '和违约条款，确认哪些约定适用于逾期付款。', streaming: true },
+    { kind: 'thought', id: 'p1', content: '', streaming: false },
+    { kind: 'tool', title: '调用 kb_search', content: '{"query":"付款期限"}', tool_call_id: 'c1' },
+    { kind: 'tool', title: '调用 kb_search', content: '{"query":"违约责任"}', tool_call_id: 'c2' },
+    { kind: 'tool_result', title: '违约责任检索', content: '未找到相关条款', tool_call_id: 'c2' },
+    { kind: 'tool_result', title: '付款期限检索', content: '付款期限为 30 天', tool_call_id: 'c1' },
+    { kind: 'thought', id: 'p2', content: '付款期限已确认；接下来用“逾期付款”补查违约责任。', streaming: true },
+    { kind: 'thought', id: 'p2', content: '', streaming: false },
+    { kind: 'tool', title: '调用 kb_search', content: '{"query":"逾期付款"}', tool_call_id: 'c3' },
+    { kind: 'tool_result', title: '逾期付款检索', content: '违约金按日计算', tool_call_id: 'c3' },
+  ]
+  createApp({ setup() {
+    const state = ref({ artifacts: [], workItems: [] })
+    const cursor = ref(0)
+    const running = ref(true)
+    const reset = () => { state.value = { artifacts: [], workItems: [] }; cursor.value = 0; running.value = true }
+    const next = () => {
+      if (cursor.value >= events.length) { running.value = false; return }
+      const event = { ...events[cursor.value], stage: 'tool', sequence: cursor.value + 1 }
+      state.value = appendWorkArtifact(state.value.artifacts, state.value.workItems, event, `w${++cursor.value}`)
+    }
+    const finish = () => { while (cursor.value < events.length) next(); running.value = false }
+    const replay = () => {
+      finish()
+      state.value = { ...state.value, workItems: buildHistoryWorkItems({ meta: { intent: 'dynamic', artifacts: state.value.artifacts } }) }
+    }
+    return () => h('main', { style: 'max-width:720px;margin:48px auto;padding:24px' }, [
+      h('h2', '合同的付款期限和违约责任是什么？'),
+      h('p', { style: 'margin:16px 0;color:#6b7280' }, `过程检查 · ${cursor.value}/${events.length}`),
+      h('nav', { style: 'display:flex;gap:12px;margin-bottom:24px' }, [
+        h('button', { onClick: next }, '下一步'), h('button', { onClick: finish }, '完成本轮'),
+        h('button', { onClick: replay }, '回放历史'), h('button', { onClick: reset }, '重新开始'),
+      ]),
+      h('div', { class: 'chat-messages' }, [h(WorkProgress, { items: state.value.workItems, running: running.value })]),
+    ])
+  } }).mount('#app')
+</script>
+</html>

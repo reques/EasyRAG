@@ -591,6 +591,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, nextTick, onActivated, onMounted, onUnmounted } from 'vue'
+import { appendWorkArtifact, buildHistoryWorkItems } from '../utils/work-progress.js'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
@@ -1248,45 +1249,6 @@ function summarizeWorkerOutput(text) {
   return flat.length > 120 ? `${flat.slice(0, 120)}…` : flat
 }
 
-// 历史回放：把 meta 中分开的 steps / artifacts / worker_outputs 重建为
-// 有序执行时间线（WorkProgress 数据源）。DeepAgents 以 artifacts 为链路主干
-// （含推理/工具/检索/委派顺序），单 Agent 以 steps 为阶段骨架。
-function buildHistoryWorkItems(m) {
-  const items = []
-  const arts = m.meta?.artifacts || []
-  const workers = m.meta?.worker_outputs || []
-  const steps = m.meta?.steps || []
-  let wid = 0
-  const deep = m.meta?.intent === 'deepagents'
-  const pushArt = (a) => {
-    if (!a || typeof a !== 'object' || !a.kind) return
-    items.push({
-      t: 'artifact',
-      wid: `h${++wid}`,
-      id: a.id || `h-art-${wid}`,
-      kind: a.kind, stage: a.stage || '', title: a.title || '',
-      content: a.content || '', streaming: false,
-    })
-  }
-  const pushStep = (s) => {
-    if (!s || typeof s !== 'object' || !s.step) return
-    items.push({
-      t: 'step', wid: `h${++wid}`,
-      step: s.step, detail: s.detail || '', task_id: s.task_id || '',
-    })
-  }
-  const first = deep ? arts : steps
-  const second = deep
-    ? [...workers, ...steps]
-    : [...arts, ...workers]
-  for (const a of first) deep ? pushArt(a) : pushStep(a)
-  for (const s of second) {
-    if (s && typeof s === 'object' && s.step) pushStep(s)
-    else pushArt(s)
-  }
-  return items
-}
-
 function taskFromRun(task, agentRuns) {
   const agent = (agentRuns || []).find(item => item.task_id === task.task_id)
   return {
@@ -1545,7 +1507,7 @@ async function send() {
       } else if (ev.type === 'status') {
         // 状态事件：落到当前 assistant 消息的 steps（随消息保留）
         // _ts 记录到达时刻，WorkProgress 用它计算每步耗时与总耗时
-        const st = { step: ev.step, detail: ev.detail, task_id: ev.task_id || '', _ts: Date.now() }
+        const st = { step: ev.step, detail: ev.detail, task_id: ev.task_id || '', sequence: ev.sequence, _ts: Date.now() }
         statusSteps.value.push(st)
         const m = messages.value[msgIndex]
         messages.value[msgIndex] = {
@@ -1584,13 +1546,8 @@ async function send() {
           scrollBottom()
         }
       } else if (ev.type === 'artifact') {
-        // 中间产出实时流：检索片段/工具结果/思维链（thinking 增量按 id 追加）
+        // 行动说明和工具观察保留顺序；同一摘要按 id 合并，即使中途穿插状态事件。
         const am = messages.value[msgIndex]
-        const list = [...(am.artifacts || [])]
-        const wl = [...(am.workItems || [])]
-        const last = list[list.length - 1]
-        const lastWi = wl[wl.length - 1]
-        const artId = ev.id || `art-${Date.now()}-${list.length}`
         // 回答正文流（kind=answer）：逐 token 追加进气泡 content 本身，
         // 与 done 的整段 delta（content: m.content || ev.content 兜底）衔接。
         if (ev.kind === 'answer' || (ev.stage === 'generate' && ev.stream_id === 'final-answer')) {
@@ -1602,31 +1559,9 @@ async function send() {
           }
           return
         }
-        if (ev.streaming && last && ev.id && last.id === ev.id) {
-          last.content += ev.content || ''
-          if (lastWi && lastWi.t === 'artifact' && lastWi.id === ev.id) {
-            lastWi.content += ev.content || ''
-          }
-          messages.value[msgIndex] = { ...am, artifacts: list, workItems: wl }
-        } else if (ev.streaming === false && last && ev.id && last.id === ev.id) {
-          last.streaming = false
-          if (lastWi && lastWi.t === 'artifact' && lastWi.id === ev.id) {
-            lastWi.streaming = false
-            lastWi.streamed = true
-          }
-          messages.value[msgIndex] = { ...am, artifacts: list, workItems: wl }
-        } else {
-          const art = {
-            id: artId,
-            kind: ev.kind || 'info',
-            stage: ev.stage || '',
-            title: ev.title || '',
-            content: ev.content || '',
-            streaming: !!ev.streaming,
-          }
-          list.push(art)
-          wl.push({ t: 'artifact', wid: `w${++_workWid}`, streamed: !!ev.streaming, ...art })
-          messages.value[msgIndex] = { ...am, artifacts: list, workItems: wl }
+        messages.value[msgIndex] = {
+          ...am,
+          ...appendWorkArtifact(am.artifacts || [], am.workItems || [], ev, `w${++_workWid}`),
         }
         scrollBottom()
       } else if (ev.type === 'delta') {
