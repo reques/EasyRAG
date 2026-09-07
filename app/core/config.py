@@ -189,6 +189,10 @@ class Settings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 20   # LangGraph recursion_limit
     MAX_PLAN_STEPS: int = 5          # max sub-tasks per plan
     SESSION_TTL: int = 3600          # seconds to keep session state
+    # 每个 Agent 节点完成后持久化状态，SQLite 文件放在 volumes 下以跨重启保留。
+    # 依赖或文件不可用时运行时自动降级为内存 saver。
+    AGENT_CHECKPOINT_BACKEND: Literal["sqlite", "memory"] = "sqlite"
+    AGENT_CHECKPOINT_PATH: str = "./volumes/checkpoints/agent_state.sqlite3"
     # 执行路径: auto=智能路由(普通问题走 dynamic 动态 Agent，复杂任务走 deepagents) |
     #   dynamic=轻量动态 Agent(模型自行决定工具/检索/直接回答) |
     #   multi=deepagents 的兼容别名(已废弃) | deepagents=DeepAgents 主 Agent+SubAgent

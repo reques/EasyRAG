@@ -37,10 +37,13 @@ def test_build_dynamic_agent_creates_agent(monkeypatch):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    def fake_create(model=None, tools=None, system_prompt=None, name=None, middleware=None):
+    def fake_create(
+        model=None, tools=None, system_prompt=None, name=None, middleware=None,
+        checkpointer=None,
+    ):
         return FakeAgent(
             model=model, tools=tools, system_prompt=system_prompt,
-            name=name, middleware=middleware,
+            name=name, middleware=middleware, checkpointer=checkpointer,
         )
 
     monkeypatch.setattr("langchain.agents.create_agent", fake_create)
@@ -62,6 +65,7 @@ def test_build_dynamic_agent_creates_agent(monkeypatch):
         # 门控 + read_skill 工具都在它上面；漏挂 = Skill 功能静默失效）
         middleware_names = [type(m).__name__ for m in (captured["middleware"] or [])]
         assert "SkillsMiddleware" in middleware_names
+        assert captured["checkpointer"] is not None
     finally:
         dyn._dynamic_agent_cache = None
 
@@ -111,6 +115,39 @@ def test_run_dynamic_agent_parses_direct_answer(monkeypatch):
     assert result["tool_triggered"] is False
     assert result["retrieval_triggered"] is False
     assert result["is_fallback"] is False
+
+
+def test_dynamic_injects_user_facts_and_preserves_system_history(monkeypatch):
+    from langchain_core.messages import AIMessage, SystemMessage
+
+    captured = {}
+
+    def stream(inputs, config=None, stream_mode=None):
+        captured["messages"] = list(inputs["messages"])
+        yield {"messages": list(inputs["messages"]) + [AIMessage(content="完成")]}
+
+    monkeypatch.setattr(
+        "app.memory.context._load_persistent_memory_sync",
+        lambda user_id, query: (["用户喜欢简洁回答"], []),
+    )
+    monkeypatch.setattr(
+        dyn, "get_dynamic_agent", lambda: types.SimpleNamespace(stream=stream)
+    )
+    monkeypatch.setattr(dyn, "cfg", _simple_cfg())
+
+    result = dyn.run_dynamic_agent(
+        "继续",
+        user_id="user-1",
+        history=[{"role": "system", "content": "此前会话摘要"}],
+    )
+
+    system_contents = [
+        message.content for message in captured["messages"]
+        if isinstance(message, SystemMessage)
+    ]
+    assert any("用户喜欢简洁回答" in content for content in system_contents)
+    assert "此前会话摘要" in system_contents
+    assert result["final_answer"] == "完成"
 
 
 def test_run_dynamic_agent_tracks_tool_calls_and_sources(monkeypatch):
@@ -308,7 +345,7 @@ def test_run_dynamic_agent_token_stream_filters_toolcall_chunks(monkeypatch):
     monkeypatch.setattr(dyn, "get_dynamic_agent", lambda: agent)
     monkeypatch.setattr(dyn, "cfg", _simple_cfg())
     received = []
-    result = dyn.run_dynamic_agent(
+    dyn.run_dynamic_agent(
         "q", session_id="s1",
         on_artifact=lambda ev: received.append(ev),
     )

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from app.agents.context import ChatContext
 from app.core.config import get_settings
 from app.core.logger import get_logger
@@ -282,8 +282,16 @@ class AgentService:
         透传给前端。返回与单 Agent 兼容的响应结构。（由 _run_deep 包裹统一事件流。）
         """
         from app.agents.context import ChatContext as _Ctx
+        from app.agents.checkpointing import (
+            abandon_checkpoint_run,
+            begin_checkpoint_run,
+            checkpoint_run_config,
+            checkpoint_turn_message_id,
+            prepare_checkpoint_input,
+        )
         from app.agents.deep.agent import get_main_agent
         from app.agents.events import emit
+        from app.memory.context import assemble_memory_context
         from app.services.knowledge_catalog import format_knowledge_catalog
         from app.services.knowledge_context import use_authorised_kb_ids
         from langgraph.errors import GraphRecursionError
@@ -297,7 +305,6 @@ class AgentService:
         knowledge_base_ids = list(context.knowledge_base_ids)
         knowledge_catalog = list(context.knowledge_catalog)
         user_id = context.user_id
-        image_data = context.image_data
 
         start = time.perf_counter()
         steps: List[str] = []
@@ -305,6 +312,15 @@ class AgentService:
         history = context.history_list()
         if not history and self._sessions is not None:
             history = self._sessions.get_history(session_id)
+        memory_context = assemble_memory_context(
+            history,
+            user_id,
+            query=query,
+            exclude_trailing_user=True,
+        )
+        history = [dict(item) for item in memory_context.history]
+        has_checkpoint = begin_checkpoint_run(session_id, "deep")
+        resumed = False
 
         def _step(step: str, detail: str = ""):
             steps.append(f"{step}: {detail}")
@@ -333,28 +349,21 @@ class AgentService:
         # ── 组装消息（复用 prepare_context 的注入链，保证行为一致）──────
         # 2026-09-04 Skill 重构：Skill 区块由 SkillsMiddleware 按 activated_skills
         # 每轮动态渲染，不在此手工注入（见 app/skills/middleware.py）。
-        messages: List[Dict[str, str]] = []
-        if knowledge_catalog:
+        messages: List[Dict[str, Any]] = []
+        if knowledge_catalog or has_checkpoint:
             messages.append({
                 "role": "system",
-                "content": format_knowledge_catalog(list(knowledge_catalog)),
+                "id": "context:knowledge-catalog",
+                "content": (
+                    format_knowledge_catalog(list(knowledge_catalog))
+                    if knowledge_catalog
+                    else "当前会话没有已授权的知识库。"
+                ),
             })
-        if user_id:
-            try:
-                from app.graph.nodes import _run_in_thread_isolated
-
-                async def _fetch_facts(s):
-                    from app.memory.manager import get_user_facts
-                    return await get_user_facts(s, user_id)
-
-                facts = _run_in_thread_isolated(_fetch_facts)
-                if facts:
-                    messages.append({
-                        "role": "system",
-                        "content": "关于这位用户的已知信息：\n" + "\n".join(f"- {f}" for f in facts),
-                    })
-            except Exception as exc:
-                logger.warning("[run_deep] user facts inject failed: %s", exc)
+        messages.extend(memory_context.as_dict_messages(
+            include_history=not has_checkpoint,
+            replace_empty_facts=has_checkpoint,
+        ))
 
         # 先向流式客户端报告研究规划，再进入可能较慢的知识库检索，避免
         # 深度研究启动后长时间没有任何高层进度反馈。
@@ -385,6 +394,7 @@ class AgentService:
                 if _kb_context:
                     messages.append({
                         "role": "system",
+                        "id": "context:retrieval",
                         "content": (
                             "以下是知识库检索到的相关内容（回答时优先采用，并标注来源）：\n"
                             + _kb_context
@@ -402,6 +412,12 @@ class AgentService:
                             )
                 else:
                     _step("retrieve_done", "知识库无相关内容")
+                    if has_checkpoint:
+                        messages.append({
+                            "role": "system",
+                            "id": "context:retrieval",
+                            "content": "本轮知识库检索没有找到相关内容。",
+                        })
                 for _s in _kb_result.sources:
                     if _s not in sources:
                         sources.append(_s)
@@ -409,12 +425,16 @@ class AgentService:
                 logger.warning("[run_deep] kb retrieval failed: %s", exc)
                 _step("retrieve_done", f"检索失败: {str(exc)[:50]}")
 
-        messages.extend(history)
-        messages.append({"role": "user", "content": query})
+        messages.append({
+            "role": "user",
+            "content": query,
+            "id": checkpoint_turn_message_id(
+                session_id, query, history, context.input_message_id
+            ),
+        })
 
         # 请求级知识库授权：作用域内 kb_search 工具（含 task 委派的 SubAgent）
         # 都能读取当前用户授权范围，避免越权；contextvars 对同线程同步调用链可见
-        from app.services.knowledge_context import use_authorised_kb_ids
         # S3 步骤透传：task 工具读取该观察者，把子 Agent 中间步骤透传 SSE
         from app.agents.deep.observe import use_task_observers
 
@@ -423,6 +443,15 @@ class AgentService:
             use_task_observers(_step, _artifact),
         ):
             agent = get_main_agent()
+            run_config = checkpoint_run_config(
+                session_id, "deep", cfg.DEEP_MAIN_RECURSION_LIMIT
+            )
+            graph_input, _processed_count, resumed = prepare_checkpoint_input(
+                agent,
+                run_config,
+                messages,
+                resume=context.resume_checkpoint,
+            )
             tool_called: Optional[str] = None
             final_state: Optional[Dict[str, Any]] = None
             recursion_hit = False
@@ -437,8 +466,8 @@ class AgentService:
                 # (mode, payload)；测试 fake 可能直接产出 values chunk（旧契约），
                 # 一并兼容。
                 for stream_item in agent.stream(
-                    {"messages": messages},
-                    config={"recursion_limit": cfg.DEEP_MAIN_RECURSION_LIMIT},
+                    graph_input,
+                    config=run_config,
                     stream_mode=["values", "messages"],
                 ):
                     if isinstance(stream_item, tuple) and len(stream_item) == 2:
@@ -510,6 +539,7 @@ class AgentService:
                         # 无 tool_calls 的 AI 消息 = 最终回答（循环末尾），不是中间思考
                         _step("generate", "主 Agent 生成回答中...")
             except GraphRecursionError:
+                abandon_checkpoint_run(session_id, "deep")
                 # S4 超限降级（2026-08-26，阶段 1）：基于已积累的 messages 强制收尾，
                 # 对齐单 Agent 图的 "max iterations, forced answer"——不再直接返回错误。
                 # final_state 保留了最后一个成功 chunk（部分执行状态）。
@@ -517,6 +547,7 @@ class AgentService:
                 steps.append("deep agent hit recursion limit, forced answer from partial state")
                 _step("fallback", "已达推理步数上限，基于已有信息收尾")
             except Exception as exc:
+                abandon_checkpoint_run(session_id, "deep")
                 logger.error("[run_deep] deep agent error: %s", exc)
                 steps.append(f"deep agent error: {exc}")
                 _step("fallback", "深度研究执行失败，准备返回可用结果")
@@ -538,6 +569,7 @@ class AgentService:
                     "sources": sources,
                     "is_fallback": True,
                     "degraded": False,
+                    "resumed": resumed,
                     "error_message": str(exc),
                     "elapsed_seconds": round(time.perf_counter() - start, 3),
                 }
@@ -596,6 +628,7 @@ class AgentService:
             "sources": sources,
             "is_fallback": False,
             "degraded": recursion_hit,
+            "resumed": resumed,
             "elapsed_seconds": round(time.perf_counter() - start, 3),
         }
 
@@ -630,6 +663,7 @@ class AgentService:
             ANSWER_NO_CONTEXT, ANSWER_WITH_CONTEXT,
             ANSWER_WITH_ENHANCED_CONTEXT,
         )
+        from app.memory.context import assemble_memory_context
 
         context = context or ChatContext(thread_id="default")
         if legacy:
@@ -641,15 +675,6 @@ class AgentService:
         image_data = context.image_data
         on_step = context.on_step
         on_artifact = context.on_artifact
-        from app.graph.nodes import (
-            intent_recognition, knowledge_retrieval, tool_selection, tool_execution,
-            rewrite_query_with_history,
-        )
-        from app.prompts.templates import (
-            ANSWER_NO_CONTEXT, ANSWER_WITH_CONTEXT,
-            ANSWER_WITH_ENHANCED_CONTEXT,
-        )
-
         def _step(step: str, detail: str = ""):
             if on_step:
                 try:
@@ -795,8 +820,16 @@ class AgentService:
             _gen_model = _active_profile.name if _active_profile else ""
         except Exception:
             _gen_model = ""
-        _step("generate", f"生成回答中..." + (f"（{_gen_model}）" if _gen_model else ""))
-        messages = [{"role": t["role"], "content": t["content"]} for t in history]
+        _step("generate", "生成回答中..." + (f"（{_gen_model}）" if _gen_model else ""))
+        memory_context = assemble_memory_context(
+            history,
+            user_id,
+            query=resolved_query,
+            exclude_trailing_user=True,
+        )
+        history = [dict(item) for item in memory_context.history]
+        state["history"] = history
+        messages = memory_context.as_dict_messages()
 
         from app.services.knowledge_catalog import format_knowledge_catalog
         # Skill 指令注入（2026-09-04 重构）：prepare_context 是**非 Agent 路径**
@@ -813,26 +846,6 @@ class AgentService:
             "role": "system",
             "content": format_knowledge_catalog(state.get("knowledge_catalog")),
         })
-
-        # 语义记忆注入: 跨会话用户事实（偏好/身份/历史结论）
-        # prepare_context 在 executor 线程跑, DB 查询走隔离 engine 避免连接池污染
-        user_id = state.get("user_id")
-        if user_id:
-            try:
-                from app.graph.nodes import _run_in_thread_isolated
-
-                async def _fetch_facts(s):
-                    from app.memory.manager import get_user_facts
-                    return await get_user_facts(s, user_id)
-
-                facts = _run_in_thread_isolated(_fetch_facts)
-                if facts:
-                    messages.insert(0, {
-                        "role": "system",
-                        "content": "关于这位用户的已知信息：\n" + "\n".join(f"- {f}" for f in facts),
-                    })
-            except Exception as exc:
-                logger.warning("[prepare_context] user facts inject failed: %s", exc)
 
         knowledge_blocks = state.get("knowledge_blocks")
         if knowledge_blocks and docs:

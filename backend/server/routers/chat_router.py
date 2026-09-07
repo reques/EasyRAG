@@ -32,6 +32,7 @@ from backend.services.chat_service import (
     list_user_conversations,
     get_conversation,
     generate_conversation_title,
+    schedule_memory_evaluation,
 )
 from backend.storage.postgres.manager import get_session
 from backend.server.utils.auth_middleware import get_current_user
@@ -85,6 +86,8 @@ class ChatRequest(BaseModel):
     # 2026-08-25：图片输入。前端粘贴/上传后以 data URL（data:image/...;base64,...）
     # 形式随对话请求发出。后端据此裁决：所选模型支持多模态则直读，否则 OCR 转文字。
     image: Optional[str] = Field(default=None, description="图片 data URL，可选")
+    resume_checkpoint: bool = False
+    """复用最后一条用户消息，从 pending LangGraph checkpoint 继续执行。"""
 
 
 class ChatResponse(BaseModel):
@@ -98,6 +101,13 @@ class ChatResponse(BaseModel):
     sources: list[dict] = []
     elapsed_seconds: float = 0.0
     skills: list[dict] = Field(default_factory=list)
+    resumed: bool = False
+
+
+class ResumeCheckpointRequest(BaseModel):
+    model_id: Optional[str] = Field(default=None, max_length=64)
+    skill_ids: list[str] = Field(default_factory=list, max_length=32)
+    deep_research: Optional[bool] = None
 
 
 class ConversationSummary(BaseModel):
@@ -135,6 +145,18 @@ class CustomModelCreate(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     # 是否支持图片（多模态）输入：用户添加自定义模型时勾选
     supports_vision: bool = False
+
+
+def _last_resumable_user_message(conv, query: str):
+    """校验恢复请求必须对应当前会话最后一条尚未回答的用户消息。"""
+    messages = list(conv.messages or [])
+    last = messages[-1] if messages else None
+    if last is None or last.role != "user" or last.content != query:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="最后一条用户消息与恢复请求不一致，无法恢复工作记忆",
+        )
+    return last
 
 
 class ChatSkillInfo(BaseModel):
@@ -643,16 +665,23 @@ async def send_message(
             conv_id = conv.id
             is_new = True
 
-        # 保存用户消息
-        user_message = await add_message(
-            session,
-            conv_id,
-            "user",
-            req.query,
-            image=req.image,
-            metadata_json=json.dumps({"skills": skill_payload}, ensure_ascii=False),
-        )
-        await session.commit()
+        # 恢复请求复用崩溃前已经落库的用户消息；普通请求创建新消息。
+        if req.resume_checkpoint:
+            user_message = _last_resumable_user_message(conv, req.query)
+        else:
+            user_message = await add_message(
+                session,
+                conv_id,
+                "user",
+                req.query,
+                image=req.image,
+                metadata_json=json.dumps({
+                    "skills": skill_payload,
+                    "model_id": selected_model.id,
+                    "deep_research": req.deep_research,
+                }, ensure_ascii=False),
+            )
+            await session.commit()
         user_message_id = user_message.id
 
         # 加载对话历史（情景记忆压缩：有 summary 时 = 摘要+最近N轮，否则完整历史）
@@ -705,6 +734,8 @@ async def send_message(
             knowledge_catalog=knowledge_catalog,
             image_data=image_for_context,
             history=db_history,          # ← 关键：传入 DB 历史
+            input_message_id=str(user_message_id),
+            resume_checkpoint=req.resume_checkpoint,
         )
         with use_request_context(chat_ctx, skill_definitions=selected_skills, model_profile=selected_model):
             result = agent.run(query=effective_query, context=chat_ctx)
@@ -795,6 +826,19 @@ async def send_message(
         }, ensure_ascii=False)
         await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
         await session.commit()
+    schedule_memory_evaluation(
+        current_user.id,
+        req.query,
+        conv_id,
+        assistant_content=answer,
+        source_message_id=user_message_id,
+        execution={
+            "mode": result.get("intent", ""),
+            "steps": result.get("steps", []),
+            "artifacts": result.get("artifacts", []),
+            "error": result.get("error_message"),
+        },
+    )
 
     return ChatResponse(
         conversation_id=str(conv_id),
@@ -807,6 +851,7 @@ async def send_message(
         sources=result.get("sources", []),
         elapsed_seconds=elapsed,
         skills=skill_payload,
+        resumed=bool(result.get("resumed")),
     )
 
 
@@ -828,8 +873,6 @@ async def send_message_stream(
     """
     import asyncio
     from fastapi.responses import StreamingResponse
-
-    start = time.perf_counter()
 
     async with get_session() as session:
         selected_model = await _resolve_request_model(
@@ -854,15 +897,22 @@ async def send_message_stream(
             conv_id = conv.id
             is_new = True
 
-        user_message = await add_message(
-            session,
-            conv_id,
-            "user",
-            req.query,
-            image=req.image,
-            metadata_json=json.dumps({"skills": skill_payload}, ensure_ascii=False),
-        )
-        await session.commit()
+        if req.resume_checkpoint:
+            user_message = _last_resumable_user_message(conv, req.query)
+        else:
+            user_message = await add_message(
+                session,
+                conv_id,
+                "user",
+                req.query,
+                image=req.image,
+                metadata_json=json.dumps({
+                    "skills": skill_payload,
+                    "model_id": selected_model.id,
+                    "deep_research": req.deep_research,
+                }, ensure_ascii=False),
+            )
+            await session.commit()
         user_message_id = user_message.id
         db_history = await get_compressed_history(session, conv_id)
         knowledge_base_ids, knowledge_catalog = await _load_knowledge_scope(
@@ -935,11 +985,12 @@ async def send_message_stream(
         knowledge_catalog=knowledge_catalog,
         image_data=image_for_context,
         history=db_history,          # ← 关键：传入 DB 历史
+        input_message_id=str(user_message_id),
+        resume_checkpoint=req.resume_checkpoint,
     )
 
     async def _event_gen_inner():
         from app.services.agent_service import get_agent_service
-        from app.llm.client import get_llm_client
 
         loop = asyncio.get_event_loop()
         agent = get_agent_service()
@@ -956,6 +1007,7 @@ async def send_message_stream(
             "model_name": selected_model.name,
             "skills": skill_payload,
             "agent_mode": agent_mode,
+            "resume_requested": req.resume_checkpoint,
         })
 
         if use_deep:
@@ -1108,6 +1160,19 @@ async def send_message_stream(
                         metadata_json=json.dumps(meta, ensure_ascii=False)
                     )
                     await session.commit()
+                schedule_memory_evaluation(
+                    current_user.id,
+                    req.query,
+                    conv_id,
+                    assistant_content=answer,
+                    source_message_id=user_message_id,
+                    execution={
+                        "mode": "deepagents",
+                        "steps": step_objs,
+                        "artifacts": deep_artifacts,
+                        "error": deep_result.get("error_message"),
+                    },
+                )
             except Exception as exc:
                 logger.warning("[chat/stream] deepagents persist failed: %s", exc)
 
@@ -1127,6 +1192,7 @@ async def send_message_stream(
                 "artifacts": deep_artifacts,
                 "progress_summaries": deep_progress_summaries,
                 "elapsed_seconds": elapsed,
+                "resumed": bool(deep_result.get("resumed")),
                 "model_id": selected_model.id,
                 "model_name": selected_model.name,
                 "skills": skill_payload,
@@ -1249,6 +1315,19 @@ async def send_message_stream(
                 }, ensure_ascii=False)
                 await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
                 await session.commit()
+            schedule_memory_evaluation(
+                current_user.id,
+                req.query,
+                conv_id,
+                assistant_content=answer,
+                source_message_id=user_message_id,
+                execution={
+                    "mode": "dynamic",
+                    "steps": _dyn_collected_steps,
+                    "artifacts": _dyn_collected_artifacts,
+                    "error": dyn_result.get("error_message"),
+                },
+            )
         except Exception as exc:
             logger.warning("[chat/stream] dynamic persist failed: %s", exc)
 
@@ -1267,6 +1346,7 @@ async def send_message_stream(
             "artifacts": _dyn_collected_artifacts,
             "progress_summaries": _dyn_progress,
             "elapsed_seconds": elapsed,
+            "resumed": bool(dyn_result.get("resumed")),
             "model_id": selected_model.id,
             "model_name": selected_model.name,
             "skills": skill_payload,
@@ -1322,6 +1402,9 @@ async def send_message_stream(
                             else:
                                 await delete_message(session, user_message_id)
                                 await session.commit()
+                        from app.agents.checkpointing import delete_checkpoint_thread
+
+                        delete_checkpoint_thread(str(conv_id))
                         logger.info(
                             "[chat/stream] turn terminated, not persisted "
                             "(conv=%s new=%s)", conv_id, is_new
@@ -1346,6 +1429,53 @@ async def send_message_stream(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.post("/conversations/{conversation_id}/resume")
+async def resume_conversation_checkpoint(
+    conversation_id: uuid.UUID,
+    req: ResumeCheckpointRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """恢复最后一条尚未完成的用户消息，从 pending checkpoint 继续 SSE。"""
+    async with get_session() as session:
+        conv = await get_conversation(session, conversation_id)
+        if not conv or conv.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        messages = list(conv.messages or [])
+        last = messages[-1] if messages else None
+        if last is None or last.role != "user":
+            raise HTTPException(
+                status_code=409,
+                detail="当前会话没有尚未完成的用户消息",
+            )
+        query = last.content
+        image = last.image
+        try:
+            saved_request = json.loads(last.metadata_json or "{}")
+        except (TypeError, ValueError):
+            saved_request = {}
+        saved_skills = saved_request.get("skills") or []
+        saved_skill_ids = [
+            str(item.get("id") or "") for item in saved_skills
+            if isinstance(item, dict) and item.get("id")
+        ]
+    return await send_message_stream(
+        ChatRequest(
+            query=query,
+            conversation_id=str(conversation_id),
+            model_id=req.model_id or saved_request.get("model_id"),
+            skill_ids=req.skill_ids or saved_skill_ids,
+            deep_research=(
+                req.deep_research
+                if req.deep_research is not None
+                else bool(saved_request.get("deep_research"))
+            ),
+            image=image,
+            resume_checkpoint=True,
+        ),
+        current_user,
     )
 
 

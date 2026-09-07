@@ -1933,6 +1933,39 @@ body.task-panel-resizing {
   font-weight: 500;
 }
 
+.resume-work-button {
+  margin-top: 10px;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  background: var(--gray-25);
+  color: var(--gray-700);
+  font-size: 12px;
+}
+.resume-work-button:hover { background: var(--gray-100); color: var(--gray-950); }
+.checkpoint-recovery-card {
+  margin: 10px 0 18px 48px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  color: var(--gray-700);
+  font-size: 12px;
+  background: var(--gray-25);
+}
+.checkpoint-recovery-card button {
+  margin-left: auto;
+  border: 0;
+  color: var(--main-700);
+  background: transparent;
+  font-weight: 600;
+}
+
 /* ── Knowledge Base ────────────────────────────────────────────────────── */
 .knowledge-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .kb-grid {

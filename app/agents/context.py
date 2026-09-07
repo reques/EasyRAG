@@ -84,6 +84,12 @@ class ChatContext(BaseContext):
     query: str = ""
     """用户本次提问原文（路由层裁决后的 effective_query）。"""
 
+    input_message_id: Optional[str] = None
+    """本轮已落库用户消息 ID，用作 checkpoint 中的稳定消息标识。"""
+
+    resume_checkpoint: bool = False
+    """从当前会话未完成的 LangGraph checkpoint 继续执行。"""
+
     knowledge_catalog: Tuple[Dict[str, Any], ...] = ()
     """知识库目录展示元数据（owner-scoped 查询随授权一起加载）。"""
 
@@ -113,6 +119,8 @@ class ChatContext(BaseContext):
         knowledge_catalog: Optional[Sequence[Dict[str, Any]]] = None,
         image_data: Optional[str] = None,
         history: Optional[Sequence[Dict[str, Any]]] = None,
+        input_message_id: Optional[str] = None,
+        resume_checkpoint: bool = False,
         on_step: Optional[StepCallback] = None,
         on_artifact: Optional[ArtifactCallback] = None,
     ) -> "ChatContext":
@@ -132,6 +140,8 @@ class ChatContext(BaseContext):
             knowledge_catalog=tuple(knowledge_catalog or ()),
             image_data=image_data,
             history=tuple(history or ()),
+            input_message_id=(str(input_message_id) if input_message_id else None),
+            resume_checkpoint=resume_checkpoint,
             on_step=on_step,
             on_artifact=on_artifact,
             query=query,
