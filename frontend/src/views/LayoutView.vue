@@ -25,6 +25,10 @@
           <LibraryBig :size="17" class="nav-icon" />
           <span class="nav-text">知识库</span>
         </router-link>
+        <router-link to="/memory" class="nav-item" title="记忆管理" active-class="active">
+          <BrainCircuit :size="17" class="nav-icon" />
+          <span class="nav-text">记忆</span>
+        </router-link>
       </nav>
 
       <!-- 最近对话列表 -->
@@ -123,7 +127,7 @@
 <script setup>
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Asterisk, Clock3, LibraryBig, LogOut, MessagesSquare, MoreHorizontal, Plus, Sparkles, Trash2 } from 'lucide-vue-next'
+import { Asterisk, BrainCircuit, Clock3, LibraryBig, LogOut, MessagesSquare, MoreHorizontal, Plus, Sparkles, Trash2 } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
 import api from '../api'
@@ -134,10 +138,14 @@ const router = useRouter()
 const route = useRoute()
 const appVersion = ref('v0.3.1')
 
-const pageTitle = computed(() => route.path === '/knowledge' ? '知识空间' : '智能对话')
-const pageDescription = computed(() => route.path === '/knowledge'
-  ? '组织资料、检索与评估'
-  : '从你的知识与工具中获得答案')
+const pageTitle = computed(() => ({
+  '/knowledge': '知识空间',
+  '/memory': '记忆管理',
+}[route.path] || '智能对话'))
+const pageDescription = computed(() => ({
+  '/knowledge': '组织资料、检索与评估',
+  '/memory': '查看和修正 Agent 记住的信息',
+}[route.path] || '从你的知识与工具中获得答案'))
 
 const avatarLetter = computed(() => (auth.username || '?').slice(0, 1).toUpperCase())
 

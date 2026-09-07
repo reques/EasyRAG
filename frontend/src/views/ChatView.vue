@@ -77,6 +77,14 @@
               <Square :size="11" /> 已停止生成 · 本轮对话未保存
             </div>
             <div class="message-text" v-html="renderContent(msg.content)"></div>
+            <button
+              v-if="msg.role === 'assistant' && msg.recoverable && i === messages.length - 1 && conversationId && !sending"
+              type="button"
+              class="resume-work-button"
+              @click="send({ resume: true })"
+            >
+              <RotateCcw :size="13" /> 从断点恢复
+            </button>
             <div v-if="msg.role === 'user' && msg.image" class="message-image">
               <img :src="msg.image" alt="用户上传图片" />
             </div>
@@ -119,6 +127,12 @@
           </div>
           </div>
         </template>
+
+        <div v-if="hasVisibleUnfinishedTurn" class="checkpoint-recovery-card">
+          <RotateCcw :size="16" />
+          <span>检测到上次未完成的任务</span>
+          <button type="button" @click="send({ resume: true })">从断点恢复</button>
+        </div>
 
         <!-- 思考中占位：还没有任何状态步骤时的等待气泡（有步骤后由消息内面板接管） -->
         <div v-if="sending && statusSteps.length === 0 && !lastAssistantHasContent && !lastAssistantHasProgress" class="message assistant">
@@ -617,6 +631,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RotateCcw,
   Search,
   Settings2,
   ShieldCheck,
@@ -695,6 +710,12 @@ let currentAbort = null
 // 深度研究开关：选中后本轮请求走 DeepAgents 工作流（deep_research=true）
 const deepResearch = ref(false)
 const conversationId = ref(null)
+const hasVisibleUnfinishedTurn = computed(() => (
+  !sending.value
+  && !!conversationId.value
+  && messages.value.length > 0
+  && messages.value[messages.value.length - 1]?.role === 'user'
+))
 const msgContainer = ref(null)
 const inputEl = ref(null)
 const copiedMessageIndex = ref(null)
@@ -1335,6 +1356,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         image: m.image || null,
         sources: m.meta?.sources || [],
         skills: m.meta?.skills || [],
+        deepResearch: !!m.meta?.deep_research,
         meta: (m.meta?.agent_mode || m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.skills?.length) ? {
           agentMode: m.meta?.agent_mode || '',
           intent: m.meta?.intent || '',
@@ -1383,28 +1405,41 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   nextTick(() => inputEl.value?.focus())
 }, { immediate: true })
 
-async function send() {
-  const text = input.value.trim()
+async function send(options = {}) {
+  const resumeCheckpoint = options?.resume === true
+  const lastMessage = messages.value[messages.value.length - 1]
+  const resumeUser = resumeCheckpoint
+    ? (lastMessage?.role === 'user' ? lastMessage : messages.value[messages.value.length - 2])
+    : null
+  const text = resumeCheckpoint ? (resumeUser?.content || '').trim() : input.value.trim()
   if (!text || sending.value) return
-  const requestSkills = selectedSkills.value.map(skill => ({ id: skill.id, name: skill.name }))
-  input.value = ''
-  resetInputHeight()
+  const requestSkills = resumeCheckpoint
+    ? (resumeUser?.skills || [])
+    : selectedSkills.value.map(skill => ({ id: skill.id, name: skill.name }))
+  if (resumeCheckpoint) {
+    if (lastMessage?.role === 'assistant') messages.value.pop()
+  } else {
+    input.value = ''
+    resetInputHeight()
+  }
   sending.value = true
   // 停止生成：终止当前对话轮（被终止的一轮后端不保存到记录）
   currentAbort = new AbortController()
 
-  const userTs = Date.now()
-  messages.value.push({
-    role: 'user',
-    content: text,
-    image: attachedImage.value || null,
-    skills: requestSkills,
-    deepResearch: deepResearch.value,
-    time: formatTime(new Date(userTs).toISOString()),
-    ts: userTs,
-    uid: nextMsgUid(),
-    enter: true, // 新消息进入动画（历史加载不带动画）
-  })
+  if (!resumeCheckpoint) {
+    const userTs = Date.now()
+    messages.value.push({
+      role: 'user',
+      content: text,
+      image: attachedImage.value || null,
+      skills: requestSkills,
+      deepResearch: deepResearch.value,
+      time: formatTime(new Date(userTs).toISOString()),
+      ts: userTs,
+      uid: nextMsgUid(),
+      enter: true, // 新消息进入动画（历史加载不带动画）
+    })
+  }
   // 先插入一条空的 assistant 消息, 流式 delta 逐步填充其 content
   // steps: 本轮思考过程（绑定在这条消息上，不会被下一轮覆盖）
   // 注意: assistant 的时间戳独立取"当前时刻"——不要复用 user 的 ts,
@@ -1443,14 +1478,21 @@ async function send() {
   taskPanel.value = emptyTaskPanel()
 
   try {
-    await api.streamChat('/chat/stream', {
+    const streamUrl = resumeCheckpoint
+      ? `/chat/conversations/${conversationId.value}/resume`
+      : '/chat/stream'
+    const requestBody = resumeCheckpoint ? {
+      skill_ids: requestSkills.map(skill => skill.id),
+      deep_research: !!resumeUser?.deepResearch,
+    } : {
       query: text,
       conversation_id: conversationId.value,
       model_id: selectedModelId.value,
       skill_ids: requestSkills.map(skill => skill.id),
       deep_research: deepResearch.value,
       image: attachedImage.value || undefined,
-    }, (ev) => {
+    }
+    await api.streamChat(streamUrl, requestBody, (ev) => {
       // 占位消息已不在列表（会话已切换/历史已重载）→ 本轮事件全部丢弃
       if (!messages.value.some(x => x.uid === asstUid)) return
       if (ev.type === 'conversation_id') {
@@ -1648,6 +1690,7 @@ async function send() {
         stopped: aborted || undefined,
         stepsLoading: false,
         error: aborted ? undefined : e.message,
+        recoverable: aborted ? undefined : true,
       }
     }
     // 动态 Agent / 单 Agent 无 delta 时，回答只在 done 一次性下发。

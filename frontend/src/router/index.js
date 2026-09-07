@@ -21,6 +21,7 @@ const routes = [
     children: [
       { path: '', name: 'Chat', component: () => import('../views/ChatView.vue') },
       { path: 'knowledge', name: 'Knowledge', component: () => import('../views/KnowledgeView.vue') },
+      { path: 'memory', name: 'Memory', component: () => import('../views/MemoryView.vue') },
     ],
   },
 ]

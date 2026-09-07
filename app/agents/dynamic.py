@@ -89,6 +89,7 @@ def build_dynamic_agent(
     """
     from langchain.agents import create_agent
 
+    from app.agents.checkpointing import get_agent_checkpointer
     from app.agents.deep.llm import get_langchain_model
     from app.agents.deep.tools import registry_to_langchain_tools
     from app.skills.middleware import build_skills_middleware
@@ -111,6 +112,7 @@ def build_dynamic_agent(
         system_prompt=prompt,
         # 2026-09-04 Skill 重构：Skill 注入 + 渐进式门控（含 read_skill）
         middleware=[build_skills_middleware(), build_action_progress_middleware()],
+        checkpointer=get_agent_checkpointer(),
         name="easyrag_dynamic_agent",
     )
     if cacheable:
@@ -144,10 +146,18 @@ def run_dynamic_agent(
     on_step: 可选回调 fn(step, detail)，供流式端点实时透出阶段状态。
     on_artifact: 可选回调 fn(dict)，透出工具调用/工具返回等中间产出。
     """
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    from langchain_core.messages import HumanMessage, SystemMessage
     from langgraph.errors import GraphRecursionError
 
+    from app.agents.checkpointing import (
+        abandon_checkpoint_run,
+        begin_checkpoint_run,
+        checkpoint_run_config,
+        checkpoint_turn_message_id,
+        prepare_checkpoint_input,
+    )
     from app.agents.events import emit
+    from app.memory.context import assemble_memory_context
     from app.services.knowledge_catalog import format_knowledge_catalog
     from app.services.knowledge_context import use_authorised_kb_ids
 
@@ -205,28 +215,45 @@ def run_dynamic_agent(
     # 2026-09-04 Skill 重构：Skill 区块不再在这里手工拼 —— SkillsMiddleware
     # 每轮按 activated_skills 动态渲染（未激活给摘要行、已激活给正文），
     # 手工注入会与之重复且拿不到激活状态。
+    memory_context = assemble_memory_context(
+        history,
+        context.user_id,
+        query=query,
+        exclude_trailing_user=True,
+    )
+    history = [dict(item) for item in memory_context.history]
+    has_checkpoint = begin_checkpoint_run(session_id, "dynamic")
     messages: List[Any] = []
-    if knowledge_catalog:
+    if knowledge_catalog or has_checkpoint:
         messages.append(
-            SystemMessage(content=format_knowledge_catalog(list(knowledge_catalog)))
+            SystemMessage(
+                content=(
+                    format_knowledge_catalog(list(knowledge_catalog))
+                    if knowledge_catalog
+                    else "当前会话没有已授权的知识库。"
+                ),
+                id="context:knowledge-catalog",
+            )
         )
-    for t in history:
-        content = str(t.get("content") or "")
-        if t.get("role") == "user":
-            messages.append(HumanMessage(content=content))
-        else:
-            messages.append(AIMessage(content=content))
+    messages.extend(memory_context.as_langchain_messages(
+        include_history=not has_checkpoint,
+        replace_empty_facts=has_checkpoint,
+    ))
+    turn_message_id = checkpoint_turn_message_id(
+        session_id, query, history, context.input_message_id
+    )
     if image_data:
         messages.append(
             HumanMessage(
                 content=[
                     {"type": "text", "text": query},
                     {"type": "image_url", "image_url": {"url": image_data}},
-                ]
+                ],
+                id=turn_message_id,
             )
         )
     else:
-        messages.append(HumanMessage(content=query))
+        messages.append(HumanMessage(content=query, id=turn_message_id))
 
     sources: List[Dict[str, str]] = []
     tool_names: List[str] = []
@@ -240,6 +267,7 @@ def run_dynamic_agent(
     response_stream = None
     round_number = 0
     processed_count = len(messages)
+    resumed = False
     calls_by_id: dict[str, str] = {}
 
     def _emit_stream_end() -> None:
@@ -270,10 +298,21 @@ def run_dynamic_agent(
     try:
         with use_authorised_kb_ids(knowledge_base_ids):
             agent = get_dynamic_agent()
+            run_config = checkpoint_run_config(
+                session_id,
+                "dynamic",
+                recursion_limit or cfg.AGENT_MAX_ITERATIONS,
+            )
+            graph_input, processed_count, resumed = prepare_checkpoint_input(
+                agent,
+                run_config,
+                messages,
+                resume=context.resume_checkpoint,
+            )
             # values 提供完整工具调用和观察；messages 按声明的输出通道流式分发。
             for stream_item in agent.stream(
-                {"messages": messages},
-                config={"recursion_limit": recursion_limit or cfg.AGENT_MAX_ITERATIONS},
+                graph_input,
+                config=run_config,
                 stream_mode=["values", "messages"],
             ):
                 # 真实 langgraph：stream_mode 为列表时产出 (mode, payload)；
@@ -352,10 +391,12 @@ def run_dynamic_agent(
                         except Exception:
                             pass
     except GraphRecursionError:
+        abandon_checkpoint_run(session_id, "dynamic")
         degraded = True
         steps.append("dynamic agent hit recursion limit, forced answer from partial state")
         _step("fallback", "已达推理步数上限，基于已有信息收尾")
     except Exception as exc:
+        abandon_checkpoint_run(session_id, "dynamic")
         logger.error("[dynamic] agent error: %s", exc)
         steps.append(f"dynamic agent error: {exc}")
         _step("fallback", f"执行失败: {str(exc)[:80]}")
@@ -378,6 +419,7 @@ def run_dynamic_agent(
             "sources": sources,
             "is_fallback": True,
             "degraded": False,
+            "resumed": resumed,
             "error_message": str(exc),
             "elapsed_seconds": round(time.perf_counter() - start, 3),
         }
@@ -412,6 +454,7 @@ def run_dynamic_agent(
         "sources": sources,
         "is_fallback": degraded,
         "degraded": degraded,
+        "resumed": resumed,
         "error_message": None,
         "elapsed_seconds": round(time.perf_counter() - start, 3),
     }

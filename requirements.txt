@@ -70,6 +70,7 @@ neo4j-graphrag>=1.0.0
 # langgraph 1.x：与 langchain 1.x 配套（2026-09-02 阶段 1 同步升级；
 # 原 0.6.x 线随 single 固定管线退役一并离开）
 langgraph>=1.0,<2.0
+langgraph-checkpoint-sqlite>=3.0,<4.0
 
 # ── MCP 外部工具（阶段 3B；app/tools/mcp/ 管理器与 demo_server 均依赖）───────────
 mcp==2.0.0

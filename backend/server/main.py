@@ -107,7 +107,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     # 确保 MinIO bucket
     try:
-        from backend.storage.minio.client import get_minio_client, ensure_bucket
+        from backend.storage.minio.client import ensure_bucket
         ensure_bucket()
         logger.info("[lifespan] minio bucket ensured")
     except Exception as exc:
@@ -238,12 +238,14 @@ def create_app() -> FastAPI:
     from backend.server.routers.chat_router import router as chat_router
     from backend.server.routers.knowledge_router import router as kb_router
     from backend.server.routers.evaluation_router import router as eval_router
+    from backend.server.routers.memory_router import router as memory_router
     from backend.server.routers.mcp_router import router as mcp_router
 
     application.include_router(auth_router, prefix="/api/v1")
     application.include_router(chat_router, prefix="/api/v1")
     application.include_router(kb_router, prefix="/api/v1")
     application.include_router(eval_router, prefix="/api/v1")
+    application.include_router(memory_router, prefix="/api/v1")
     application.include_router(mcp_router, prefix="/api/v1")
 
     # =========================================================================

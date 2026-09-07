@@ -231,7 +231,7 @@ async def init_db() -> None:
     from backend.storage.postgres.models_user import User, Department  # noqa: F401
     from backend.storage.postgres.models_conversation import Conversation, Message  # noqa: F401
     from backend.storage.postgres.models_knowledge import KnowledgeBase, KnowledgeFile  # noqa: F401
-    from backend.storage.postgres.models_memory import UserFact  # noqa: F401
+    from backend.storage.postgres.models_memory import EpisodeMemory, UserFact  # noqa: F401
     from backend.storage.postgres.models_model_config import CustomModelConfig  # noqa: F401
     from backend.storage.postgres.models_skill_config import CustomSkillConfig  # noqa: F401
     from backend.storage.postgres.models_agent_run import Run, Task, AgentRun  # noqa: F401

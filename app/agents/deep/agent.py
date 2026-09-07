@@ -13,9 +13,8 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
-from app.agents.deep.subagents import subagents_prompt
 from app.agents.deep.task_tool import build_task_tool, task_system_prompt
 from app.agents.deep.tools import registry_to_langchain_tools
 from app.core.config import get_settings
@@ -74,6 +73,7 @@ def build_main_agent(
     """
     from langchain.agents import create_agent
 
+    from app.agents.checkpointing import get_agent_checkpointer
     from app.agents.deep.llm import get_langchain_model
     from app.agents.deep.planner import build_revise_plan_tool, build_spawn_tasks_tool
     from app.skills.middleware import build_skills_middleware
@@ -104,6 +104,9 @@ def build_main_agent(
         # SkillsMiddleware 接管（含 read_skill 工具），取代此前在
         # agent_service / dynamic / graph.nodes 三处的手工 prompt 拼接。
         middleware=[build_skills_middleware()],
+        # 显式注入模型用于测试/离线一次性执行，调用方通常没有 thread_id；
+        # 生产缓存实例才挂持久 checkpointer。
+        checkpointer=get_agent_checkpointer() if cacheable else None,
         name="easyrag_deep_agent",
     )
     if cacheable:
@@ -118,8 +121,6 @@ def get_main_agent():
 
 def get_agent_tool_names() -> List[str]:
     """主 Agent 可用工具名（含 task），供状态展示/日志。"""
-    from app.agents.deep.subagents import get_subagents
-
     names = [t.name for t in registry_to_langchain_tools()]
     names.append("task")
     names.append("spawn_tasks")
