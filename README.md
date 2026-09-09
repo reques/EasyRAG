@@ -30,49 +30,68 @@
 
 ### 前置依赖
 
-- Python 3.11+ / Node.js 18+ / Docker Desktop
-- Ollama（本地 embedding，可选——也可配置远程 embedding API）
+- Docker Desktop（或安装了 Docker Compose 插件的 Docker Engine）
 
-### 1. 启动基础设施
+### 1. 配置
 
 ```bash
 git clone https://github.com/reques/EasyRAG.git
 cd EasyRAG
-docker compose up -d        # etcd + milvus + minio-s3 + postgres + redis + minio
+cp .env.template .env
 ```
 
-### 2. 配置环境
+在 `.env` 中至少配置一个可用的对话模型 API Key，例如
+`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`MINIMAX_API_KEY` 或
+`ZHIPUAI_API_KEY`。
+
+### 2. 一键启动
 
 ```bash
-cp .env.template .env       # 按需修改 LLM / embedding / 各服务连接
+docker compose up --build -d
 ```
 
-关键配置项见 `.env.template` 注释：`DEEPSEEK_API_KEY`/`LLM_BASE_URL`/`LLM_MODEL`（默认生成模型）、`EMBEDDING_TYPE`（ollama/api）、`TAVILY_API_KEY`（联网搜索）、`GRAPH_ENABLED`（图谱抽取）、`JWT_SECRET_KEY`（生产务必修改）。
+该命令会统一启动：
 
-### 3. 初始化数据库
+- Vue 前端（Nginx）
+- FastAPI 后端和内嵌文件索引 Worker
+- PostgreSQL、Redis、应用 MinIO
+- Milvus、etcd 和 Milvus 专用 MinIO
+- Neo4j
+- Ollama，并在首次启动时自动拉取 `bge-m3` 嵌入模型
+
+服务健康后打开 [http://localhost:5173](http://localhost:5173)。后端接口和
+Swagger 分别位于 `http://localhost:8000/api/v1` 和
+[http://localhost:8000/docs](http://localhost:8000/docs)。
+
+首次启动需要下载 Docker 镜像、Python 依赖和嵌入模型，耗时较长。查看状态和日志：
 
 ```bash
-pip install -r requirements.txt
-python -c "import asyncio; from backend.storage.postgres.manager import init_db; asyncio.run(init_db())"
+docker compose ps
+docker compose logs -f backend frontend
 ```
 
-### 4. 启动后端
+停止服务：
 
 ```bash
-uvicorn backend.server.main:app --host 0.0.0.0 --port 8001 --reload
+docker compose down
 ```
 
-### 5. 启动前端
+业务数据保存在项目的 `volumes/` 目录和 `easyrag-ollama-data` Docker
+volume 中，普通的 `docker compose down` 不会删除。
+
+需要 NVIDIA GPU 版 MinerU 时，在 `.env` 中设置
+`DOCKER_MINERU_ENABLED=true`，然后执行：
 
 ```bash
-cd frontend
-npm install
-npm run dev                 # http://localhost:5173, /api 代理到 :8000
+docker compose --profile mineru up --build -d
 ```
 
-打开 http://localhost:5173 注册账号，创建知识库，上传文档，开始对话。对话页可切换 MiniMax / DeepSeek / Qwen / GLM 模型、添加自定义 OpenAI 兼容模型、选择或创建 Skill。
+端口可通过 `.env` 中的 `FRONTEND_PORT`、`BACKEND_PORT`、
+`POSTGRES_EXPOSE_PORT` 等变量修改。完整选项见 `.env.template`。
 
-> 可选：MinerU 文档解析服务旁路部署见 [deploy/mineru/README.md](deploy/mineru/README.md)；Ragas 评估环境见 [docs/ragas-evaluator.md](docs/ragas-evaluator.md)。
+> 本地源码开发仍可分别运行 Uvicorn 和 Vite。MinerU 详细说明见
+> [deploy/mineru/README.md](deploy/mineru/README.md)；Ragas 评估环境见
+> [docs/ragas-evaluator.md](docs/ragas-evaluator.md)。
 
 ---
 

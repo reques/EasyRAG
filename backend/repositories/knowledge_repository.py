@@ -121,6 +121,22 @@ class KnowledgeFileRepository(BaseRepository[KnowledgeFile]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_by_filenames_for_kb(
+        self,
+        kb_id: uuid.UUID,
+        filenames: Sequence[str],
+    ) -> Sequence[KnowledgeFile]:
+        """Resolve import-friendly filenames without leaving the KB scope."""
+        cleaned = [name.strip() for name in filenames if name.strip()]
+        if not cleaned:
+            return []
+        stmt = select(KnowledgeFile).where(
+            KnowledgeFile.knowledge_base_id == kb_id,
+            KnowledgeFile.filename.in_(cleaned),
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
     async def list_by_ids_for_kb(
         self,
         kb_id: uuid.UUID,

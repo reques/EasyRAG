@@ -1,135 +1,271 @@
 name: easyrag
 
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  networks:
+    - easyrag
+
 services:
-  # =========================================================================
-  # Milvus 向量数据库
-  # =========================================================================
-  etcd:
-    container_name: milvus-etcd
-    image: quay.io/coreos/etcd:v3.5.18
-    restart: unless-stopped
-    environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
-    volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd
-    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
-    healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-
-  minio-s3:
-    container_name: milvus-minio
-    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
-    restart: unless-stopped
-    environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+  frontend:
+    <<: *service-defaults
+    container_name: easyrag-frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: easyrag/frontend:local
     ports:
-      - "9001:9001"
-      - "9000:9000"
-    volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
-    command: minio server /minio_data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-
-  milvus:
-    container_name: milvus-standalone
-    image: milvusdb/milvus:v2.5.14
-    restart: unless-stopped
-    command: ["milvus", "run", "standalone"]
-    security_opt:
-    - seccomp:unconfined
-    environment:
-      ETCD_ENDPOINTS: etcd:2379
-      MINIO_ADDRESS: minio-s3:9000
-    volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/milvus:/var/lib/milvus
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
-      interval: 30s
-      start_period: 90s
-      timeout: 20s
-      retries: 3
-    ports:
-      - "19530:19530"
+      - "${FRONTEND_PORT:-5173}:80"
     depends_on:
-      - "etcd"
-      - "minio-s3"
-
-  # =========================================================================
-  # PostgreSQL — 用户/会话/知识库元数据
-  # =========================================================================
-  postgres:
-    container_name: easyrag-postgres
-    image: pgvector/pgvector:pg17
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: easyrag
-      POSTGRES_PASSWORD: easyrag_secret
-      POSTGRES_DB: easyrag
-    ports:
-      - "5432:5432"
-    volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/postgres:/var/lib/postgresql/data
+      backend:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U easyrag"]
-      interval: 10s
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/health"]
+      interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
-  # =========================================================================
-  # Redis — 缓存 / 会话 / 任务队列
-  # =========================================================================
-  redis:
-    container_name: easyrag-redis
-    image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
+  backend:
+    <<: *service-defaults
+    container_name: easyrag-backend
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PYTORCH_INDEX_URL: ${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    image: easyrag/backend:local
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MINIO_ENDPOINT: minio:9000
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      NEO4J_URI: bolt://neo4j:7687
+      EMBEDDING_TYPE: ${DOCKER_EMBEDDING_TYPE:-ollama}
+      OLLAMA_BASE_URL: http://ollama:11434
+      MINERU_ENABLED: ${DOCKER_MINERU_ENABLED:-false}
+      MINERU_API_URL: http://mineru-api:8000
+      EMBEDDING_MODEL_PATH: /app/models/bge-m3
+      MILVUS_DATA_DIR: /app/volumes/milvus-metadata
+      CHROMA_PERSIST_DIR: /app/volumes/chroma
+      SKILLS_BUILTIN_DIR: /app/skills
+      SKILLS_PERSONAL_DIR: /app/volumes/user-skills
+      AGENT_CHECKPOINT_PATH: /app/volumes/checkpoints/agent_state.sqlite3
+      NO_PROXY: localhost,127.0.0.1,::1,postgres,redis,minio,milvus,etcd,minio-s3,neo4j,ollama,mineru-api,host.docker.internal
+      no_proxy: localhost,127.0.0.1,::1,postgres,redis,minio,milvus,etcd,minio-s3,neo4j,ollama,mineru-api,host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/redis:/data
+      - ./volumes:/app/volumes
+      - ./models:/app/models:ro
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  postgres:
+    <<: *service-defaults
+    container_name: easyrag-postgres
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-easyrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-easyrag_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-easyrag}
+    ports:
+      - "${POSTGRES_EXPOSE_PORT:-5432}:5432"
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-easyrag} -d ${POSTGRES_DB:-easyrag}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    <<: *service-defaults
+    container_name: easyrag-redis
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_EXPOSE_PORT:-6379}:6379"
+    volumes:
+      - ./volumes/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  # =========================================================================
-  # MinIO — 文件/文档对象存储
-  # =========================================================================
+  ollama:
+    <<: *service-defaults
+    container_name: easyrag-ollama
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h
+    ports:
+      - "${OLLAMA_EXPOSE_PORT:-11435}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: easyrag-ollama-init
+    restart: "no"
+    networks:
+      - easyrag
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "${OLLAMA_EMBED_MODEL:-bge-m3:latest}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+
   minio:
+    <<: *service-defaults
     container_name: easyrag-minio
     image: minio/minio:latest
-    restart: unless-stopped
     command: server /data --console-address ":9090"
     environment:
-      MINIO_ROOT_USER: easyrag_admin
-      MINIO_ROOT_PASSWORD: easyrag_minio_secret
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-easyrag_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-easyrag_minio_secret}
     ports:
-      - "9090:9090"    # Console
-      - "9091:9000"    # API (映射到 9091 避免与 Milvus 的 minio 冲突)
+      - "${MINIO_CONSOLE_PORT:-9090}:9090"
+      - "${MINIO_API_PORT:-9091}:9000"
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio_app:/data
+      - ./volumes/minio_app:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
-  # =========================================================================
-  # MinerU — 独立文档解析服务 (GPU)
-  # 原 deploy/mineru/compose.yml 已合并到此文件
-  # =========================================================================
+  etcd:
+    <<: *service-defaults
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.18
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command:
+      - etcd
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd
+    volumes:
+      - ./volumes/etcd:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio-s3:
+    <<: *service-defaults
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
+    command: minio server /minio_data --console-address ":9001"
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - ./volumes/minio:/minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  milvus:
+    <<: *service-defaults
+    container_name: milvus-standalone
+    image: milvusdb/milvus:v2.5.14
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio-s3:9000
+    volumes:
+      - ./volumes/milvus:/var/lib/milvus
+    ports:
+      - "${MILVUS_EXPOSE_PORT:-19530}:19530"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio-s3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9091/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  neo4j:
+    <<: *service-defaults
+    container_name: easyrag-neo4j
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: "${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-easyrag_neo4j_secret}"
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - ./volumes/neo4j/data:/data
+      - ./volumes/neo4j/logs:/logs
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - cypher-shell -a bolt://127.0.0.1:7687 -u '${NEO4J_USER:-neo4j}' -p '${NEO4J_PASSWORD:-easyrag_neo4j_secret}' 'RETURN 1;' >/dev/null 2>&1 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  # Optional GPU parser. Enable it with:
+  # docker compose --profile mineru up --build -d
   mineru-api:
+    <<: *service-defaults
+    profiles: ["mineru"]
     container_name: easyrag-mineru-api
     build:
       context: ./deploy/mineru
@@ -137,7 +273,6 @@ services:
         MINERU_VERSION: ${MINERU_VERSION:-3.4.4}
         MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-modelscope}
     image: easyrag/mineru-pipeline:${MINERU_VERSION:-3.4.4}
-    restart: unless-stopped
     ports:
       - "127.0.0.1:${MINERU_PORT:-18000}:8000"
     environment:
@@ -156,19 +291,21 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["0"]
+              device_ids: ["${MINERU_GPU_DEVICE_ID:-0}"]
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/health > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/health >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
-      start_period: 30s
       retries: 10
+      start_period: 30s
 
 volumes:
   mineru-output:
     name: easyrag-mineru-output
+  ollama-data:
+    name: easyrag-ollama-data
 
 networks:
-  default:
+  easyrag:
     name: easyrag

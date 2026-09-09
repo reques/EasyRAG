@@ -6,7 +6,17 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -256,10 +266,29 @@ class EvaluationRun(Base):
         UUID(as_uuid=True), ForeignKey('evaluation_datasets.id', ondelete='SET NULL'),
         nullable=True, index=True
     )
+    benchmark_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "evaluation_benchmarks.id",
+            ondelete="SET NULL",
+            name="fk_evaluation_runs_benchmark_id",
+        ),
+        nullable=True,
+        index=True,
+    )
+    benchmark_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 运行时冻结的基准、数据集版本、指标和检索参数。即使基准随后更新或删除，
+    # 历史报告仍能解释当时究竟执行了什么。
+    benchmark_snapshot_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     knowledge_base_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="SET NULL"),
         nullable=True, index=True
     )
+    status: Mapped[str] = mapped_column(
+        String(16), default="completed", server_default="completed",
+        nullable=False, index=True
+    )
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     top_k: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     query_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     hit_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
@@ -269,6 +298,23 @@ class EvaluationRun(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_evaluation_runs_status",
+        ),
+        CheckConstraint(
+            "benchmark_version IS NULL OR benchmark_version >= 1",
+            name="ck_evaluation_runs_benchmark_version",
+        ),
     )
 
 
@@ -292,6 +338,65 @@ class EvaluationDataset(Base):
     case_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class EvaluationBenchmark(Base):
+    """可复用的 RAG 评估标准。
+
+    基准只保存对数据集的引用和执行规则；具体运行必须把这些字段连同数据集
+    版本冻结到 ``EvaluationRun.benchmark_snapshot_json``，避免历史结果漂移。
+    ``metrics_json`` 与 ``retrieval_config_json`` 在服务层通过 Pydantic 校验，
+    这里保留 JSON 文本以延续现有 evaluation_* 表的持久化约定。
+    """
+
+    __tablename__ = "evaluation_benchmarks"
+    __table_args__ = (
+        UniqueConstraint(
+            "knowledge_base_id",
+            "name",
+            name="uq_evaluation_benchmarks_kb_name",
+        ),
+        CheckConstraint("version >= 1", name="ck_evaluation_benchmarks_version"),
+        CheckConstraint(
+            "status IN ('draft', 'active', 'archived')",
+            name="ck_evaluation_benchmarks_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("evaluation_datasets.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    metrics_json: Mapped[str] = mapped_column(Text, nullable=False)
+    retrieval_config_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), default="active", server_default="active",
+        nullable=False, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

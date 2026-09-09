@@ -140,6 +140,8 @@ async def save_dataset(
 async def list_datasets(
     session: AsyncSession,
     owner_id: uuid.UUID,
+    *,
+    knowledge_base_id: Optional[uuid.UUID] = None,
 ) -> List[EvaluationDataset]:
     """列出当前用户有权访问的评测数据集（按更新时间倒序）。"""
     stmt = (
@@ -149,8 +151,12 @@ async def list_datasets(
             EvaluationDataset.knowledge_base_id == KnowledgeBase.id,
         )
         .where(KnowledgeBase.owner_id == owner_id)
-        .order_by(EvaluationDataset.updated_at.desc())
     )
+    if knowledge_base_id is not None:
+        stmt = stmt.where(
+            EvaluationDataset.knowledge_base_id == knowledge_base_id
+        )
+    stmt = stmt.order_by(EvaluationDataset.updated_at.desc())
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -183,3 +189,31 @@ async def delete_dataset(
         return False
     await session.delete(dataset)
     return True
+
+
+async def update_dataset(
+    session: AsyncSession,
+    dataset: EvaluationDataset,
+    *,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    cases: Optional[List[EvaluationCase]] = None,
+) -> bool:
+    """Explicitly update one dataset and advance its version on real changes."""
+    changed = False
+    if name is not None and dataset.name != name:
+        dataset.name = name
+        changed = True
+    if description is not None and dataset.description != description:
+        dataset.description = description
+        changed = True
+    if cases is not None:
+        payload = json.dumps(serialize_cases(cases), ensure_ascii=False)
+        if dataset.cases_json != payload:
+            dataset.cases_json = payload
+            dataset.case_count = len(cases)
+            changed = True
+    if changed:
+        dataset.version += 1
+    await session.flush()
+    return changed

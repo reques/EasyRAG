@@ -44,6 +44,12 @@ def _args_digest(kwargs: Dict[str, Any]) -> str:
     return text[:400]
 
 
+def _result_digest(result: Any) -> str:
+    """Keep tool output inspectable without making one trace event unbounded."""
+    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+    return text[:2000] + ("…" if len(text) > 2000 else "")
+
+
 def _accepts_progress_callback(fn: Callable[..., Any]) -> bool:
     """工具函数是否接受 ``progress_callback`` 参数（显式声明或 **kwargs）。"""
     try:
@@ -280,7 +286,7 @@ class ToolRegistry:
                 try:
                     result = self._execute(tool, kwargs, progress_cb)
                     emit(
-                        "tool", "tool_end", f"{name} 完成", "",
+                        "tool", "tool_end", f"{name} 完成", _result_digest(result),
                         tool=name,
                         elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
                     )

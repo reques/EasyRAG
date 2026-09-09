@@ -48,7 +48,7 @@ async def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if "id_context_recall" in metric_names:
         scorers["id_context_recall"] = IDBasedContextRecall()
 
-    llm_metric_names = {"context_precision", "context_recall"} & set(metric_names)
+    llm_metric_names = {"context_precision", "context_recall", "faithfulness"} & set(metric_names)
     if llm_metric_names:
         api_key = str(llm_config.get("api_key") or "")
         model = str(llm_config.get("model") or "")
@@ -60,7 +60,7 @@ async def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         try:
             from openai import AsyncOpenAI
             from ragas.llms import llm_factory
-            from ragas.metrics.collections import ContextPrecision, ContextRecall
+            from ragas.metrics.collections import ContextPrecision, ContextRecall, Faithfulness
 
             client_kwargs = {"api_key": api_key}
             if llm_config.get("base_url"):
@@ -70,6 +70,8 @@ async def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 scorers["context_precision"] = ContextPrecision(llm=llm)
             if "context_recall" in llm_metric_names:
                 scorers["context_recall"] = ContextRecall(llm=llm)
+            if "faithfulness" in llm_metric_names:
+                scorers["faithfulness"] = Faithfulness(llm=llm)
         except Exception as exc:
             return {
                 "status": "failed",
@@ -103,13 +105,15 @@ async def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
                     )
                     result = await scorer.single_turn_ascore(sample)
                 else:
-                    result = await scorer.ascore(
-                        user_input=raw_sample.get("question", ""),
-                        reference=raw_sample.get("reference_answer", ""),
-                        retrieved_contexts=raw_sample.get(
-                            "retrieved_contexts", []
-                        ),
-                    )
+                    kwargs = {
+                        "user_input": raw_sample.get("question", ""),
+                        "retrieved_contexts": raw_sample.get("retrieved_contexts", []),
+                    }
+                    if name == "faithfulness":
+                        kwargs["response"] = raw_sample.get("response", "")
+                    else:
+                        kwargs["reference"] = raw_sample.get("reference_answer", "")
+                    result = await scorer.ascore(**kwargs)
                 value = _score_value(result)
                 scores[name] = value
                 if value is not None:

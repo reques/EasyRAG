@@ -224,20 +224,34 @@ class AgentService:
         """
         from app.agents.context import ChatContext as _Ctx
         from app.agents.dynamic import run_dynamic_agent
-        from app.agents.events import use_request_trace
+        from app.agents.events import emit, use_request_trace
 
         context = context or _Ctx(thread_id="default")
         if legacy:
             context = _merge_legacy_kwargs(context, legacy)
         with use_request_trace(session_id=context.thread_id) as request_trace:
-            history = list(context.history)
-            if not history and self._sessions is not None:
-                history = self._sessions.get_history(context.thread_id)
-            context.history = tuple(history)
-            result = run_dynamic_agent(
-                query,
-                context=context,
+            emit(
+                "agent", "agent_start", "Agent 开始执行", query,
+                input=query, mode="dynamic", model_id=context.model_id,
             )
+            try:
+                history = list(context.history)
+                if not history and self._sessions is not None:
+                    history = self._sessions.get_history(context.thread_id)
+                context.history = tuple(history)
+                result = run_dynamic_agent(query, context=context)
+                emit(
+                    "agent", "final_response", "Agent 执行完成",
+                    result.get("final_answer", ""),
+                    output=result.get("final_answer", ""),
+                    status="completed",
+                    mode="dynamic",
+                    elapsed_ms=round(float(result.get("elapsed_seconds", 0)) * 1000, 1),
+                    token_usage=result.get("token_usage") or {},
+                )
+            except Exception as exc:
+                emit("error", "error", "Agent 执行失败", str(exc), output=str(exc), status="error")
+                raise
             result["trace_id"] = request_trace.trace.trace_id
             result["events"] = list(request_trace.events)
             return result
@@ -256,13 +270,30 @@ class AgentService:
         持久化在后续阶段接入）。SSE 步骤透传行为不变（见 _run_deep_inner）。
         """
         from app.agents.context import ChatContext as _Ctx
-        from app.agents.events import use_request_trace
+        from app.agents.events import emit, use_request_trace
 
         context = context or _Ctx(thread_id="default")
         if legacy:
             context = _merge_legacy_kwargs(context, legacy)
         with use_request_trace(session_id=context.thread_id) as request_trace:
-            result = self._run_deep_inner(query, context=context)
+            emit(
+                "agent", "agent_start", "Agent 开始执行", query,
+                input=query, mode="deepagents", model_id=context.model_id,
+            )
+            try:
+                result = self._run_deep_inner(query, context=context)
+                emit(
+                    "agent", "final_response", "Agent 执行完成",
+                    result.get("final_answer", ""),
+                    output=result.get("final_answer", ""),
+                    status="completed",
+                    mode="deepagents",
+                    elapsed_ms=round(float(result.get("elapsed_seconds", 0)) * 1000, 1),
+                    token_usage=result.get("token_usage") or {},
+                )
+            except Exception as exc:
+                emit("error", "error", "Agent 执行失败", str(exc), output=str(exc), status="error")
+                raise
             result["trace_id"] = request_trace.trace.trace_id
             result["events"] = list(request_trace.events)
             return result
@@ -290,7 +321,7 @@ class AgentService:
             prepare_checkpoint_input,
         )
         from app.agents.deep.agent import get_main_agent
-        from app.agents.events import emit
+        from app.agents.events import add_token_usage, emit
         from app.memory.context import assemble_memory_context
         from app.services.knowledge_catalog import format_knowledge_catalog
         from app.services.knowledge_context import use_authorised_kb_ids
@@ -339,7 +370,10 @@ class AgentService:
             # 只透传 SSE，不落 artifacts —— 落了会在历史回放里每个 token 刷一行"回答"
             if content and kind != "answer":
                 artifacts.append(ev)
-            emit("artifact", stage, title, content, artifact_kind=kind)
+            # Token chunks remain on the response stream; the request wrapper
+            # records one complete final_response node after the graph ends.
+            if kind != "answer":
+                emit("artifact", stage, title, content, artifact_kind=kind)
             if on_artifact:
                 try:
                     on_artifact(dict(ev))
@@ -373,6 +407,8 @@ class AgentService:
         #    系统提示却声称"检索结果会作为上下文提供"——知识库问答退化成纯 LLM
         #    生成。此处与 prepare_context 对齐：生成前检索并注入上下文）────
         sources: List[Dict[str, str]] = []
+        token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        usage_message_ids: set[str] = set()
         if knowledge_base_ids:
             try:
                 from app.rag.enhanced_retriever import (
@@ -497,6 +533,8 @@ class AgentService:
                         continue
                     last = msgs[-1]
                     mtype = getattr(last, "type", "")
+                    if mtype == "ai":
+                        add_token_usage(token_usage, last, usage_message_ids)
                     tc = getattr(last, "tool_calls", None)
                     if tc:
                         # ReAct 一步：AI 消息正文 = 这一步的推理思考，tool_calls = 动作
@@ -572,6 +610,7 @@ class AgentService:
                     "resumed": resumed,
                     "error_message": str(exc),
                     "elapsed_seconds": round(time.perf_counter() - start, 3),
+                    "token_usage": token_usage,
                 }
 
         msgs = (final_state or {}).get("messages") or []
@@ -630,6 +669,7 @@ class AgentService:
             "degraded": recursion_hit,
             "resumed": resumed,
             "elapsed_seconds": round(time.perf_counter() - start, 3),
+            "token_usage": token_usage,
         }
 
     # ── 流式路径 (SSE) ────────────────────────────────────────────────────

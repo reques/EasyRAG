@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -22,6 +23,7 @@ from backend.services.ragas_evaluator import (
     RagasEvaluationSample,
     get_ragas_evaluator,
 )
+from backend.services.evaluation_generation import generate_evaluation_answer
 from backend.services.retrieval_metrics import calculate_ranking_metrics
 from backend.storage.postgres.models_knowledge import EvaluationRun, KnowledgeBase
 
@@ -66,7 +68,12 @@ def _file_chunk_ids(
     ]
 
 
-def build_run_metadata(k: int) -> Dict[str, Any]:
+def build_run_metadata(
+    k: int,
+    *,
+    score_threshold: Optional[float] = None,
+    retrieval_mode: str = "basic",
+) -> Dict[str, Any]:
     """运行环境快照 - 保证实验结果可复现、可横向对比。
 
     记录 embedding / 分块策略 / 检索参数，便于识别指标变化来自哪个环节。
@@ -79,8 +86,13 @@ def build_run_metadata(k: int) -> Dict[str, Any]:
             or getattr(cfg, "EMBEDDING_MODEL_PATH", "")
         ),
         "chunk_strategy": getattr(cfg, "CHUNK_STRATEGY", ""),
-        "score_threshold": getattr(cfg, "RAG_SCORE_THRESHOLD", 0.0),
-        "enhanced_retrieval": bool(getattr(cfg, "ENHANCED_RETRIEVAL_ENABLED", False)),
+        "score_threshold": (
+            getattr(cfg, "RAG_SCORE_THRESHOLD", 0.0)
+            if score_threshold is None
+            else score_threshold
+        ),
+        "retrieval_mode": retrieval_mode,
+        "enhanced_retrieval": retrieval_mode == "enhanced",
         "graph_enabled": bool(getattr(cfg, "GRAPH_ENABLED", False)),
     }
 
@@ -129,11 +141,15 @@ def run_evaluation(
     *,
     knowledge_base_id: uuid.UUID | str,
     ragas_metrics: Optional[List[str]] = None,
+    score_threshold: Optional[float] = None,
+    run_ragas: Optional[bool] = None,
+    generate_answers: bool = False,
 ) -> Dict[str, Any]:
     """对评估集逐条检索并计算指标（同步，直接调 retriever 单例）。
 
     主指标为严格 chunk 级 HitRate/MRR/Recall/Precision/nDCG@K；同时
-    返回文件级指标和逐条明细。全程不调用 LLM。
+    返回文件级指标和逐条明细。仅在 ``generate_answers`` 开启时调用 LLM，
+    用于 Faithfulness 评测。
     """
     from app.rag.retriever import get_document_chunk_id, get_retriever
 
@@ -155,6 +171,11 @@ def run_evaluation(
                 case.question,
                 top_k=k,
                 knowledge_base_ids=[scoped_kb_id],
+                score_threshold=(
+                    None
+                    if score_threshold is None
+                    else -1.0 if score_threshold == 0 else score_threshold
+                ),
             )
         except Exception as exc:
             logger.warning(
@@ -231,6 +252,14 @@ def run_evaluation(
         )
         chunk_metric_rows.append(chunk_metrics)
         file_metric_rows.append(file_metrics)
+        generated_answer = ""
+        generation_error = ""
+        if generate_answers:
+            try:
+                generated_answer = generate_evaluation_answer(case.question, docs)
+            except Exception as exc:
+                generation_error = str(exc)[:500]
+                logger.warning("[eval] answer generation failed for %r: %s", case.question[:50], exc)
         ragas_samples.append(RagasEvaluationSample(
             question=case.question,
             retrieved_context_ids=retrieved_chunk_ids,
@@ -240,6 +269,7 @@ def run_evaluation(
                 for doc in docs
             ],
             reference_answer=case.reference_answer,
+            response=generated_answer,
         ))
         if docs:
             score_sum += float(top_score)
@@ -254,6 +284,8 @@ def run_evaluation(
             "expect_miss": case.expect_miss,
             "false_positive": false_positive,
             "reference_answer": case.reference_answer,
+            "generated_answer": generated_answer,
+            **({"generation_error": generation_error} if generation_error else {}),
             "file_hit_rank": file_metrics.first_relevant_rank,
             "chunk_hit_rank": chunk_metrics.first_relevant_rank,
             # Backward-compatible alias; the strict chunk match is canonical.
@@ -276,7 +308,11 @@ def run_evaluation(
     result = {
         "metrics_version": "local-v2",
         "k": k,
-        "run_metadata": build_run_metadata(k),
+        "run_metadata": build_run_metadata(
+            k,
+            score_threshold=score_threshold,
+            retrieval_mode="basic",
+        ),
         "analysis": build_failure_analysis(details),
         "hit_rate_at_k": hit_rate_at_k,
         "mrr_at_k": mrr_at_k,
@@ -296,7 +332,8 @@ def run_evaluation(
         "avg_score": round(score_sum / scored, 4) if scored else 0.0,
         "details": details,
     }
-    if cfg.RAGAS_ENABLED:
+    should_run_ragas = cfg.RAGAS_ENABLED if run_ragas is None else run_ragas
+    if should_run_ragas:
         result["ragas"] = get_ragas_evaluator(cfg, ragas_metrics).evaluate(ragas_samples)
     else:
         result["ragas"] = {
@@ -314,18 +351,32 @@ async def save_run(
     top_k: int,
     kb_id: Optional[uuid.UUID] = None,
     dataset_id: Optional[uuid.UUID] = None,
+    benchmark_id: Optional[uuid.UUID] = None,
+    benchmark_version: Optional[int] = None,
+    benchmark_snapshot: Optional[Dict[str, Any]] = None,
 ) -> EvaluationRun:
     """把一次评估结果落库为命名运行。"""
+    finished_at = datetime.now(timezone.utc)
     run = EvaluationRun(
         name=name,
         knowledge_base_id=kb_id,
         dataset_id=dataset_id,
+        benchmark_id=benchmark_id,
+        benchmark_version=benchmark_version,
+        benchmark_snapshot_json=(
+            json.dumps(benchmark_snapshot, ensure_ascii=False)
+            if benchmark_snapshot is not None
+            else None
+        ),
+        status="completed",
         top_k=top_k,
         query_count=len(metrics.get("details", [])),
         hit_rate=metrics["hit_rate"],
         mrr=metrics["mrr"],
         avg_score=metrics["avg_score"],
         metrics_json=json.dumps(metrics, ensure_ascii=False),
+        started_at=finished_at,
+        finished_at=finished_at,
     )
     session.add(run)
     await session.flush()

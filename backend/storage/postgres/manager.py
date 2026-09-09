@@ -75,6 +75,88 @@ async def _migrate_legacy_evaluation_runs(conn) -> None:
     logger.info("[postgres] migrated evaluation_runs.dataset_id")
 
 
+async def _migrate_evaluation_benchmark_phase_one(conn) -> None:
+    """Add benchmark lifecycle fields to pre-existing evaluation run tables.
+
+    ``Base.metadata.create_all`` creates ``evaluation_benchmarks`` but cannot
+    add columns to an existing ``evaluation_runs`` table. Every statement is
+    idempotent so an interrupted startup can retry safely. Existing synchronous
+    runs are completed historical records and are backfilled accordingly.
+    """
+    statements = (
+        "ALTER TABLE evaluation_runs "
+        "ADD COLUMN IF NOT EXISTS benchmark_id UUID",
+        "ALTER TABLE evaluation_runs "
+        "ADD COLUMN IF NOT EXISTS benchmark_version INTEGER",
+        "ALTER TABLE evaluation_runs "
+        "ADD COLUMN IF NOT EXISTS benchmark_snapshot_json TEXT",
+        "ALTER TABLE evaluation_runs "
+        "ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'completed'",
+        "ALTER TABLE evaluation_runs "
+        "ADD COLUMN IF NOT EXISTS error_message TEXT",
+        "ALTER TABLE evaluation_runs "
+        "ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
+        "ALTER TABLE evaluation_runs "
+        "ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
+        "UPDATE evaluation_runs SET status = 'completed' WHERE status IS NULL",
+        "UPDATE evaluation_runs SET started_at = created_at "
+        "WHERE started_at IS NULL AND status = 'completed'",
+        "UPDATE evaluation_runs SET finished_at = created_at "
+        "WHERE finished_at IS NULL AND status = 'completed'",
+        "CREATE INDEX IF NOT EXISTS ix_evaluation_runs_benchmark_id "
+        "ON evaluation_runs (benchmark_id)",
+        "CREATE INDEX IF NOT EXISTS ix_evaluation_runs_status "
+        "ON evaluation_runs (status)",
+    )
+    for statement in statements:
+        await conn.execute(text(statement))
+
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'fk_evaluation_runs_benchmark_id'
+            ) THEN
+                ALTER TABLE evaluation_runs
+                ADD CONSTRAINT fk_evaluation_runs_benchmark_id
+                FOREIGN KEY (benchmark_id)
+                REFERENCES evaluation_benchmarks(id)
+                ON DELETE SET NULL;
+            END IF;
+        END $$
+    """))
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_evaluation_runs_status'
+            ) THEN
+                ALTER TABLE evaluation_runs
+                ADD CONSTRAINT ck_evaluation_runs_status
+                CHECK (status IN (
+                    'queued', 'running', 'completed', 'failed', 'cancelled'
+                ));
+            END IF;
+        END $$
+    """))
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_evaluation_runs_benchmark_version'
+            ) THEN
+                ALTER TABLE evaluation_runs
+                ADD CONSTRAINT ck_evaluation_runs_benchmark_version
+                CHECK (benchmark_version IS NULL OR benchmark_version >= 1);
+            END IF;
+        END $$
+    """))
+    logger.info("[postgres] ensured evaluation benchmark phase-one schema")
+
+
 async def _migrate_custom_model_supports_vision(conn) -> None:
     """Add custom_model_configs.supports_vision to pre-existing databases."""
     row = await conn.execute(text(
@@ -235,10 +317,12 @@ async def init_db() -> None:
     from backend.storage.postgres.models_model_config import CustomModelConfig  # noqa: F401
     from backend.storage.postgres.models_skill_config import CustomSkillConfig  # noqa: F401
     from backend.storage.postgres.models_agent_run import Run, Task, AgentRun  # noqa: F401
+    from backend.storage.postgres.models_trace import ExecutionTrace, TraceEvent  # noqa: F401
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_legacy_evaluation_runs(conn)
+        await _migrate_evaluation_benchmark_phase_one(conn)
         await _migrate_custom_model_supports_vision(conn)
         await _migrate_messages_image(conn)
         await _migrate_skill_config_to_files(conn)
