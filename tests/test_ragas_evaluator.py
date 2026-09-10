@@ -175,3 +175,28 @@ def test_ragas_failure_never_discards_local_metrics(monkeypatch):
 
     assert metrics["hit_rate_at_k"] == 1.0
     assert metrics["ragas"]["status"] == "failed"
+
+
+def test_evaluation_can_attach_generated_answer(monkeypatch):
+    class Retriever:
+        def retrieve(self, _question, **_kwargs):
+            return [{"content": "context", "metadata": {"source": "paper.pdf", "score": 0.8}}]
+
+    monkeypatch.setattr("app.rag.retriever.get_retriever", lambda: Retriever())
+    monkeypatch.setattr(
+        evaluation_service,
+        "generate_evaluation_answer",
+        lambda _question, _docs: "grounded answer",
+    )
+    metrics = evaluation_service.run_evaluation(
+        [evaluation_service.EvaluationCase(
+            question="question",
+            expected_file_id="33333333-3333-3333-3333-333333333333",
+            expected_chunk_id="chunk-a",
+        )],
+        top_k=1,
+        knowledge_base_id="11111111-1111-1111-1111-111111111111",
+        run_ragas=False,
+        generate_answers=True,
+    )
+    assert metrics["details"][0]["generated_answer"] == "grounded answer"

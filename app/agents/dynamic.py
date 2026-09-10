@@ -156,7 +156,7 @@ def run_dynamic_agent(
         checkpoint_turn_message_id,
         prepare_checkpoint_input,
     )
-    from app.agents.events import emit
+    from app.agents.events import add_token_usage, emit
     from app.memory.context import assemble_memory_context
     from app.services.knowledge_catalog import format_knowledge_catalog
     from app.services.knowledge_context import use_authorised_kb_ids
@@ -204,7 +204,11 @@ def run_dynamic_agent(
             return
         ev = {"kind": kind, "stage": stage, "title": title[:80], "content": content, **extra}
         collected.artifact(ev)
-        emit("artifact", stage, title, content, artifact_kind=kind, **extra)
+        # Answer tokens already use the dedicated SSE delta/artifact channel.
+        # Keeping them out of the trace prevents one durable node per token;
+        # the wrapper emits one complete final_response event at run end.
+        if kind != "answer":
+            emit("artifact", stage, title, content, artifact_kind=kind, **extra)
         if on_artifact:
             try:
                 on_artifact(dict(ev))
@@ -269,6 +273,8 @@ def run_dynamic_agent(
     processed_count = len(messages)
     resumed = False
     calls_by_id: dict[str, str] = {}
+    token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    usage_message_ids: set[str] = set()
 
     def _emit_stream_end() -> None:
         """正文流结束标记（前端把"回答"流标记为完成；未流过则 no-op）。"""
@@ -344,6 +350,7 @@ def run_dynamic_agent(
                     mtype = getattr(last, "type", "")
                     tc = getattr(last, "tool_calls", None) or []
                     if mtype == "ai":
+                        add_token_usage(token_usage, last, usage_message_ids)
                         if response_stream is None:
                             response_stream = _new_response_stream()
                         content = message_text(getattr(last, "content", ""))
@@ -422,6 +429,7 @@ def run_dynamic_agent(
             "resumed": resumed,
             "error_message": str(exc),
             "elapsed_seconds": round(time.perf_counter() - start, 3),
+            "token_usage": token_usage,
         }
 
     if degraded and not final_answer.strip():
@@ -457,4 +465,5 @@ def run_dynamic_agent(
         "resumed": resumed,
         "error_message": None,
         "elapsed_seconds": round(time.perf_counter() - start, 3),
+        "token_usage": token_usage,
     }

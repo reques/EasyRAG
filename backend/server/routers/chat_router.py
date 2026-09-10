@@ -102,6 +102,39 @@ class ChatResponse(BaseModel):
     elapsed_seconds: float = 0.0
     skills: list[dict] = Field(default_factory=list)
     resumed: bool = False
+    trace_id: str = ""
+    token_usage: dict[str, int] = Field(default_factory=dict)
+
+
+async def _persist_trace_safely(
+    result: dict[str, Any],
+    *,
+    conversation_id: uuid.UUID,
+    user_id: uuid.UUID,
+    source_message_id: int,
+    mode: str,
+    model_id: str,
+    goal: str,
+) -> str:
+    """Best-effort trace persistence; observability must not break the answer."""
+    if not result.get("events"):
+        return ""
+    try:
+        from backend.services.trace_service import persist_execution_trace
+
+        return await persist_execution_trace(
+            get_session,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            source_message_id=source_message_id,
+            events=result["events"],
+            mode=mode,
+            model_id=model_id,
+            goal=goal,
+        )
+    except Exception as exc:
+        logger.warning("[chat] execution trace persist failed: %s", exc)
+        return ""
 
 
 class ResumeCheckpointRequest(BaseModel):
@@ -812,6 +845,15 @@ async def send_message(
                 await session.commit()
 
     elapsed = round(time.perf_counter() - start, 3)
+    trace_id = await _persist_trace_safely(
+        result,
+        conversation_id=conv_id,
+        user_id=current_user.id,
+        source_message_id=user_message_id,
+        mode=result.get("intent") or "dynamic",
+        model_id=selected_model.id,
+        goal=effective_query,
+    )
 
     # 保存助手回复
     async with get_session() as session:
@@ -823,6 +865,8 @@ async def send_message(
             "model_id": selected_model.id,
             "model_name": selected_model.name,
             "skills": skill_payload,
+            "trace_id": trace_id,
+            "token_usage": result.get("token_usage") or {},
         }, ensure_ascii=False)
         await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
         await session.commit()
@@ -852,6 +896,8 @@ async def send_message(
         elapsed_seconds=elapsed,
         skills=skill_payload,
         resumed=bool(result.get("resumed")),
+        trace_id=trace_id,
+        token_usage=result.get("token_usage") or {},
     )
 
 
@@ -1014,7 +1060,7 @@ async def send_message_stream(
             # ── DeepAgents 路径：主 Agent + task → SubAgent（同步 + 状态透传）─
             import queue as _q
             from app.agents.progress import ProgressProjector
-            from app.agents.events import use_event_sink
+            from app.agents.events import public_event, use_event_sink
 
             status_queue: "_q.Queue" = _q.Queue()
             deep_progress_summaries: list[dict] = []
@@ -1047,6 +1093,10 @@ async def send_message_stream(
 
             def _bridge_event(ev: dict) -> None:
                 try:
+                    status_queue.put({
+                        "type": "agent_event",
+                        "event": public_event(ev),
+                    })
                     for payload in bridge_delegation_event(ev):
                         if payload["type"] == "status":
                             collected_steps.append({
@@ -1136,6 +1186,15 @@ async def send_message_stream(
                     ) or ""
                 except Exception as exc:
                     logger.warning("[chat/stream] delegation persist failed: %s", exc)
+            trace_id = await _persist_trace_safely(
+                deep_result,
+                conversation_id=conv_id,
+                user_id=current_user.id,
+                source_message_id=user_message_id,
+                mode="deepagents",
+                model_id=selected_model.id,
+                goal=effective_query,
+            )
             # 阶段 6：把本轮实时收到的 status（思考/工具/委派步骤）与 artifact
             # 交付物随 done 事件与 meta 持久化，刷新会话后仍可恢复完整轨迹。
             step_objs: list[dict] = collected_steps
@@ -1154,6 +1213,8 @@ async def send_message_stream(
                         "model_id": selected_model.id,
                         "model_name": selected_model.name,
                         "skills": skill_payload,
+                        "trace_id": trace_id,
+                        "token_usage": deep_result.get("token_usage") or {},
                     }
                     await add_message(
                         session, conv_id, "assistant", answer,
@@ -1196,6 +1257,8 @@ async def send_message_stream(
                 "model_id": selected_model.id,
                 "model_name": selected_model.name,
                 "skills": skill_payload,
+                "trace_id": trace_id,
+                "token_usage": deep_result.get("token_usage") or {},
             })
 
             # 新会话标题后台生成
@@ -1251,9 +1314,17 @@ async def send_message_stream(
         _dyn_ctx = replace(_chat_ctx, on_step=_dyn_status, on_artifact=_dyn_artifact)
 
         def _run_dynamic_in_thread():
+            from app.agents.events import public_event, use_event_sink
             from app.agents.request_context import use_request_context
 
-            with use_request_context(_dyn_ctx, skill_definitions=selected_skills, model_profile=selected_model):
+            def _stream_event(event: dict) -> None:
+                _dyn_status_queue.put({
+                    "type": "agent_event",
+                    "event": public_event(event),
+                })
+
+            with use_request_context(_dyn_ctx, skill_definitions=selected_skills, model_profile=selected_model), \
+                    use_event_sink(_stream_event):
                 return agent._run_dynamic(_dyn_ctx.query, context=_dyn_ctx)
 
         _dyn_start = time.perf_counter()
@@ -1298,6 +1369,15 @@ async def send_message_stream(
                 ) or ""
             except Exception as exc:
                 logger.warning("[chat/stream] dynamic delegation persist failed: %s", exc)
+        trace_id = await _persist_trace_safely(
+            dyn_result,
+            conversation_id=conv_id,
+            user_id=current_user.id,
+            source_message_id=user_message_id,
+            mode="dynamic",
+            model_id=selected_model.id,
+            goal=effective_query,
+        )
 
         # 落库助手回复（含步骤/进度/中间产出）
         try:
@@ -1312,6 +1392,8 @@ async def send_message_stream(
                     "model_id": selected_model.id,
                     "model_name": selected_model.name,
                     "skills": skill_payload,
+                    "trace_id": trace_id,
+                    "token_usage": dyn_result.get("token_usage") or {},
                 }, ensure_ascii=False)
                 await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
                 await session.commit()
@@ -1350,6 +1432,8 @@ async def send_message_stream(
             "model_id": selected_model.id,
             "model_name": selected_model.name,
             "skills": skill_payload,
+            "trace_id": trace_id,
+            "token_usage": dyn_result.get("token_usage") or {},
         })
 
         # 新会话标题后台生成
@@ -1495,6 +1579,37 @@ async def get_multi_agent_run(
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
         return serialize_run(run)
+
+
+@router.get("/traces/{trace_id}")
+async def get_agent_trace(
+    trace_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Return a persisted execution trace owned by the current user."""
+    from backend.services.trace_service import get_execution_trace
+
+    async with get_session() as session:
+        trace = await get_execution_trace(session, trace_id, current_user.id)
+        if trace is None:
+            raise HTTPException(status_code=404, detail="Trace not found")
+        return trace
+
+
+@router.get("/conversations/{conversation_id}/traces")
+async def list_conversation_traces(
+    conversation_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """List persisted execution traces for one owner-scoped conversation."""
+    from backend.services.trace_service import list_execution_traces
+
+    async with get_session() as session:
+        conv = await get_conversation(session, conversation_id)
+        if not conv or conv.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        traces = await list_execution_traces(session, conversation_id, current_user.id)
+        return {"conversation_id": str(conversation_id), "traces": traces}
 
 
 @router.get("/conversations/{conversation_id}/runs")

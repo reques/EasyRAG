@@ -56,8 +56,14 @@
             <!-- 操作流（Cursor/Copilot 风格：图标+英文动词+对象），绑定在该条消息上，
                  渲染在答案上方，按实际走的节点（意图/检索/工具/推理/生成）实时流转，
                  不被下一轮覆盖 -->
+            <AgentTrace
+              v-if="msg.traceEvents && msg.traceEvents.length"
+              :events="msg.traceEvents"
+              :running="msg.stepsLoading"
+              :token-usage="msg.meta?.tokenUsage || {}"
+            />
             <WorkProgress
-              v-if="(msg.workItems && msg.workItems.length) || (msg.progressSummaries && msg.progressSummaries.length)"
+              v-else-if="(msg.workItems && msg.workItems.length) || (msg.progressSummaries && msg.progressSummaries.length)"
               :items="msg.workItems || []"
               :summaries="msg.progressSummaries"
               :running="msg.stepsLoading"
@@ -640,6 +646,7 @@ import {
   X,
 } from 'lucide-vue-next'
 import api from '../api'
+import AgentTrace from '../components/AgentTrace.vue'
 import WorkProgress from '../components/WorkProgress.vue'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
@@ -1357,13 +1364,16 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         sources: m.meta?.sources || [],
         skills: m.meta?.skills || [],
         deepResearch: !!m.meta?.deep_research,
-        meta: (m.meta?.agent_mode || m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.skills?.length) ? {
+        meta: (m.meta?.agent_mode || m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.trace_id || m.meta?.skills?.length) ? {
           agentMode: m.meta?.agent_mode || '',
           intent: m.meta?.intent || '',
           modelName: m.meta?.model_name || '',
           runId: m.meta?.run_id || '',
+          traceId: m.meta?.trace_id || '',
+          tokenUsage: m.meta?.token_usage || {},
           skillNames: (m.meta?.skills || []).map(skill => skill.name),
         } : null,
+        traceEvents: [],
         steps: m.meta?.steps || [],
         stepsExpanded: false,
         stepsLoading: false,
@@ -1385,6 +1395,19 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         ts: m.created_at ? Date.parse(m.created_at) : null,
         uid: nextMsgUid(),
       }))
+      try {
+        const traceData = await api.get(`/chat/conversations/${newId}/traces`)
+        const traces = new Map((traceData.traces || []).map(trace => [trace.id, trace]))
+        messages.value = messages.value.map(message => {
+          const trace = traces.get(message.meta?.traceId)
+          if (!trace) return message
+          return {
+            ...message,
+            traceEvents: trace.events || [],
+            meta: { ...(message.meta || {}), tokenUsage: trace.token_usage || {} },
+          }
+        })
+      } catch { /* 旧记录或已清理的 trace 保持原进度视图 */ }
       try {
         const runData = await api.get(`/chat/conversations/${newId}/runs`)
         const latestRun = runData.runs?.[0]
@@ -1460,6 +1483,7 @@ async function send(options = {}) {
     artifacts: [],
     workItems: [],
     progressSummaries: [],
+    traceEvents: [],
     time: formatTime(new Date(asstTs).toISOString()),
     ts: asstTs,
     uid: nextMsgUid(),
@@ -1509,6 +1533,17 @@ async function send(options = {}) {
           },
         }
         taskPanel.value.run_id = ev.run_id || ''
+      } else if (ev.type === 'agent_event') {
+        const tm = messages.value[msgIndex]
+        const event = ev.event
+        if (event?.id) {
+          const list = [...(tm.traceEvents || [])]
+          const existing = list.findIndex(item => item.id === event.id)
+          if (existing >= 0) list[existing] = event
+          else list.push(event)
+          messages.value[msgIndex] = { ...tm, traceEvents: list }
+          scrollBottom()
+        }
       } else if (ev.type === 'sub_tasks') {
         // 拆解完成：初始化侧边任务面板的待办清单（全部 pending）
         taskPanel.value = {
@@ -1630,6 +1665,8 @@ async function send(options = {}) {
             agentMode: ev.agent_mode || m.meta?.agentMode || '',
             elapsed: ev.elapsed_seconds,
             runId: ev.run_id || m.meta?.runId || '',
+            traceId: ev.trace_id || m.meta?.traceId || '',
+            tokenUsage: ev.token_usage || m.meta?.tokenUsage || {},
             modelName: ev.model_name || m.meta?.modelName || '',
             skillNames: (ev.skills || requestSkills).map(skill => skill.name),
           },

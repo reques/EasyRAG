@@ -618,40 +618,117 @@
             <div>
               <span class="kbw-eyebrow">EVALUATION STANDARD</span>
               <h2>评估基准</h2>
-              <p>定义评估数据集和指标组合，为 RAG 评估提供可复用标准。</p>
+              <p>绑定评测数据集与指标组合，一键运行可复现的 RAG 评估。</p>
             </div>
-            <button class="kbw-primary-button" @click="frontendOnly('新建评估基准')">
-              <Plus :size="14" /> 新建基准
-            </button>
+            <div class="kbw-heading-actions">
+              <button class="kbw-secondary-button" :disabled="benchLoading" @click="loadBenchmarkData()">
+                <RefreshCw :size="14" :class="{ spin: benchLoading }" /> 刷新
+              </button>
+              <button class="kbw-primary-button" @click="openBenchmarkCreate">
+                <Plus :size="14" /> 新建基准
+              </button>
+            </div>
           </div>
 
           <div class="kbw-criteria-grid">
-            <article v-for="criterion in criteria" :key="criterion.id" class="kbw-criterion-card">
+            <article v-for="criterion in benchMetrics" :key="criterion.id" class="kbw-criterion-card">
               <div>
-                <span><component :is="criterion.icon" :size="17" /></span>
+                <span :title="criterion.available ? '' : criterion.unavailableReason">
+                  <component :is="criterion.icon" :size="17" />
+                </span>
                 <button
                   class="kbw-toggle"
                   :class="{ active: criterion.enabled }"
                   :aria-pressed="criterion.enabled"
-                  @click="toggleCriterion(criterion)"
+                  :disabled="!criterion.available"
+                  :title="criterion.available ? '' : criterion.unavailableReason"
+                  @click="criterion.enabled = !criterion.enabled"
                 ><i></i></button>
               </div>
               <strong>{{ criterion.name }}</strong>
               <p>{{ criterion.description }}</p>
-              <small>{{ criterion.group }}</small>
+              <small>{{ criterion.group }}<template v-if="!criterion.available"> · 需配置</template></small>
             </article>
           </div>
 
           <article class="kbw-panel-card kbw-baseline-card">
             <div class="kbw-panel-title">
-              <div><ClipboardCheck :size="17" /><strong>评估数据集</strong></div>
-              <span>0 个</span>
+              <div><ClipboardCheck :size="17" /><strong>基准列表</strong></div>
+              <span>{{ benchList.length }} 个</span>
             </div>
-            <div class="kbw-result-empty">
+
+            <div v-if="benchLoading && !benchList.length" class="kbw-table-state">
+              <LoaderCircle :size="20" class="spin" /> 正在读取基准
+            </div>
+
+            <div v-else-if="benchList.length === 0" class="kbw-result-empty">
               <FileQuestion :size="28" />
               <strong>还没有评估基准</strong>
-              <span>后续可上传“问题、期望答案、相关文档”组成的数据集。</span>
-              <button class="kbw-secondary-button" @click="frontendOnly('评估基准上传')">了解待接入字段</button>
+              <span>先在「RAG 评估」页保存评测集，再点「新建基准」把数据集与指标组合保存为可复用标准。</span>
+              <button class="kbw-secondary-button" @click="selectTab('evaluation')">去准备评测集</button>
+            </div>
+
+            <div v-else class="kbw-table-wrap">
+              <table class="kbw-file-table">
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>版本</th>
+                    <th>状态</th>
+                    <th>评测集</th>
+                    <th>启用指标</th>
+                    <th>top_k</th>
+                    <th>更新时间</th>
+                    <th><span class="sr-only">操作</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="bench in benchList" :key="bench.id">
+                    <td>
+                      <span class="kbw-file-link" as="span">
+                        <span><ClipboardCheck :size="16" /></span>
+                        <span>
+                          <strong>{{ bench.name }}</strong>
+                          <small>{{ bench.description || '—' }}</small>
+                        </span>
+                      </span>
+                    </td>
+                    <td>v{{ bench.version }}</td>
+                    <td>
+                      <span :class="['kbw-status-badge', bench.status === 'active' ? 'completed' : 'failed']">
+                        <i></i>{{ benchStatusLabel(bench.status) }}
+                      </span>
+                    </td>
+                    <td>{{ benchDatasetName(bench.dataset_id) }}</td>
+                    <td>{{ benchMetricSummary(bench) }}</td>
+                    <td>{{ bench.retrieval_config?.top_k ?? '—' }}</td>
+                    <td>{{ formatDate(bench.updated_at) }}</td>
+                    <td>
+                      <button
+                        class="kbw-icon-button"
+                        :class="{ 'is-busy': benchRunningId === bench.id }"
+                        :title="bench.status === 'archived' ? '归档基准不能运行' : '运行基准'"
+                        :disabled="benchRunningId === bench.id || bench.status === 'archived'"
+                        @click="runBenchmark(bench)"
+                      >
+                        <LoaderCircle v-if="benchRunningId === bench.id" :size="15" class="spin" />
+                        <Play v-else :size="15" />
+                      </button>
+                      <button
+                        class="kbw-icon-button"
+                        title="复制基准"
+                        :disabled="bench.status === 'archived'"
+                        @click="duplicateBenchmark(bench)"
+                      >
+                        <Copy :size="15" />
+                      </button>
+                      <button class="kbw-icon-danger" title="删除基准" @click="confirmBenchmarkDelete(bench)">
+                        <Trash2 :size="15" />
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </article>
         </section>
@@ -851,6 +928,65 @@
         </div>
       </div>
     </div>
+
+    <div v-if="showBenchCreate" class="modal-overlay" @click.self="showBenchCreate = false">
+      <div class="modal kbw-modal">
+        <div class="kbw-modal-heading">
+          <div><span><ClipboardCheck :size="18" /></span><div><h3>新建评估基准</h3><p>把评测集与指标组合保存为可复用标准。</p></div></div>
+          <button @click="showBenchCreate = false"><X :size="17" /></button>
+        </div>
+        <label class="kbw-field">
+          <span>名称</span>
+          <input v-model="benchForm.name" type="text" maxlength="80" placeholder="例如：法律检索-严格基线" @keyup.enter="createBenchmark" />
+        </label>
+        <label class="kbw-field">
+          <span>描述（可选）</span>
+          <textarea v-model="benchForm.description" rows="2" maxlength="300" placeholder="说明这个基准的用途"></textarea>
+        </label>
+        <label class="kbw-field">
+          <span>评测集（先在「RAG 评估」页保存）</span>
+          <select v-model="benchForm.datasetId">
+            <option value="" disabled>选择评测集</option>
+            <option v-for="ds in benchDatasets" :key="ds.id" :value="ds.id">
+              {{ ds.name }}（v{{ ds.version }} · {{ ds.case_count }} 条）
+            </option>
+          </select>
+        </label>
+        <label class="kbw-field">
+          <span>返回条数 top_k（1-20）</span>
+          <input v-model.number="benchForm.topK" type="number" min="1" max="20" />
+        </label>
+        <p v-if="benchFormError" class="kbw-form-error">{{ benchFormError }}</p>
+        <div class="modal-actions">
+          <button class="kbw-secondary-button" @click="showBenchCreate = false">取消</button>
+          <button
+            class="kbw-primary-button"
+            :disabled="benchCreating || !benchForm.name.trim() || !benchForm.datasetId"
+            @click="createBenchmark"
+          >
+            <LoaderCircle v-if="benchCreating" :size="14" class="spin" />
+            <Plus v-else :size="14" /> {{ benchCreating ? '创建中' : '创建基准' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showBenchDeleteConfirm" class="modal-overlay" @click.self="showBenchDeleteConfirm = false">
+      <div class="modal kbw-modal kbw-danger-modal">
+        <div class="kbw-modal-heading">
+          <div><span><Trash2 :size="18" /></span><div><h3>删除基准</h3><p>此操作不可恢复</p></div></div>
+          <button @click="showBenchDeleteConfirm = false"><X :size="17" /></button>
+        </div>
+        <p class="delete-warning">确定删除「<strong>{{ benchDeleteTarget?.name }}</strong>」吗？已保存的运行结果会保留，但会失去与该基准的关联。</p>
+        <div class="modal-actions">
+          <button class="kbw-secondary-button" @click="showBenchDeleteConfirm = false">取消</button>
+          <button class="btn-danger-sm" :disabled="benchDeleting" @click="doDeleteBenchmark">
+            <LoaderCircle v-if="benchDeleting" :size="14" class="spin" />
+            <Trash2 v-else :size="14" /> {{ benchDeleting ? '删除中' : '确认删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -881,7 +1017,7 @@ const tabItems = [
   { id: 'benchmarks', label: '评估基准', icon: ClipboardCheck },
 ]
 const validTabs = new Set(tabItems.map((tab) => tab.id))
-const frontendOnlyTabs = new Set(['map', 'benchmarks'])
+const frontendOnlyTabs = new Set(['map'])
 
 const kbList = ref([])
 const activeKb = ref(null)
@@ -1274,6 +1410,7 @@ onBeforeUnmount(() => {
 // 只监听 activeTab 会在 activeKb 还是 null 时触发 loadGraph 而直接返回。
 watch([activeTab, () => activeKb.value?.id], ([tab, kbId]) => {
   if (tab === 'graph' && kbId) loadGraph()
+  if (tab === 'benchmarks' && kbId) loadBenchmarkData()
 })
 const fileList = ref([])
 const loading = ref(true)
@@ -1340,12 +1477,34 @@ let retrievalRequestRevision = 0
 const moduleNotice = ref('')
 let noticeTimer = null
 
-const criteria = reactive([
-  { id: 'recall', name: 'Recall@K', description: '衡量相关内容是否被检索到。', group: '检索质量', icon: ScanSearch, enabled: true },
-  { id: 'mrr', name: 'MRR', description: '衡量首个相关结果的排序位置。', group: '排序质量', icon: ListFilter, enabled: true },
-  { id: 'relevance', name: '上下文相关性', description: '判断召回内容与问题的相关程度。', group: '语义质量', icon: Waypoints, enabled: true },
-  { id: 'faithfulness', name: '回答忠实度', description: '检查回答是否得到上下文支持。', group: '生成质量', icon: CheckCircle2, enabled: true },
-])
+// 评估基准：指标目录来自 /evaluation/metric-catalog（后端按 RAGAS/LLM 配置
+// 裁决 available），开关状态只在「新建基准」时提交，不落库为全局偏好。
+const benchList = ref([])
+const benchDatasets = ref([])
+const benchLoading = ref(false)
+const benchRunningId = ref(null)
+const showBenchCreate = ref(false)
+const benchForm = reactive({ name: '', description: '', datasetId: '', topK: 5 })
+const benchCreating = ref(false)
+const benchFormError = ref('')
+const showBenchDeleteConfirm = ref(false)
+const benchDeleteTarget = ref(null)
+const benchDeleting = ref(false)
+let benchCatalog = []
+
+const BENCH_METRIC_META = [
+  { id: 'recall_at_k', name: 'Recall@K', description: '衡量相关内容是否被检索到。', group: '检索质量', icon: ScanSearch, defaults: () => ({ enabled: true, threshold: 0.8 }) },
+  { id: 'mrr_at_k', name: 'MRR@K', description: '衡量首个相关结果的排序位置。', group: '排序质量', icon: ListFilter, defaults: () => ({ enabled: true, threshold: 0.7 }) },
+  { id: 'context_relevance', name: '上下文相关性', description: '判断召回内容与问题的相关程度。', group: '语义质量', icon: Waypoints, defaults: () => ({ enabled: false, threshold: 0.75 }) },
+  { id: 'faithfulness', name: '回答忠实度', description: '检查回答是否由检索到的上下文支撑。', group: '生成质量', icon: CheckCircle2, defaults: () => ({ enabled: false, threshold: 0.9 }) },
+]
+
+const benchMetrics = reactive(BENCH_METRIC_META.map((meta) => ({
+  ...meta,
+  enabled: meta.defaults().enabled,
+  available: true,
+  unavailableReason: '',
+})))
 
 const ACCEPT_EXTS = [
   '.txt', '.md', '.pdf', '.docx', '.pptx', '.xlsx',
@@ -1593,8 +1752,153 @@ async function saveKb() {
   }
 }
 
-function frontendOnly(action) {
-  notify(`${action}已完成前端入口，后端接口将在后续阶段接入。`)
+// ── 评估基准（/evaluation/benchmarks）──────────────────────────────────
+
+async function loadBenchmarkData() {
+  if (!activeKb.value) return
+  const kbId = activeKb.value.id
+  benchLoading.value = true
+  try {
+    const [benchmarks, datasets, catalog] = await Promise.all([
+      api.get(`/evaluation/benchmarks?kb_id=${kbId}`),
+      api.get(`/evaluation/datasets?kb_id=${kbId}`),
+      api.get('/evaluation/metric-catalog'),
+    ])
+    if (activeKb.value?.id !== kbId) return
+    benchList.value = benchmarks
+    benchDatasets.value = datasets
+    benchCatalog = Array.isArray(catalog) ? catalog : []
+    const byId = new Map(benchCatalog.map((item) => [item.id, item]))
+    for (const metric of benchMetrics) {
+      const remote = byId.get(metric.id)
+      metric.available = remote ? remote.available !== false : true
+      metric.unavailableReason = remote?.unavailable_reason || ''
+      if (!metric.available) metric.enabled = false
+    }
+  } catch (error) {
+    notify(error.response?.data?.detail || '基准加载失败，请稍后重试。')
+  } finally {
+    benchLoading.value = false
+  }
+}
+
+function openBenchmarkCreate() {
+  if (!benchDatasets.value.length) {
+    notify('请先在「RAG 评估」页把用例保存为评测集，再创建基准。')
+    selectTab('evaluation')
+    return
+  }
+  benchForm.name = ''
+  benchForm.description = ''
+  benchForm.datasetId = benchDatasets.value[0].id
+  benchForm.topK = 5
+  benchFormError.value = ''
+  showBenchCreate.value = true
+}
+
+function benchMetricsPayload() {
+  const metrics = {}
+  let enabledCount = 0
+  for (const metric of benchMetrics) {
+    const rule = { enabled: metric.enabled && metric.available, threshold: metric.defaults().threshold }
+    metrics[metric.id] = rule
+    if (rule.enabled) enabledCount += 1
+  }
+  return enabledCount ? metrics : null
+}
+
+async function createBenchmark() {
+  const name = benchForm.name.trim()
+  if (!name || !benchForm.datasetId || benchCreating.value) return
+  const metrics = benchMetricsPayload()
+  if (!metrics) {
+    benchFormError.value = '至少启用一个可用指标。'
+    return
+  }
+  const topK = Math.min(20, Math.max(1, Number(benchForm.topK) || 5))
+  benchCreating.value = true
+  benchFormError.value = ''
+  try {
+    const created = await api.post('/evaluation/benchmarks', {
+      knowledge_base_id: activeKb.value.id,
+      dataset_id: benchForm.datasetId,
+      name,
+      description: benchForm.description.trim(),
+      metrics,
+      retrieval_config: { top_k: topK, score_threshold: 0, mode: 'basic' },
+      status: 'active',
+    })
+    showBenchCreate.value = false
+    benchList.value.unshift(created)
+    notify(`基准「${created.name}」已创建。`)
+  } catch (error) {
+    benchFormError.value = error.response?.data?.detail || '创建失败，请稍后重试。'
+  } finally {
+    benchCreating.value = false
+  }
+}
+
+async function runBenchmark(bench) {
+  if (benchRunningId.value || bench.status === 'archived') return
+  benchRunningId.value = bench.id
+  try {
+    const runResult = await api.post(`/evaluation/benchmarks/${bench.id}/runs`, {})
+    notify(`基准「${bench.name}」运行完成：Recall@K ${Number(runResult.recall_at_k ?? 0).toFixed(3)}，MRR@K ${Number(runResult.mrr_at_k ?? 0).toFixed(3)}。`)
+    await loadBenchmarkData()
+  } catch (error) {
+    const detail = error.response?.data?.detail
+    notify(typeof detail === 'string' ? detail : (detail?.message || '基准运行失败，请稍后重试。'))
+  } finally {
+    benchRunningId.value = null
+  }
+}
+
+async function duplicateBenchmark(bench) {
+  try {
+    const copy = await api.post(`/evaluation/benchmarks/${bench.id}/duplicate`, {})
+    benchList.value.unshift(copy)
+    notify(`已复制为「${copy.name}」（草稿状态）。`)
+  } catch (error) {
+    notify(error.response?.data?.detail || '复制失败，请稍后重试。')
+  }
+}
+
+function confirmBenchmarkDelete(bench) {
+  benchDeleteTarget.value = bench
+  showBenchDeleteConfirm.value = true
+}
+
+async function doDeleteBenchmark() {
+  const target = benchDeleteTarget.value
+  if (!target || benchDeleting.value) return
+  benchDeleting.value = true
+  try {
+    await api.delete(`/evaluation/benchmarks/${target.id}`)
+    benchList.value = benchList.value.filter((item) => item.id !== target.id)
+    showBenchDeleteConfirm.value = false
+    notify(`基准「${target.name}」已删除。`)
+  } catch (error) {
+    notify(error.response?.data?.detail || '删除失败，请稍后重试。')
+  } finally {
+    benchDeleting.value = false
+  }
+}
+
+function benchStatusLabel(status) {
+  return { draft: '草稿', active: '启用', archived: '归档' }[status] || status
+}
+
+function benchDatasetName(datasetId) {
+  return benchDatasets.value.find((ds) => ds.id === datasetId)?.name || '—'
+}
+
+function benchMetricSummary(bench) {
+  const metrics = bench.metrics || {}
+  const catalogNames = new Map(benchCatalog.map((item) => [item.id, item.name]))
+  return BENCH_METRIC_META
+    .filter((meta) => metrics[meta.id]?.enabled)
+    .map((meta) => catalogNames.get(meta.id) || meta.name)
+    .join('、') || '—'
 }
 
 async function loadKbs() {
@@ -1755,11 +2059,6 @@ async function runRetrievalPreview() {
   } finally {
     if (requestRevision === retrievalRequestRevision) retrievalLoading.value = false
   }
-}
-
-function toggleCriterion(criterion) {
-  criterion.enabled = !criterion.enabled
-  notify(`已在前端${criterion.enabled ? '启用' : '停用'}「${criterion.name}」，尚未保存到后端。`)
 }
 
 function fileExtension(file) {

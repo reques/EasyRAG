@@ -16,6 +16,7 @@ SUPPORTED_RAGAS_METRICS = {
     "id_context_recall",
     "context_precision",
     "context_recall",
+    "faithfulness",
 }
 
 
@@ -26,6 +27,7 @@ class RagasEvaluationSample:
     reference_context_ids: list[str]
     retrieved_contexts: list[str]
     reference_answer: str
+    response: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

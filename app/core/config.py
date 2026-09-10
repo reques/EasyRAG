@@ -128,6 +128,14 @@ class Settings(BaseSettings):
     GRAPH_MAX_CHUNKS_PER_FILE: int = 30    # 单文件最多送入抽取的 chunk 数（成本控制）
     GRAPH_LLM_CONCURRENCY: int = 6          # 图谱抽取并发调用 LLM 的并发数（串行 30 次太慢，并发提速）
     GRAPH_QUERY_TOP_ENTITIES: int = 3      # 检索增强时最多展开的实体数
+    GRAPH_EXTRACT_CONCURRENCY: int = 8
+    GRAPH_EXTRACT_PACK_MAX_CHUNKS: int = 4
+    GRAPH_EXTRACT_PACK_MAX_CHARS: int = 1_800
+    GRAPH_EXTRACT_MAX_TOKENS: int = 1_024
+    GRAPH_EXTRACT_CACHE_ENABLED: bool = True
+    GRAPH_BUILD_BATCH_SIZE: int = 32
+    GRAPH_ENTITY_COLLECTION: str = "graph_entity_index"
+    GRAPH_ENTITY_TOP_K: int = 5
     # 文件索引消息队列（Redis Stream，2026-08-27）
     INGESTION_CONCURRENCY: int = 3          # 索引 worker 同时处理的最大文件数（全局闸门）
     INGESTION_PENDING_CLAIM_MS: int = 180000  # pending 消息认领超时（毫秒，默认 3 分钟）。

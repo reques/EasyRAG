@@ -9,6 +9,39 @@
       </div>
     </header>
 
+    <!-- ── 评估基准（阶段 4） ── -->
+    <section class="ev-card ev-benchmark-card">
+      <div class="ev-card-head">
+        <div>
+          <h2>评估基准</h2>
+          <span class="ev-hint">把数据集、检索参数和语义指标保存为可复用配置</span>
+        </div>
+        <button class="ev-btn-ghost" @click="loadBenchmarks" :disabled="loadingBenchmarks || !form.kbId">
+          <RefreshCw :size="14" :class="{ spin: loadingBenchmarks }" /> 刷新
+        </button>
+      </div>
+      <div class="ev-benchmark-toolbar">
+        <select v-model="benchmarkSel" :disabled="running || loadingBenchmarks || !benchmarks.length">
+          <option value="">选择已保存基准</option>
+          <option v-for="b in benchmarks" :key="b.id" :value="b.id">{{ b.name }} · v{{ b.version }}</option>
+        </select>
+        <input v-model="benchmarkName" maxlength="80" placeholder="新基准名称" :disabled="running" />
+        <button class="ev-btn-primary" @click="createBenchmark" :disabled="running || !datasetSel || !form.kbId">
+          <Plus :size="14" /> 保存为基准
+        </button>
+        <button class="ev-btn-ghost" @click="runBenchmark" :disabled="running || !benchmarkSel">
+          <LoaderCircle v-if="benchmarkRunning" :size="14" class="spin" />
+          <Play v-else :size="14" /> 运行基准
+        </button>
+      </div>
+      <p v-if="benchmarkMessage" class="ev-hint">{{ benchmarkMessage }}</p>
+      <div v-if="metricCatalog.length" class="ev-capability-row">
+        <span v-for="metric in metricCatalog" :key="metric.id" class="ev-capability" :class="{ unavailable: !metric.available }">
+          {{ metric.name }} · {{ metric.available ? '可用' : '需配置' }}
+        </span>
+      </div>
+    </section>
+
     <!-- ── 配置区 ── -->
     <section class="ev-card">
       <div class="ev-card-head">
@@ -342,6 +375,13 @@ const detail = ref(null)
 const datasets = ref([])
 const datasetSel = ref('')
 const datasetHint = ref('')
+const benchmarks = ref([])
+const benchmarkSel = ref('')
+const benchmarkName = ref('')
+const benchmarkMessage = ref('')
+const loadingBenchmarks = ref(false)
+const benchmarkRunning = ref(false)
+const metricCatalog = ref([])
 
 const form = ref({
   kbId: '',
@@ -419,7 +459,9 @@ async function loadKbs() {
 async function onKbChange() {
   await loadFiles()
   await loadDatasets()
+  await loadBenchmarks()
   datasetSel.value = ''
+  benchmarkSel.value = ''
 }
 
 async function loadFiles() {
@@ -486,6 +528,57 @@ async function loadDatasets() {
     datasets.value = list.filter((d) => d.knowledge_base_id === form.value.kbId)
   } catch {
     datasets.value = []
+  }
+}
+
+async function loadBenchmarks() {
+  if (!form.value.kbId) return
+  loadingBenchmarks.value = true
+  try {
+    benchmarks.value = await api.get(`/evaluation/benchmarks?kb_id=${form.value.kbId}`)
+    metricCatalog.value = await api.get('/evaluation/metric-catalog')
+  } catch {
+    benchmarks.value = []
+    metricCatalog.value = []
+  } finally {
+    loadingBenchmarks.value = false
+  }
+}
+
+async function createBenchmark() {
+  if (!form.value.kbId || !datasetSel.value) return
+  benchmarkMessage.value = ''
+  try {
+    const created = await api.post('/evaluation/benchmarks', {
+      knowledge_base_id: form.value.kbId,
+      dataset_id: datasetSel.value,
+      name: benchmarkName.value.trim() || `benchmark-${Date.now()}`,
+      description: '',
+    })
+    benchmarks.value.unshift(created)
+    benchmarkSel.value = created.id
+    benchmarkName.value = ''
+    benchmarkMessage.value = `基准「${created.name}」已保存`
+  } catch (err) {
+    benchmarkMessage.value = err.response?.data?.detail || err.message || '基准保存失败'
+  }
+}
+
+async function runBenchmark() {
+  if (!benchmarkSel.value || benchmarkRunning.value) return
+  benchmarkRunning.value = true
+  benchmarkMessage.value = ''
+  try {
+    const runResult = await api.post(`/evaluation/benchmarks/${benchmarkSel.value}/runs`, {
+      name: form.value.name.trim() || undefined,
+    })
+    result.value = runResult
+    benchmarkMessage.value = '基准运行完成，结果已更新'
+    await loadHistory()
+  } catch (err) {
+    benchmarkMessage.value = err.response?.data?.detail || err.message || '基准运行失败'
+  } finally {
+    benchmarkRunning.value = false
   }
 }
 
@@ -584,6 +677,7 @@ onMounted(async () => {
     await loadKbs()
   }
   await loadDatasets()
+  await loadBenchmarks()
   await loadHistory()
 })
 </script>
@@ -612,6 +706,17 @@ onMounted(async () => {
   margin-bottom: 14px;
 }
 .ev-card-head h2 { font-size: 15px; font-weight: 700; }
+.ev-benchmark-card { border-color: var(--gray-200); background: linear-gradient(135deg, var(--gray-0), var(--gray-25)); }
+.ev-benchmark-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ev-benchmark-toolbar select, .ev-benchmark-toolbar input {
+  min-height: 34px; padding: 7px 9px; border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md); background: var(--gray-0); color: var(--gray-900); font-size: 12px;
+}
+.ev-benchmark-toolbar select { min-width: 220px; }
+.ev-benchmark-toolbar input { width: 180px; }
+.ev-capability-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.ev-capability { padding: 4px 8px; border-radius: 999px; background: #edf7ef; color: #28733b; font-size: 11px; }
+.ev-capability.unavailable { background: var(--gray-100); color: var(--gray-500); }
 .ev-hint { font-size: 12px; color: var(--gray-500); }
 .ev-config-grid {
   display: grid; grid-template-columns: 220px 140px 1fr; gap: 12px;
