@@ -124,6 +124,10 @@ class BaseRetriever:
         """Delete all chunks belonging to a source file. Returns count deleted."""
         raise NotImplementedError
 
+    def delete_documents_by_kb(self, knowledge_base_id: str) -> int:
+        """Delete all chunks belonging to one knowledge base. Returns count deleted."""
+        raise NotImplementedError
+
     def list_chunks_by_source(
         self,
         knowledge_base_id: str,
@@ -222,6 +226,19 @@ class MemoryRetriever(BaseRetriever):
         self._vecs = [k[2] for k in keep]
         if deleted:
             logger.info("[MemoryRetriever] deleted %d docs for source '%s'", deleted, source)
+        return deleted
+
+    def delete_documents_by_kb(self, knowledge_base_id: str) -> int:
+        """Delete all chunks whose metadata.knowledge_base_id matches."""
+        kb = str(knowledge_base_id)
+        keep = [(t, m, v) for t, m, v in zip(self._texts, self._metas, self._vecs)
+                if str(m.get("knowledge_base_id", "")) != kb]
+        deleted = len(self._texts) - len(keep)
+        self._texts = [k[0] for k in keep]
+        self._metas = [k[1] for k in keep]
+        self._vecs = [k[2] for k in keep]
+        if deleted:
+            logger.info("[MemoryRetriever] deleted %d docs for kb '%s'", deleted, kb)
         return deleted
 
     def list_chunks_by_source(
@@ -401,6 +418,21 @@ class MilvusRetriever(BaseRetriever):
         logger.info("[MilvusRetriever] deleted %d docs for source '%s'", count, source)
         return count
 
+    def delete_documents_by_kb(self, knowledge_base_id: str) -> int:
+        """Delete all chunks whose metadata.knowledge_base_id matches."""
+        if not self._col:
+            return 0
+        safe = str(knowledge_base_id).replace("'", "''")
+        expr = f"knowledge_base_id == '{safe}'"
+        res = self._col.query(expr=expr, output_fields=["id"])
+        count = len(res)
+        if count == 0:
+            return 0
+        self._col.delete(expr)
+        self._col.flush()
+        logger.info("[MilvusRetriever] deleted %d docs for kb '%s'", count, knowledge_base_id)
+        return count
+
     def list_chunks_by_source(
         self,
         knowledge_base_id: str,
@@ -535,6 +567,16 @@ class ChromaRetriever(BaseRetriever):
             return 0
         self._col.delete(ids=ids)
         logger.info("[ChromaRetriever] deleted %d docs for source '%s'", len(ids), source)
+        return len(ids)
+
+    def delete_documents_by_kb(self, knowledge_base_id: str) -> int:
+        """Delete all chunks whose metadata.knowledge_base_id matches."""
+        res = self._col.get(where={"knowledge_base_id": str(knowledge_base_id)})
+        ids = res.get("ids", [])
+        if not ids:
+            return 0
+        self._col.delete(ids=ids)
+        logger.info("[ChromaRetriever] deleted %d docs for kb '%s'", len(ids), knowledge_base_id)
         return len(ids)
 
     def list_chunks_by_source(

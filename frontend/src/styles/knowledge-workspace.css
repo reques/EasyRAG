@@ -98,6 +98,8 @@
 }
 
 .kbw-secondary-button:hover { border-color: #c8cbd0; background: var(--kbw-soft); color: #111; }
+.kbw-secondary-button.is-danger { color: #c0392b; }
+.kbw-secondary-button.is-danger:hover { border-color: #e0b4ae; background: #fdf3f2; color: #a8071a; }
 .kbw-primary-button:disabled,
 .kbw-secondary-button:disabled { opacity: .42; cursor: not-allowed; }
 .kbw-primary-button.is-wide { width: 100%; margin-top: 4px; }
