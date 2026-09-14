@@ -1,0 +1,6 @@
+﻿row,query_type,question,missing_file,reason
+299,Procedural,How do I close a savings account at ZX Bank?,Account Close Guide.md,数据集中不存在该知识库文件（Account Close Guide.md 缺失）
+300,Boolean,Can I close my ZX Bank savings account online?,Account Close Guide.md,数据集中不存在该知识库文件（Account Close Guide.md 缺失）
+301,Procedural,What steps are involved in closing a current account at ZX Bank?,Account Close Guide.md,数据集中不存在该知识库文件（Account Close Guide.md 缺失）
+302,Analytical,Why might a salary account be converted to a savings account at ZX Bank?,Account Close Guide.md,数据集中不存在该知识库文件（Account Close Guide.md 缺失）
+303,Descriptive,What should you do before closing an account at ZX Bank?,Account Close Guide.md,数据集中不存在该知识库文件（Account Close Guide.md 缺失）

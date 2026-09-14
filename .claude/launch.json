@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "easyrag-frontend",
+      "url": "http://localhost:5173",
+      "port": 5173
+    }
+  ]
+}

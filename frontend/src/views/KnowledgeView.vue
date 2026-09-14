@@ -115,6 +115,9 @@
           <button class="kbw-secondary-button" @click="copyKbId">
             <Copy :size="14" /> 复制 ID
           </button>
+          <button class="kbw-secondary-button is-danger" @click="confirmDeleteKb">
+            <Trash2 :size="14" /> 删除知识库
+          </button>
           <button class="kbw-primary-button" @click="openEditKb">
             <Pencil :size="14" /> 编辑
           </button>
@@ -145,6 +148,9 @@
             <div class="kbw-heading-actions">
               <button class="kbw-secondary-button" :disabled="filesLoading" @click="loadFiles()">
                 <RefreshCw :size="14" :class="{ spin: filesLoading }" /> 刷新
+              </button>
+              <button class="kbw-secondary-button" :disabled="filesLoading || !fileList.length" @click="confirmDeleteAllFiles">
+                <Trash2 :size="14" /> 删除全部文件
               </button>
               <button class="kbw-primary-button" @click="showUpload = true">
                 <Upload :size="14" /> 上传文件
@@ -929,6 +935,44 @@
       </div>
     </div>
 
+    <div v-if="showKbDeleteConfirm" class="modal-overlay" @click.self="showKbDeleteConfirm = false">
+      <div class="modal kbw-modal kbw-danger-modal">
+        <div class="kbw-modal-heading">
+          <div><span><Trash2 :size="18" /></span><div><h3>删除知识库</h3><p>此操作不可恢复</p></div></div>
+          <button @click="showKbDeleteConfirm = false"><X :size="17" /></button>
+        </div>
+        <p class="delete-warning">
+          确定删除知识库「<strong>{{ activeKb?.name }}</strong>」吗？其中 {{ fileList.length }} 个文件、向量索引和图谱数据都会被删除，且不可恢复。
+        </p>
+        <div class="modal-actions">
+          <button class="kbw-secondary-button" @click="showKbDeleteConfirm = false">取消</button>
+          <button class="btn-danger-sm" :disabled="bulkDeleting" @click="doDeleteKb">
+            <LoaderCircle v-if="bulkDeleting" :size="14" class="spin" />
+            <Trash2 v-else :size="14" /> {{ bulkDeleting ? '删除中' : '确认删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showFilesDeleteConfirm" class="modal-overlay" @click.self="showFilesDeleteConfirm = false">
+      <div class="modal kbw-modal kbw-danger-modal">
+        <div class="kbw-modal-heading">
+          <div><span><Trash2 :size="18" /></span><div><h3>删除全部文件</h3><p>此操作不可恢复</p></div></div>
+          <button @click="showFilesDeleteConfirm = false"><X :size="17" /></button>
+        </div>
+        <p class="delete-warning">
+          确定删除「<strong>{{ activeKb?.name }}</strong>」中全部 {{ fileList.length }} 个文件吗？对应的向量索引、图谱数据和源文件都会被删除，知识库本身会保留。
+        </p>
+        <div class="modal-actions">
+          <button class="kbw-secondary-button" @click="showFilesDeleteConfirm = false">取消</button>
+          <button class="btn-danger-sm" :disabled="bulkDeleting" @click="doDeleteAllFiles">
+            <LoaderCircle v-if="bulkDeleting" :size="14" class="spin" />
+            <Trash2 v-else :size="14" /> {{ bulkDeleting ? '删除中' : '确认删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showBenchCreate" class="modal-overlay" @click.self="showBenchCreate = false">
       <div class="modal kbw-modal">
         <div class="kbw-modal-heading">
@@ -1463,6 +1507,10 @@ const showDeleteConfirm = ref(false)
 const deleteTarget = ref(null)
 const deleting = ref(false)
 const deleteSuccess = ref('')
+
+const showKbDeleteConfirm = ref(false)
+const showFilesDeleteConfirm = ref(false)
+const bulkDeleting = ref(false)
 
 const retrievalQuery = ref('')
 const retrievalTopK = ref(5)
@@ -2356,6 +2404,51 @@ async function doDelete() {
     notify(error.response?.data?.detail || '删除失败，请稍后重试。')
   } finally {
     deleting.value = false
+  }
+}
+
+function confirmDeleteKb() {
+  if (!activeKb.value) return
+  showKbDeleteConfirm.value = true
+}
+
+async function doDeleteKb() {
+  if (!activeKb.value) return
+  bulkDeleting.value = true
+  const kbId = activeKb.value.id
+  try {
+    const res = await api.delete(`/knowledge/bases/${kbId}`)
+    showKbDeleteConfirm.value = false
+    await leaveKb()
+    await loadKbs()
+    notify(`知识库已删除（${res?.deleted_files ?? 0} 个文件）。`)
+  } catch (error) {
+    notify(error.response?.data?.detail || '删除失败，请稍后重试。')
+  } finally {
+    bulkDeleting.value = false
+  }
+}
+
+function confirmDeleteAllFiles() {
+  if (!activeKb.value || !fileList.value.length) return
+  showFilesDeleteConfirm.value = true
+}
+
+async function doDeleteAllFiles() {
+  if (!activeKb.value) return
+  bulkDeleting.value = true
+  const kbId = activeKb.value.id
+  const selectionRevision = knowledgeSelectionRevision
+  try {
+    const res = await api.delete(`/knowledge/bases/${kbId}/files`)
+    showFilesDeleteConfirm.value = false
+    deleteSuccess.value = `已删除 ${res?.deleted_files ?? 0} 个文件。`
+    await loadFiles(kbId, selectionRevision)
+    setTimeout(() => { deleteSuccess.value = '' }, 3000)
+  } catch (error) {
+    notify(error.response?.data?.detail || '删除失败，请稍后重试。')
+  } finally {
+    bulkDeleting.value = false
   }
 }
 

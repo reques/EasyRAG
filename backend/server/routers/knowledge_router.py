@@ -1266,6 +1266,104 @@ async def delete_file(
         return None
 
 
+class PurgeResponse(BaseModel):
+    deleted_files: int
+    deleted_vectors: int
+
+
+async def _purge_kb_contents(session: AsyncSession, kb: Any) -> PurgeResponse:
+    """清空知识库全部文件内容：PG 行 → 向量 → 图谱 → MinIO 原始对象。
+
+    顺序刻意「删行优先」：ingestion worker 对缺失行会 ack 跳过，行先删可让
+    排队中的索引任务自我排空；若先清向量，in-flight 任务会重新写回且再无行可追溯。
+    清理步骤全部 kb-scoped（不依赖已删的行），单步失败记 warning 不阻塞。
+    """
+    from sqlalchemy import delete as sa_delete
+    from backend.services.graph_build_service import reset_kb_graph as _reset_kb_graph
+    from backend.storage.postgres.models_knowledge import KnowledgeFile
+
+    file_repo = KnowledgeFileRepository(session)
+    files = await file_repo.list_all_by_kb(kb.id)
+    buckets = {f.minio_bucket for f in files if f.minio_bucket} or {cfg.MINIO_BUCKET}
+    deleted_files = len(files)
+
+    await session.execute(
+        sa_delete(KnowledgeFile).where(KnowledgeFile.knowledge_base_id == kb.id)
+    )
+    await session.commit()
+
+    deleted_vectors = 0
+    try:
+        from app.rag.retriever import get_retriever
+        deleted_vectors = get_retriever().delete_documents_by_kb(str(kb.id))
+    except NotImplementedError:
+        logger.warning("[knowledge/purge] vector backend does not support kb delete")
+    except Exception as exc:
+        logger.warning("[knowledge/purge] vector cleanup failed (kb=%s): %s", kb.id, exc)
+
+    try:
+        await _reset_kb_graph(kb.id)
+    except Exception as exc:
+        logger.warning("[knowledge/purge] graph cleanup failed (kb=%s): %s", kb.id, exc)
+
+    prefix = f"kb/{kb.id}/"
+    for bucket in buckets:
+        try:
+            from backend.storage.minio.client import get_minio_client
+            client = get_minio_client()
+            objects = client.list_objects(bucket, prefix=prefix, recursive=True)
+            removed = 0
+            for obj in objects:
+                client.remove_object(bucket, obj.object_name)
+                removed += 1
+            logger.info(
+                "[knowledge/purge] removed %d MinIO objects under %s/%s",
+                removed, bucket, prefix,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[knowledge/purge] MinIO cleanup failed (bucket=%s prefix=%s): %s",
+                bucket, prefix, exc,
+            )
+
+    logger.info(
+        "[knowledge/purge] kb '%s' purged: %d files, %d vectors",
+        kb.name, deleted_files, deleted_vectors,
+    )
+    return PurgeResponse(deleted_files=deleted_files, deleted_vectors=deleted_vectors)
+
+
+@router.delete("/bases/{kb_id}/files", response_model=PurgeResponse)
+async def delete_all_kb_files(
+    kb_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """删除知识库中全部文件（知识库本身保留）：向量 + 图谱 + MinIO + PG 记录。空库时幂等返回 0。"""
+    kb = await _require_owned_kb(kb_id, current_user)
+    async with get_session() as session:
+        return await _purge_kb_contents(session, kb)
+
+
+@router.delete("/bases/{kb_id}", response_model=PurgeResponse)
+async def delete_kb(
+    kb_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """删除知识库及其全部内容：文件记录、向量索引、图谱数据、MinIO 原始对象。
+
+    评测关联为 FK 自动处理：run/dataset 的 kb_id 置空保留，benchmark 随库级联删除。
+    """
+    kb = await _require_owned_kb(kb_id, current_user)
+    async with get_session() as session:
+        purged = await _purge_kb_contents(session, kb)
+        kb_repo = KnowledgeBaseRepository(session)
+        kb_row = await kb_repo.get_by_id(kb.id)
+        if kb_row is not None:
+            await kb_repo.delete(kb_row)
+            await session.commit()
+        return purged
+
+
 @router.post("/bases/{kb_id}/files/{file_id}/reindex", status_code=status.HTTP_202_ACCEPTED)
 async def reindex_file(
     kb_id: str,

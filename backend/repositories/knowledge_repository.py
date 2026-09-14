@@ -111,6 +111,16 @@ class KnowledgeFileRepository(BaseRepository[KnowledgeFile]):
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
+    async def list_all_by_kb(self, kb_id: uuid.UUID) -> Sequence[KnowledgeFile]:
+        """Unpaginated file list for one KB (bulk delete must not miss page 2+)."""
+        stmt = (
+            select(KnowledgeFile)
+            .where(KnowledgeFile.knowledge_base_id == kb_id)
+            .order_by(KnowledgeFile.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
     async def get_by_filename(
         self, kb_id: uuid.UUID, filename: str
     ) -> Optional[KnowledgeFile]:

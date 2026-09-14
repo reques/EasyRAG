@@ -81,6 +81,10 @@
         <button class="ev-btn-ghost" @click="saveDataset" :disabled="running || !validCases || !form.kbId">
           <Save :size="14" /> 保存当前用例为评测集
         </button>
+        <button class="ev-btn-ghost" @click="triggerImport" :disabled="running || importing || !form.kbId" title="导入 JSON/CSV 格式的 Golden Set">
+          <Upload :size="14" /> {{ importing ? '导入中…' : '导入评测集' }}
+        </button>
+        <input ref="importFileInput" type="file" accept=".json,.csv" style="display: none" @change="onImportFileChosen" />
         <span v-if="datasetHint" class="ev-hint">{{ datasetHint }}</span>
       </div>
     </section>
@@ -99,48 +103,50 @@
       <div v-else-if="cases.length === 0" class="ev-empty">还没有用例，点击「添加用例」开始</div>
 
       <div v-else class="ev-case-list">
-        <div v-for="(c, idx) in cases" :key="idx" class="ev-case-row">
-          <div class="ev-case-index">{{ idx + 1 }}</div>
-          <label class="ev-field ev-field-grow">
-            <span>问题</span>
-            <input v-model="c.question" placeholder="例如：食品安全法第一百四十八条" :disabled="running" />
-          </label>
-          <label class="ev-field">
-            <span>期望命中的文件</span>
-            <select v-model="c.expected_file_id" :disabled="running">
-              <option value="" disabled>选择文件</option>
-              <option v-for="f in files" :key="f.id" :value="f.id">{{ f.filename }}</option>
-            </select>
-          </label>
-          <label class="ev-field">
-            <span>参考答案（可选）</span>
-            <input v-model="c.reference_answer" placeholder="用于 RAGAs LLM 指标，可留空" :disabled="running" />
-          </label>
-          <label class="ev-field ev-check">
-            <span>负样本</span>
-            <input type="checkbox" v-model="c.expect_miss" :disabled="running" />
-          </label>
-          <button class="ev-btn-ghost" @click="loadCandidates(idx)" :disabled="running || !c.question.trim() || !c.expected_file_id">
-            <Search :size="14" /> 候选
-          </button>
-          <button class="ev-btn-ghost ev-btn-danger" @click="removeCase(idx)" :disabled="running">
-            <Trash2 :size="14" />
-          </button>
-        </div>
-        <div v-if="c.candidates !== null" class="ev-candidates">
-          <div class="ev-candidates-head">
-            <span>勾选真正回答该问题所需的 chunk 作为相关集（已选 {{ (c.expected_chunk_ids || []).length }} 条）</span>
-            <button class="ev-btn-ghost" @click="closeCandidates(idx)"><X :size="12" /> 关闭</button>
-          </div>
-          <div class="ev-candidates-list">
-            <label v-for="(cd, j) in c.candidates" :key="j" class="ev-cand-item">
-              <input type="checkbox" :value="cd.chunk_id" v-model="c.expected_chunk_ids" />
-              <span class="ev-cand-score">{{ cd.score.toFixed(3) }}</span>
-              <span class="ev-cand-snippet">{{ cd.snippet }}</span>
+        <template v-for="(c, idx) in cases" :key="idx">
+          <div class="ev-case-row">
+            <div class="ev-case-index">{{ idx + 1 }}</div>
+            <label class="ev-field ev-field-grow">
+              <span>问题</span>
+              <input v-model="c.question" placeholder="例如：食品安全法第一百四十八条" :disabled="running" />
             </label>
+            <label class="ev-field">
+              <span>期望命中的文件</span>
+              <select v-model="c.expected_file_id" :disabled="running">
+                <option value="" disabled>选择文件</option>
+                <option v-for="f in files" :key="f.id" :value="f.id">{{ f.filename }}</option>
+              </select>
+            </label>
+            <label class="ev-field">
+              <span>参考答案（可选）</span>
+              <input v-model="c.reference_answer" placeholder="用于 RAGAs LLM 指标，可留空" :disabled="running" />
+            </label>
+            <label class="ev-field ev-check">
+              <span>负样本</span>
+              <input type="checkbox" v-model="c.expect_miss" :disabled="running" />
+            </label>
+            <button class="ev-btn-ghost" @click="loadCandidates(idx)" :disabled="running || !c.question.trim() || !c.expected_file_id">
+              <Search :size="14" /> 候选
+            </button>
+            <button class="ev-btn-ghost ev-btn-danger" @click="removeCase(idx)" :disabled="running">
+              <Trash2 :size="14" />
+            </button>
           </div>
-          <p v-if="c.candidates.length === 0" class="ev-hint">该文件暂无候选 chunk，可尝试换问题或调大 top_k</p>
-        </div>
+          <div v-if="c.candidates !== null" class="ev-candidates">
+            <div class="ev-candidates-head">
+              <span>勾选真正回答该问题所需的 chunk 作为相关集（已选 {{ (c.expected_chunk_ids || []).length }} 条）</span>
+              <button class="ev-btn-ghost" @click="closeCandidates(idx)"><X :size="12" /> 关闭</button>
+            </div>
+            <div class="ev-candidates-list">
+              <label v-for="(cd, j) in c.candidates" :key="j" class="ev-cand-item">
+                <input type="checkbox" :value="cd.chunk_id" v-model="c.expected_chunk_ids" />
+                <span class="ev-cand-score">{{ cd.score.toFixed(3) }}</span>
+                <span class="ev-cand-snippet">{{ cd.snippet }}</span>
+              </label>
+            </div>
+            <p v-if="c.candidates.length === 0" class="ev-hint">该文件暂无候选 chunk，可尝试换问题或调大 top_k</p>
+          </div>
+        </template>
       </div>
 
       <div v-if="form.kbId && cases.length" class="ev-run-bar">
@@ -352,7 +358,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { Plus, Trash2, Play, LoaderCircle, RefreshCw, Eye, X, CircleAlert, Save, Search, Download } from 'lucide-vue-next'
+import { Plus, Trash2, Play, LoaderCircle, RefreshCw, Eye, X, CircleAlert, Save, Search, Download, Upload } from 'lucide-vue-next'
 import api from '../api'
 
 const props = defineProps({
@@ -382,6 +388,8 @@ const benchmarkMessage = ref('')
 const loadingBenchmarks = ref(false)
 const benchmarkRunning = ref(false)
 const metricCatalog = ref([])
+const importFileInput = ref(null)
+const importing = ref(false)
 
 const form = ref({
   kbId: '',
@@ -622,6 +630,37 @@ async function saveDataset() {
     datasetSel.value = res.id
   } catch (err) {
     datasetHint.value = err.message || '保存失败'
+  }
+}
+
+function triggerImport() {
+  importFileInput.value?.click()
+}
+
+async function onImportFileChosen(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''  // 允许重复选同一文件
+  if (!file || !form.value.kbId) return
+  importing.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('kb_id', form.value.kbId)
+    const res = await api.post('/evaluation/datasets/import', fd)
+    await loadDatasets()
+    datasetSel.value = res.id
+    datasetHint.value = `已导入「${res.name}」v${res.version}，共 ${res.case_count} 条用例`
+    await onDatasetSelect()
+  } catch (err) {
+    const detail = err.response?.data?.detail
+    if (detail && typeof detail === 'object' && Array.isArray(detail.errors)) {
+      const first = detail.errors[0]
+      datasetHint.value = `导入失败：${detail.errors.length} 处错误（如第 ${first.row} 行 ${first.field}：${first.message}）`
+    } else {
+      datasetHint.value = (typeof detail === 'string' && detail) || '导入失败，请检查文件格式（UTF-8 JSON/CSV，含 question 与 expected_filename/expected_file_id）'
+    }
+  } finally {
+    importing.value = false
   }
 }
 
