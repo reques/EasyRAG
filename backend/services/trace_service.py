@@ -90,7 +90,13 @@ async def persist_execution_trace(
             source_message_id=source_message_id,
             mode=mode,
             model_id=model_id,
-            metadata_json=_json({"goal": goal}),
+            metadata_json=_json({
+                "goal": goal,
+                "context_usage": next((
+                    event["metadata"]["context_usage"] for event in reversed(rows)
+                    if (event.get("metadata") or {}).get("context_usage")
+                ), {}),
+            }),
             **summary,
         )
         session.add(trace)
@@ -149,6 +155,7 @@ def serialize_trace(trace: ExecutionTrace, include_events: bool = True) -> dict:
         "started_at": trace.started_at.isoformat(),
         "completed_at": trace.completed_at.isoformat() if trace.completed_at else None,
         "metadata": _loads(trace.metadata_json) or {},
+        "context_usage": (_loads(trace.metadata_json) or {}).get("context_usage", {}),
     }
     if include_events:
         payload["events"] = [serialize_event(event) for event in trace.events]

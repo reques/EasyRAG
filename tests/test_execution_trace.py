@@ -108,3 +108,33 @@ def test_progress_streams_are_isolated_between_spans_and_runs():
     assert len({main["id"], worker["id"], nested["id"]}) == 3
     assert resumed["output"] == "主任务继续"
     assert worker["output"] == "子任务"
+
+
+def test_last_call_context_is_separate_from_cumulative_usage():
+    total, last_call, seen = {}, {}, set()
+    first = SimpleNamespace(id="first", usage_metadata={"input_tokens": 10000, "output_tokens": 100, "total_tokens": 10100})
+    second = SimpleNamespace(id="second", usage_metadata={"input_tokens": 12000, "output_tokens": 200, "total_tokens": 12200})
+    with use_request_trace() as trace:
+        add_token_usage(total, first, seen, last_call)
+        add_token_usage(total, second, seen, last_call)
+        add_token_usage(total, second, seen, last_call)
+    assert total == {"input_tokens": 22000, "output_tokens": 300, "total_tokens": 22300}
+    assert last_call == second.usage_metadata
+    assert len(trace.events) == 2
+    assert trace.events[0]["metadata"]["context_usage"] == first.usage_metadata
+    assert trace.events[1]["metadata"]["token_usage"] == total
+    assert trace.events[1]["metadata"]["context_usage"]["input_tokens"] == 12000
+
+
+def test_context_usage_survives_trace_serialization():
+    from datetime import datetime, timezone
+    from backend.services.trace_service import serialize_trace
+    trace = SimpleNamespace(
+        id="trace", conversation_id="conversation", source_message_id=1, mode="dynamic", model_id="model",
+        status="completed", input_tokens=22000, output_tokens=300, total_tokens=22300, duration_ms=500,
+        started_at=datetime.now(timezone.utc), completed_at=None, events=[],
+        metadata_json='{"context_usage":{"input_tokens":12000,"output_tokens":200,"total_tokens":12200}}',
+    )
+    payload = serialize_trace(trace)
+    assert payload["token_usage"]["input_tokens"] == 22000
+    assert payload["context_usage"]["input_tokens"] == 12000

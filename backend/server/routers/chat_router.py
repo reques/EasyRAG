@@ -104,6 +104,7 @@ class ChatResponse(BaseModel):
     resumed: bool = False
     trace_id: str = ""
     token_usage: dict[str, int] = Field(default_factory=dict)
+    context_usage: dict[str, int] = Field(default_factory=dict)
 
 
 async def _persist_trace_safely(
@@ -165,6 +166,8 @@ class ChatModelInfo(BaseModel):
 class ChatModelListResponse(BaseModel):
     default_model_id: str
     models: list[ChatModelInfo]
+    # 上下文占用指示器的分母（Settings.CHAT_CONTEXT_WINDOW），全局单值。
+    context_window: int = 0
 
 
 class CustomModelCreate(BaseModel):
@@ -587,6 +590,7 @@ async def list_chat_models(
             ))
     return ChatModelListResponse(
         default_model_id=cfg.LLM_DEFAULT_MODEL_ID,
+        context_window=cfg.CHAT_CONTEXT_WINDOW,
         models=[
             ChatModelInfo(
                 **profile.to_public_dict(
@@ -867,6 +871,7 @@ async def send_message(
             "skills": skill_payload,
             "trace_id": trace_id,
             "token_usage": result.get("token_usage") or {},
+            "context_usage": result.get("context_usage") or {},
         }, ensure_ascii=False)
         await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
         await session.commit()
@@ -898,6 +903,7 @@ async def send_message(
         resumed=bool(result.get("resumed")),
         trace_id=trace_id,
         token_usage=result.get("token_usage") or {},
+        context_usage=result.get("context_usage") or {},
     )
 
 
@@ -1215,6 +1221,7 @@ async def send_message_stream(
                         "skills": skill_payload,
                         "trace_id": trace_id,
                         "token_usage": deep_result.get("token_usage") or {},
+                        "context_usage": deep_result.get("context_usage") or {},
                     }
                     await add_message(
                         session, conv_id, "assistant", answer,
@@ -1259,6 +1266,7 @@ async def send_message_stream(
                 "skills": skill_payload,
                 "trace_id": trace_id,
                 "token_usage": deep_result.get("token_usage") or {},
+                "context_usage": deep_result.get("context_usage") or {},
             })
 
             # 新会话标题后台生成
@@ -1394,6 +1402,7 @@ async def send_message_stream(
                     "skills": skill_payload,
                     "trace_id": trace_id,
                     "token_usage": dyn_result.get("token_usage") or {},
+                    "context_usage": dyn_result.get("context_usage") or {},
                 }, ensure_ascii=False)
                 await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
                 await session.commit()
@@ -1434,6 +1443,7 @@ async def send_message_stream(
             "skills": skill_payload,
             "trace_id": trace_id,
             "token_usage": dyn_result.get("token_usage") or {},
+            "context_usage": dyn_result.get("context_usage") or {},
         })
 
         # 新会话标题后台生成
