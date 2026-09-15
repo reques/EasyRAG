@@ -1,26 +1,15 @@
 <template>
-  <div class="chat-view" :class="{ 'has-task-panel': taskPanel.tasks.length > 0 }">
+  <div class="chat-view" :class="{ 'has-task-panel': panelOpen && !narrowScreen }">
     <!-- 消息区 -->
     <div class="chat-main">
-    <!-- 消息列表 -->
-    <div class="chat-messages" ref="msgContainer" :class="{ 'is-empty': messages.length === 0 && !sending }">
-      <!-- 侧边状态栏展开入口：有任务且面板收起时显示 -->
-      <div v-if="taskPanel.tasks.length && !taskPanel.visible" class="task-panel-toggle">
-        <button
-          type="button"
-          class="task-panel-toggle-btn"
-          title="展开任务状态栏"
-          aria-label="展开任务状态栏"
-          :aria-expanded="taskPanel.visible"
-          @click="taskPanel.visible = true"
-        >
-          <ListChecks :size="14" />
-          展开状态栏
-          <span v-if="taskPanel.tasks.length" class="task-panel-toggle-meta">
-            {{ taskProgress.done }}/{{ taskProgress.total }}
-          </span>
+      <div class="session-toolbar">
+        <button ref="statusToggleEl" type="button" class="session-status-toggle" :class="{ active: panelOpen }" :aria-expanded="panelOpen" aria-controls="session-status-panel" @click="toggleStatusPanel">
+          <ListChecks :size="16" /> <span>状态</span>
+          <span v-if="sending" class="session-running-dot" aria-label="正在运行"></span>
         </button>
       </div>
+    <!-- 消息列表 -->
+    <div class="chat-messages" ref="msgContainer" :class="{ 'is-empty': messages.length === 0 && !sending }">
       <div class="chat-column">
         <!-- 空状态 -->
         <div v-if="messages.length === 0 && !sending" class="chat-empty">
@@ -267,6 +256,48 @@
               <Sparkles :size="13" :class="{ 'is-on': deepResearch }" />
               <span>深度研究</span>
             </button>
+            <div ref="ctxRingEl" class="ctx-ring-shell">
+              <button
+                type="button"
+                class="ctx-ring-btn"
+                :class="{ open: ctxRingOpen }"
+                :disabled="!contextPct && !ctxRingOpen"
+                :title="contextRingTitle"
+                aria-label="上下文占用情况"
+                :aria-expanded="ctxRingOpen"
+                @click="ctxRingOpen = !ctxRingOpen"
+              >
+                <svg viewBox="0 0 20 20" width="16" height="16" class="ctx-ring-svg" aria-hidden="true">
+                  <circle class="ctx-ring-track" cx="10" cy="10" r="8" />
+                  <circle
+                    class="ctx-ring-fill"
+                    :class="contextTone"
+                    cx="10" cy="10" r="8"
+                    :stroke-dasharray="contextRingDash"
+                    transform="rotate(-90 10 10)"
+                  />
+                </svg>
+                <span class="ctx-ring-label" :class="contextTone">
+                  {{ contextPct === null ? '—' : Math.round(contextPct) + '%' }}
+                </span>
+              </button>
+              <div v-if="ctxRingOpen" class="ctx-ring-pop">
+                <div class="ctx-ring-pop-head">
+                  <strong>上下文窗口</strong>
+                  <span>{{ lastCallUsage ? fmtK(contextUsed) + ' / ' + fmtK(contextWindow) : '暂无单次调用数据' }}（{{ contextPct === null ? '—' : contextPct.toFixed(1) + '%' }}）</span>
+                </div>
+                <div v-if="lastCallUsage" class="ctx-ring-bar">
+                  <i class="is-input" :style="{ width: contextInputPct + '%' }" :title="'模型输入 ' + fmtK(contextUsed) + ' tokens'"></i>
+                  <i class="is-output" :style="{ width: contextOutputPct + '%' }" :title="'模型输出 ' + fmtK(contextOutput) + ' tokens（生成后计入下轮窗口）'"></i>
+                </div>
+                <div v-if="lastCallUsage" class="ctx-ring-legend">
+                  <span><i class="dot is-input"></i>输入 {{ fmtK(contextUsed) }}</span>
+                  <span><i class="dot is-output"></i>输出 {{ fmtK(contextOutput) }}</span>
+                  <span><i class="dot is-free"></i>剩余 {{ fmtK(Math.max(contextWindow - contextUsed - contextOutput, 0)) }}</span>
+                </div>
+                <p class="ctx-ring-note">占用来自最近一次模型调用的输入，包含系统提示、工具和历史；累计消耗在右侧状态面板单独显示。</p>
+              </div>
+            </div>
           </div>
           <!-- 模型和发送动作固定在输入框右下角。 -->
           <div class="composer-send-group">
@@ -281,7 +312,6 @@
               :disabled="sending || modelsLoading"
               @click="modelMenuOpen = !modelMenuOpen"
             >
-              <span class="model-status-dot" :class="{ ready: selectedModel?.available }"></span>
               <span class="model-picker-label">
                 {{ modelsLoading ? '加载模型中…' : (selectedModel?.name || '添加自定义模型') }}
               </span>
@@ -325,10 +355,18 @@
     </div><!-- /.chat-main -->
 
     <!-- 多智能体状态工作台：计划与 Agent 分层展示，过程产出默认折叠。 -->
+    <button v-if="panelOpen && narrowScreen" class="status-panel-backdrop" aria-label="关闭状态面板" tabindex="-1" @click="closeStatusPanel"></button>
     <Transition name="task-panel-drawer">
       <aside
-        v-if="taskPanel.visible"
+        v-if="panelOpen"
         class="task-panel"
+        id="session-status-panel"
+        ref="statusPanelEl"
+        :role="narrowScreen ? 'dialog' : 'complementary'"
+        :aria-modal="narrowScreen || undefined"
+        aria-label="会话状态"
+        tabindex="-1"
+        @keydown="handleStatusPanelKeydown"
         :class="{ 'is-resizing': panelResizing }"
         :style="{ width: taskPanelWidth + 'px' }"
       >
@@ -342,18 +380,37 @@
           <span class="task-panel-title">
             <Loader2 v-if="taskPanel.status === 'running'" :size="14" class="spin" />
             <CheckCircle2 v-else :size="14" />
-            状态 {{ taskPanelObjectCount }} 项
+            会话状态
           </span>
           <span class="task-panel-subtitle">{{ runStateLabel }}</span>
         </div>
         <span class="task-panel-actions">
-          <button class="task-panel-close" title="收起状态栏" @click="taskPanel.visible = false">
+          <button type="button" class="task-panel-close" :class="{ active: panelPinned }" :aria-pressed="panelPinned" title="固定展开状态面板" @click="togglePanelPin"><Pin :size="14" /></button>
+          <button class="task-panel-close" title="收起状态栏" @click="closeStatusPanel">
             <ChevronRight :size="14" />
             <span>收起</span>
           </button>
         </span>
       </div>
-      <div class="task-panel-bar">
+      <section class="session-status-card">
+        <div class="session-card-heading"><span>当前运行</span><time>{{ runElapsed }}</time></div>
+        <strong class="session-run-state">{{ runStateLabel }}</strong>
+        <p class="session-model-name">{{ latestAssistant?.meta?.modelName || selectedModel?.name || '尚未选择模型' }}</p>
+      </section>
+      <section class="session-status-card">
+        <div class="session-card-heading"><span>最近一次调用 · 上下文</span><strong>{{ contextPct === null ? '—' : contextPct.toFixed(1) + '%' }}</strong></div>
+        <div class="session-context-bar"><i :style="{ width: contextInputPct + '%' }"></i></div>
+        <p v-if="lastCallUsage" class="session-context-caption">输入 {{ fmtK(contextUsed) }} / 窗口上限 {{ contextWindow ? fmtK(contextWindow) : '未知' }} tokens</p>
+        <p v-else class="session-empty">暂无单次调用数据</p>
+      </section>
+      <section class="session-status-card">
+        <div class="session-card-heading"><span>模型用量</span><small>tokens</small></div>
+        <dl class="session-usage-grid">
+          <div><dt>本轮输入 / 输出</dt><dd>{{ fmtK(currentUsage.input_tokens || 0) }} / {{ fmtK(currentUsage.output_tokens || 0) }}</dd></div>
+          <div><dt>会话累计（已记录）</dt><dd>{{ fmtK(conversationUsage.total_tokens) }}</dd></div>
+        </dl>
+      </section>
+      <div v-if="taskPanel.tasks.length" class="task-panel-bar">
         <div class="task-panel-bar-fill" :style="{ width: taskProgress.pct + '%' }"></div>
       </div>
 
@@ -367,9 +424,11 @@
           </span>
         </button>
         <div v-show="taskPanel.todosExpanded" class="todo-list">
+          <p v-if="!taskPanel.tasks.length" class="session-empty">本轮暂无任务计划</p>
           <div v-for="t in taskPanel.tasks" :key="'todo-' + t.task_id" class="todo-row" :class="'task-' + t.status">
             <span class="task-status-icon">
               <CheckCircle2 v-if="t.status === 'done'" :size="14" />
+              <Square v-else-if="t.status === 'cancelled'" :size="12" aria-label="已停止" />
               <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
               <span v-else-if="t.status === 'skipped'" class="task-skip-mark" title="已跳过">⏭</span>
               <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
@@ -378,6 +437,15 @@
             <span class="todo-title">{{ t.goal }}</span>
           </div>
         </div>
+      </section>
+
+      <section class="workbench-section">
+        <div class="workbench-section-header"><span><FileSearch2 :size="14" /> 产物</span><span>{{ panelArtifacts.length }}</span></div>
+        <p v-if="!panelArtifacts.length" class="session-empty">尚无文件或任务产出</p>
+        <details v-for="artifact in panelArtifacts" :key="artifact.id" class="session-artifact">
+          <summary>{{ artifact.title }}</summary>
+          <pre>{{ artifact.content }}</pre>
+        </details>
       </section>
 
       <section class="workbench-section">
@@ -390,6 +458,7 @@
           </span>
         </button>
         <div v-show="taskPanel.agentsExpanded" class="agent-list">
+          <p v-if="!taskPanel.tasks.length" class="session-empty">本轮没有委派子智能体</p>
           <article v-for="t in taskPanel.tasks" :key="'agent-' + t.task_id" class="agent-card" :class="'task-' + t.status">
             <button class="agent-card-summary" @click="t.expanded = !t.expanded">
               <span class="agent-avatar"><Bot :size="14" /></span>
@@ -399,6 +468,7 @@
               </span>
               <span class="agent-state">
                 <CheckCircle2 v-if="t.status === 'done'" :size="14" />
+                <Square v-else-if="t.status === 'cancelled'" :size="12" aria-label="已停止" />
                 <span v-else-if="t.status === 'error'" class="task-error-mark">✕</span>
                 <span v-else-if="t.status === 'skipped'" class="task-skip-mark" title="已跳过">⏭</span>
                 <Loader2 v-else-if="t.status === 'running'" :size="14" class="spin" />
@@ -419,6 +489,8 @@
                 <div class="agent-output-content" v-html="renderContent(t.output)"></div>
               </div>
               <div v-else-if="t.status === 'running'" class="agent-waiting">正在执行并回传结果…</div>
+              <div v-else-if="t.status === 'cancelled'" class="agent-waiting">已停止</div>
+              <div v-else-if="t.status === 'error'" class="agent-waiting">{{ t.error || '任务执行失败' }}</div>
               <div v-else-if="t.status === 'skipped'" class="agent-waiting">已跳过（{{ t.error || '依赖任务未成功' }}）</div>
               <div v-else-if="t.status === 'pending'" class="agent-waiting">等待调度</div>
             </div>
@@ -620,6 +692,7 @@
 <script setup>
 import { ref, reactive, computed, watch, nextTick, onActivated, onMounted, onUnmounted } from 'vue'
 import { appendWorkArtifact, buildHistoryWorkItems } from '../utils/work-progress.js'
+import { interruptTasks, latestContextUsage, mergeTasks, messageUsage, sessionUsage, shouldAutoOpen, statusArtifacts } from '../utils/session-status.js'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
@@ -643,6 +716,7 @@ import {
   ListChecks,
   Loader2,
   Pencil,
+  Pin,
   Plus,
   RotateCcw,
   Search,
@@ -808,7 +882,7 @@ async function copyMessage(content, index) {
 }
 
 const TASK_PANEL_WIDTH_KEY = 'easyrag-task-panel-width'
-const savedTaskPanelWidth = Number(localStorage.getItem(TASK_PANEL_WIDTH_KEY))
+const savedTaskPanelWidth = Number(localStorage.getItem(TASK_PANEL_WIDTH_KEY) || 340)
 const taskPanelWidth = ref(
   Number.isFinite(savedTaskPanelWidth)
     ? Math.min(520, Math.max(280, savedTaskPanelWidth))
@@ -872,6 +946,47 @@ const customModelForm = reactive({
 const selectedModel = computed(() => (
   modelOptions.value.find(model => model.id === selectedModelId.value) || null
 ))
+
+// ── 上下文占用环形指示器 ──
+// 单次调用的输入占用与整轮累计消耗独立记录；旧记录不推算占用。
+const contextWindow = ref(0)
+const ctxRingOpen = ref(false)
+const ctxRingEl = ref(null)
+const lastCallUsage = computed(() => latestContextUsage(messages.value))
+const contextUsed = computed(() => lastCallUsage.value?.input_tokens || 0)
+const contextOutput = computed(() => lastCallUsage.value?.output_tokens || 0)
+const contextPct = computed(() => {
+  if (!contextWindow.value || !lastCallUsage.value) return null
+  return Math.min(100, (contextUsed.value / contextWindow.value) * 100)
+})
+const contextTone = computed(() => {
+  const pct = contextPct.value
+  if (pct === null) return ''
+  if (pct > 85) return 'is-hot'
+  if (pct > 65) return 'is-warm'
+  return ''
+})
+const contextRingDash = computed(() => {
+  const c = 2 * Math.PI * 8
+  const used = contextPct.value === null ? 0 : (contextPct.value / 100) * c
+  return `${used.toFixed(2)} ${(c - used).toFixed(2)}`
+})
+const contextInputPct = computed(() => (
+  contextWindow.value ? Math.min(100, contextUsed.value / contextWindow.value * 100) : 0
+))
+const contextOutputPct = computed(() => (
+  contextWindow.value ? Math.min(100 - contextInputPct.value, contextOutput.value / contextWindow.value * 100) : 0
+))
+const contextRingTitle = computed(() => {
+  if (!contextWindow.value) return '上下文窗口大小未配置（CHAT_CONTEXT_WINDOW）'
+  if (contextPct.value === null) return '暂无最近一次调用的上下文数据'
+  return `上下文占用 ${contextPct.value.toFixed(1)}% · ${fmtK(contextUsed.value)}/${fmtK(contextWindow.value)}`
+})
+function fmtK(n) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`
+  return String(n)
+}
 const customModels = computed(() => (
   modelOptions.value.filter(model => model.source === 'custom')
 ))
@@ -892,6 +1007,7 @@ async function loadModels(preferredModelId = '') {
   try {
     const data = await api.get('/chat/models')
     modelOptions.value = data.models || []
+    contextWindow.value = data.context_window || 0
     const available = modelOptions.value.filter(model => model.available)
     const requested = available.find(model => model.id === preferredModelId)
     const saved = available.find(model => model.id === selectedModelId.value)
@@ -994,11 +1110,8 @@ async function deleteCustomModel(model) {
 }
 
 function closeModelMenuOnOutsideClick(event) {
-  if (modelPickerEl.value && !modelPickerEl.value.contains(event.target)) {
-    modelMenuOpen.value = false
-  }
-  if (skillPickerEl.value && !skillPickerEl.value.contains(event.target)) {
-    skillMenuOpen.value = false
+  for (const [el, openRef] of [[modelPickerEl, modelMenuOpen], [skillPickerEl, skillMenuOpen], [ctxRingEl, ctxRingOpen]]) {
+    if (el.value && !el.value.contains(event.target)) openRef.value = false
   }
 }
 
@@ -1221,9 +1334,60 @@ let _workWid = 0
 let _msgUid = 0
 const nextMsgUid = () => `msg-${++_msgUid}`
 
-// 侧边任务进度面板（多智能体）：子任务清单 + 每个子任务的状态
+// Panel preferences live outside per-turn data, so sending never closes it.
+const PANEL_PREF_KEY = 'easyrag-status-panel'
+let panelPreference = {}
+try { panelPreference = JSON.parse(localStorage.getItem(PANEL_PREF_KEY) || '{}') || {} } catch { /* default */ }
+const panelOpen = ref(!!panelPreference.visible || !!panelPreference.pinned)
+const panelPinned = ref(!!panelPreference.pinned)
+const dismissedThisRun = ref(false)
+const statusToggleEl = ref(null)
+const statusPanelEl = ref(null)
+const screenQuery = window.matchMedia('(max-width: 760px)')
+const narrowScreen = ref(screenQuery.matches)
+const updateScreen = () => { narrowScreen.value = screenQuery.matches }
+screenQuery.addEventListener('change', updateScreen)
+function savePanelPreference() {
+  localStorage.setItem(PANEL_PREF_KEY, JSON.stringify({ visible: panelOpen.value, pinned: panelPinned.value }))
+}
+function closeStatusPanel() {
+  panelOpen.value = false
+  panelPinned.value = false
+  dismissedThisRun.value = true
+  savePanelPreference()
+  nextTick(() => statusToggleEl.value?.focus())
+}
+function toggleStatusPanel() {
+  if (panelOpen.value) closeStatusPanel()
+  else { panelOpen.value = true; savePanelPreference() }
+}
+function togglePanelPin() {
+  panelPinned.value = !panelPinned.value
+  panelOpen.value = true
+  savePanelPreference()
+}
+function autoOpenStatusPanel(hasActivity) {
+  if (shouldAutoOpen({ dismissed: dismissedThisRun.value, narrow: narrowScreen.value, pinned: panelPinned.value }, hasActivity)) panelOpen.value = true
+}
+watch([panelOpen, narrowScreen], ([open, narrow]) => {
+  if (open && narrow) nextTick(() => statusPanelEl.value?.focus())
+}, { immediate: true })
+function handleStatusPanelKeydown(event) {
+  if (event.key === 'Escape') { event.preventDefault(); closeStatusPanel(); return }
+  if (!narrowScreen.value || event.key !== 'Tab') return
+  const nodes = [...statusPanelEl.value.querySelectorAll('button, a[href], summary, [tabindex="0"]')].filter(el => el.getClientRects().length)
+  const first = nodes[0], last = nodes[nodes.length - 1]
+  if (event.shiftKey && (document.activeElement === first || document.activeElement === statusPanelEl.value)) { event.preventDefault(); last?.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+}
+const runStartedAt = ref(0)
+const runFinishedAt = ref(0)
+const statusNow = ref(Date.now())
+const statusTimer = setInterval(() => { if (sending.value) statusNow.value = Date.now() }, 1000)
+onUnmounted(() => { clearInterval(statusTimer); screenQuery.removeEventListener('change', updateScreen) })
+
+// Task list and execution data are reset for each new turn.
 const taskPanel = ref({
-  visible: false,
   run_id: '',
   status: 'idle',
   todosExpanded: true,
@@ -1232,7 +1396,6 @@ const taskPanel = ref({
 })
 function emptyTaskPanel() {
   return {
-    visible: false,
     run_id: '',
     status: 'idle',
     todosExpanded: true,
@@ -1258,15 +1421,33 @@ function workerLabel(hint) {
 const taskProgress = computed(() => {
   const tasks = taskPanel.value.tasks
   if (!tasks.length) return { done: 0, total: 0, pct: 0 }
-  const done = tasks.filter(t => t.status === 'done' || t.status === 'error').length
+  const done = tasks.filter(t => ['done', 'error', 'skipped', 'cancelled'].includes(t.status)).length
   return { done, total: tasks.length, pct: Math.round(done / tasks.length * 100) }
 })
-const taskPanelObjectCount = computed(() => taskPanel.value.tasks.length * 2)
+const latestAssistant = computed(() => [...messages.value].reverse().find(m => m.role === 'assistant'))
+const currentUsage = computed(() => messageUsage(latestAssistant.value))
+const conversationUsage = computed(() => sessionUsage(messages.value))
+const panelArtifacts = computed(() => statusArtifacts(latestAssistant.value, taskPanel.value.tasks))
+watch(() => panelArtifacts.value.length, (count, previous) => { if (sending.value && count > previous) autoOpenStatusPanel(true) })
+const runElapsed = computed(() => {
+  const seconds = sending.value ? Math.max(0, (statusNow.value - runStartedAt.value) / 1000)
+    : latestAssistant.value?.meta?.elapsed ?? (runFinishedAt.value ? (runFinishedAt.value - runStartedAt.value) / 1000 : null)
+  return seconds == null ? '—' : `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
+})
 const runStateLabel = computed(() => {
-  if (taskPanel.value.status === 'running') return '执行中'
-  if (taskPanel.value.status === 'failed') return '部分任务失败'
-  if (taskPanel.value.status === 'cancelled') return '已取消'
-  return taskPanel.value.tasks.length ? '已完成' : '等待计划'
+  const message = latestAssistant.value
+  if (message?.stopped) return '已停止'
+  if (message?.error) return '执行失败'
+  if (sending.value) {
+    const event = [...(message?.traceEvents || [])].reverse().find(e => e.metadata?.stage !== 'model_usage')
+    if (event?.metadata?.stage === 'generate') return '正在生成回答'
+    if (event?.type === 'reasoning_summary') return '正在分析'
+    if (['tool_call', 'code_execution', 'file_operation'].includes(event?.type)) return '正在执行工具'
+    if (event?.type === 'tool_result') return '正在整理工具结果'
+    return message?.content ? '正在生成回答' : '正在处理'
+  }
+  if (taskPanel.value.tasks.some(t => t.status === 'error')) return '部分任务失败'
+  return message?.content ? '已完成' : '等待提问'
 })
 
 function frontendTaskStatus(status) {
@@ -1274,6 +1455,7 @@ function frontendTaskStatus(status) {
   if (status === 'failed' || status === 'error' || status === 'blocked') return 'error'
   if (status === 'running') return 'running'
   if (status === 'skipped') return 'skipped'
+  if (status === 'cancelled') return 'cancelled'
   return 'pending'
 }
 
@@ -1356,9 +1538,12 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   if (newId === oldId) return
   conversationId.value = newId
   messages.value = []
+  ctxRingOpen.value = false
   input.value = ''
   // 切换会话 → 清空上一会话的任务面板（否则面板残留 pin 在右边）
   taskPanel.value = emptyTaskPanel()
+  runStartedAt.value = 0
+  runFinishedAt.value = 0
 
   if (newId) {
     try {
@@ -1371,13 +1556,14 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
         sources: m.meta?.sources || [],
         skills: m.meta?.skills || [],
         deepResearch: !!m.meta?.deep_research,
-        meta: (m.meta?.agent_mode || m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.trace_id || m.meta?.skills?.length) ? {
+        meta: (m.meta?.agent_mode || m.meta?.intent || m.meta?.model_name || m.meta?.run_id || m.meta?.trace_id || m.meta?.token_usage || m.meta?.skills?.length) ? {
           agentMode: m.meta?.agent_mode || '',
           intent: m.meta?.intent || '',
           modelName: m.meta?.model_name || '',
           runId: m.meta?.run_id || '',
           traceId: m.meta?.trace_id || '',
           tokenUsage: m.meta?.token_usage || {},
+          contextUsage: m.meta?.context_usage || {},
           skillNames: (m.meta?.skills || []).map(skill => skill.name),
         } : null,
         traceEvents: [],
@@ -1411,16 +1597,15 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
           return {
             ...message,
             traceEvents: trace.events || [],
-            meta: { ...(message.meta || {}), tokenUsage: trace.token_usage || {} },
+            meta: { ...(message.meta || {}), tokenUsage: trace.token_usage || {}, contextUsage: trace.context_usage || message.meta?.contextUsage || {} },
           }
         })
       } catch { /* 旧记录或已清理的 trace 保持原进度视图 */ }
       try {
         const runData = await api.get(`/chat/conversations/${newId}/runs`)
-        const latestRun = runData.runs?.[0]
+        const latestRun = runData.runs?.find(run => run.id === latestAssistant.value?.meta?.runId)
         if (latestRun?.tasks?.length) {
           taskPanel.value = {
-            visible: false,
             run_id: latestRun.id,
             status: latestRun.status,
             todosExpanded: true,
@@ -1506,6 +1691,9 @@ async function send(options = {}) {
   let gotError = ''
   // 重置当前轮次的状态缓冲 + 任务面板
   statusSteps.value = []
+  dismissedThisRun.value = false
+  runStartedAt.value = Date.now()
+  runFinishedAt.value = 0
   taskPanel.value = emptyTaskPanel()
 
   try {
@@ -1548,28 +1736,22 @@ async function send(options = {}) {
           const existing = list.findIndex(item => item.id === event.id)
           if (existing >= 0) list[existing] = event
           else list.push(event)
-          messages.value[msgIndex] = { ...tm, traceEvents: list }
+          messages.value[msgIndex] = { ...tm, traceEvents: list, meta: {
+            ...(tm.meta || {}),
+            ...(event.metadata?.token_usage ? { tokenUsage: event.metadata.token_usage } : {}),
+            ...(event.metadata?.context_usage ? { contextUsage: event.metadata.context_usage } : {}),
+          } }
+          if (['task_start', 'spawn_start'].includes(event.metadata?.stage)) autoOpenStatusPanel(true)
           scrollBottom()
         }
       } else if (ev.type === 'sub_tasks') {
-        // 拆解完成：初始化侧边任务面板的待办清单（全部 pending）
         taskPanel.value = {
-          visible: true,
+          ...taskPanel.value,
           run_id: ev.run_id || taskPanel.value.run_id || '',
           status: 'running',
-          todosExpanded: true,
-          agentsExpanded: true,
-          tasks: (ev.tasks || []).map(t => ({
-            task_id: t.task_id,
-            goal: t.goal,
-            worker_hint: t.worker_hint,
-            status: 'pending',
-            tools: [],
-            output: '',
-            error: '',
-            expanded: false,
-          })),
+          tasks: mergeTasks(taskPanel.value.tasks, ev.tasks),
         }
+        autoOpenStatusPanel(taskPanel.value.tasks.length > 0)
       } else if (ev.type === 'tool_call') {
         const task = findTask(ev.task_id)
         if (task) task.tools.push(ev.detail)
@@ -1599,9 +1781,15 @@ async function send(options = {}) {
           steps: [...(m.steps || []), st],
           workItems: [...(m.workItems || []), { t: 'step', wid: `w${++_workWid}`, ...st }],
         }
-        if (ev.step === 'task_started') setTaskStatus(ev.task_id, 'running')
+        if (ev.step === 'task_started') {
+          taskPanel.value.tasks = mergeTasks(taskPanel.value.tasks, [{ task_id: ev.task_id, goal: ev.detail }])
+          setTaskStatus(ev.task_id, 'running')
+          autoOpenStatusPanel(true)
+        }
         scrollBottom()
       } else if (ev.type === 'worker_output') {
+        taskPanel.value.tasks = mergeTasks(taskPanel.value.tasks, [{ task_id: ev.task_id, worker_hint: ev.worker }])
+        autoOpenStatusPanel(true)
         // 过程产出全文进入右侧工作台；主对话框只放一行总结性描述
         const task = findTask(ev.task_id)
         if (task) {
@@ -1674,6 +1862,7 @@ async function send(options = {}) {
             runId: ev.run_id || m.meta?.runId || '',
             traceId: ev.trace_id || m.meta?.traceId || '',
             tokenUsage: ev.token_usage || m.meta?.tokenUsage || {},
+            contextUsage: ev.context_usage || m.meta?.contextUsage || {},
             modelName: ev.model_name || m.meta?.modelName || '',
             skillNames: (ev.skills || requestSkills).map(skill => skill.name),
           },
@@ -1709,6 +1898,7 @@ async function send(options = {}) {
         }
       } else if (ev.type === 'error') {
         gotError = ev.detail || '生成失败'
+        taskPanel.value.tasks = interruptTasks(taskPanel.value.tasks, false, gotError)
         const em = messages.value[msgIndex]
         messages.value[msgIndex] = { ...em, error: gotError, stepsLoading: false }
         if (taskPanel.value.tasks.length) taskPanel.value.status = 'failed'
@@ -1728,6 +1918,7 @@ async function send(options = {}) {
     // 停止生成：AbortError 属正常终止（后端不保存本轮），非错误
     const aborted = e && (e.name === 'AbortError' || /abort/i.test(String(e.message || '')))
     if (m && m.uid === asstUid) {
+      taskPanel.value.tasks = interruptTasks(taskPanel.value.tasks, aborted, aborted ? '已停止' : e.message)
       messages.value[msgIndex] = {
         ...m,
         content: aborted ? (m.content || '') : (m.content || `❌ 请求失败: ${e.message}`),
@@ -1764,6 +1955,7 @@ async function send(options = {}) {
     }
   } finally {
     sending.value = false
+    runFinishedAt.value = Date.now()
     if (currentAbort) { currentAbort = null }
     attachedImage.value = null
     imageError.value = ''

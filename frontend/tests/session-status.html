@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session status regression</title>
+<div id="app" style="height:100vh;width:100%"></div>
+<script type="module">
+import { createApp, h } from 'vue'
+import { createPinia } from 'pinia'
+import { createRouter, createMemoryHistory } from 'vue-router'
+import ChatView from '../src/views/ChatView.vue'
+import api from '../src/api/index.js'
+import { useChatStore } from '../src/stores/chat.js'
+import '../src/style.css'
+// Isolated UI fixture; all requests stay in memory.
+api.get = async path => {
+  if (path.endsWith('/models')) return { models: [{ id: 'demo', name: 'Demo Model', provider: 'Demo', available: true }], context_window: 200000 }
+  if (path.endsWith('/skills')) return { skills: [], max_selected: 10 }
+  if (path.endsWith('/history')) return { messages: [{ role: 'user', content: '整理这份材料。' }, { role: 'assistant', content: '材料已整理。', meta: { model_name: 'Demo Model', token_usage: { input_tokens: 30000, output_tokens: 300, total_tokens: 30300 }, context_usage: { input_tokens: 12000, output_tokens: 100, total_tokens: 12100 } } }] }
+  if (path.endsWith('/conversations')) return [{ id: 'preview', title: 'Preview' }]
+  return {}
+}
+api.delete = async () => ({})
+let callback, complete
+api.streamChat = async (url, body, cb, { signal }) => {
+  callback = cb
+  cb({ type: 'agent_event', event: { id: 'root', type: 'agent_start', status: 'running', timestamp: new Date().toISOString(), metadata: {} } })
+  return new Promise((resolve, reject) => { complete = resolve; signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }) })
+}
+const emit = event => callback?.(event)
+const actions = {
+  task1: () => emit({ type: 'sub_tasks', tasks: [{ task_id: 'a', goal: '检索资料', worker_hint: 'rag' }] }),
+  result: () => emit({ type: 'worker_output', task_id: 'a', status: 'done', worker: 'rag', content: '检索报告：已找到相关材料。' }),
+  task2: () => emit({ type: 'sub_tasks', tasks: [{ task_id: 'a', goal: '检索资料' }, { task_id: 'b', goal: '交叉验证', worker_hint: 'rag' }] }),
+  usage: () => emit({ type: 'agent_event', event: { id: 'usage', type: 'planning', status: 'completed', timestamp: new Date().toISOString(), metadata: { stage: 'model_usage', token_usage: { input_tokens: 45000, output_tokens: 450, total_tokens: 45450 }, context_usage: { input_tokens: 15000, output_tokens: 150, total_tokens: 15150 } } } }),
+  done: () => { emit({ type: 'done', content: '处理完成。', elapsed_seconds: 3 }); complete?.() },
+}
+const pinia = createPinia()
+const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: ChatView }] })
+await router.push('/')
+createApp({ render: () => h('div', { style: 'height:100%' }, [
+  h('nav', { style: 'position:fixed;top:5px;left:8px;z-index:20;display:flex;gap:6px', 'aria-label': 'Test controls' }, Object.entries(actions).map(([key, action]) => h('button', { onClick: action, 'data-action': key }, key))),
+  h(ChatView),
+]) }).use(pinia).use(router).mount('#app')
+useChatStore(pinia).selectConversation('preview')
+</script>
+</html>

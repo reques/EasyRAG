@@ -248,6 +248,7 @@ class AgentService:
                     mode="dynamic",
                     elapsed_ms=round(float(result.get("elapsed_seconds", 0)) * 1000, 1),
                     token_usage=result.get("token_usage") or {},
+                    context_usage=result.get("context_usage") or {},
                 )
             except Exception as exc:
                 emit("error", "error", "Agent 执行失败", str(exc), output=str(exc), status="error")
@@ -290,6 +291,7 @@ class AgentService:
                     mode="deepagents",
                     elapsed_ms=round(float(result.get("elapsed_seconds", 0)) * 1000, 1),
                     token_usage=result.get("token_usage") or {},
+                    context_usage=result.get("context_usage") or {},
                 )
             except Exception as exc:
                 emit("error", "error", "Agent 执行失败", str(exc), output=str(exc), status="error")
@@ -408,6 +410,7 @@ class AgentService:
         #    生成。此处与 prepare_context 对齐：生成前检索并注入上下文）────
         sources: List[Dict[str, str]] = []
         token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        context_usage: dict[str, int] = {}
         usage_message_ids: set[str] = set()
         if knowledge_base_ids:
             try:
@@ -534,7 +537,7 @@ class AgentService:
                     last = msgs[-1]
                     mtype = getattr(last, "type", "")
                     if mtype == "ai":
-                        add_token_usage(token_usage, last, usage_message_ids)
+                        add_token_usage(token_usage, last, usage_message_ids, context_usage)
                     tc = getattr(last, "tool_calls", None)
                     if tc:
                         # ReAct 一步：AI 消息正文 = 这一步的推理思考，tool_calls = 动作
@@ -611,6 +614,7 @@ class AgentService:
                     "error_message": str(exc),
                     "elapsed_seconds": round(time.perf_counter() - start, 3),
                     "token_usage": token_usage,
+                    "context_usage": context_usage,
                 }
 
         msgs = (final_state or {}).get("messages") or []
@@ -670,6 +674,7 @@ class AgentService:
             "resumed": resumed,
             "elapsed_seconds": round(time.perf_counter() - start, 3),
             "token_usage": token_usage,
+            "context_usage": context_usage,
         }
 
     # ── 流式路径 (SSE) ────────────────────────────────────────────────────

@@ -37,7 +37,7 @@ export function normalizeTraceEvents(events) {
 }
 
 const TOOL_TYPES = new Set(['tool_call', 'tool_result', 'file_operation', 'code_execution'])
-const HIDDEN_STAGES = new Set(['understand', 'generate', 'generate_done', 'tool', 'tool_done', 'reason'])
+const HIDDEN_STAGES = new Set(['understand', 'generate', 'generate_done', 'tool', 'tool_done', 'reason', 'model_usage'])
 const valueText = value => typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value, null, 2)
 const isResult = event => event.type === 'tool_result'
   || ['tool_end', 'tool_error', 'tool_done'].includes(event.metadata?.stage)

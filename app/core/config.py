@@ -243,6 +243,10 @@ class Settings(BaseSettings):
     # 超出部分取真实尾部并记日志，避免长会话把上下文窗口撑爆。
     # 正常路径（有摘要）不受此限制：摘要承载远期上下文 + 最近 20 条。
     HISTORY_CONTEXT_MAX_MESSAGES: int = 100
+    # 上下文占用指示器的分母：模型上下文窗口（token 数）。前端环形指示器
+    # 用「最近一轮 LLM 调用的真实 input_tokens / 本值」计算占比。
+    # 全局单值——内置与自定义模型共用；若接入的模型窗口不同（如 128K），按实际值改。
+    CHAT_CONTEXT_WINDOW: int = 200_000
 
     # ── PostgreSQL (阶段 1) ──────────────────────────────────────────────
     POSTGRES_HOST: str = "localhost"

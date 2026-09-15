@@ -289,7 +289,10 @@ def token_usage_from_message(message: Any) -> Dict[str, int]:
     return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
 
 
-def add_token_usage(total: Dict[str, int], message: Any, seen: set[str]) -> None:
+def add_token_usage(
+    total: Dict[str, int], message: Any, seen: set[str],
+    last_call: Optional[Dict[str, int]] = None,
+) -> None:
     """Add usage once per AI message (stream and value modes may repeat it)."""
     usage = token_usage_from_message(message)
     if not any(usage.values()):
@@ -300,6 +303,14 @@ def add_token_usage(total: Dict[str, int], message: Any, seen: set[str]) -> None
     seen.add(key)
     for name, value in usage.items():
         total[name] = int(total.get(name, 0)) + value
+    if last_call is not None:
+        last_call.clear()
+        last_call.update(usage)
+        emit(
+            "planning", "model_usage", "模型用量",
+            token_usage=dict(total), context_usage=dict(last_call),
+            status="completed",
+        )
 
 
 def snapshot_request_context() -> "contextvars.Context":

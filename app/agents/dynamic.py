@@ -274,6 +274,7 @@ def run_dynamic_agent(
     resumed = False
     calls_by_id: dict[str, str] = {}
     token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    context_usage: dict[str, int] = {}
     usage_message_ids: set[str] = set()
 
     def _emit_stream_end() -> None:
@@ -350,7 +351,7 @@ def run_dynamic_agent(
                     mtype = getattr(last, "type", "")
                     tc = getattr(last, "tool_calls", None) or []
                     if mtype == "ai":
-                        add_token_usage(token_usage, last, usage_message_ids)
+                        add_token_usage(token_usage, last, usage_message_ids, context_usage)
                         if response_stream is None:
                             response_stream = _new_response_stream()
                         content = message_text(getattr(last, "content", ""))
@@ -430,6 +431,7 @@ def run_dynamic_agent(
             "error_message": str(exc),
             "elapsed_seconds": round(time.perf_counter() - start, 3),
             "token_usage": token_usage,
+            "context_usage": context_usage,
         }
 
     if degraded and not final_answer.strip():
@@ -466,4 +468,5 @@ def run_dynamic_agent(
         "error_message": None,
         "elapsed_seconds": round(time.perf_counter() - start, 3),
         "token_usage": token_usage,
+        "context_usage": context_usage,
     }
