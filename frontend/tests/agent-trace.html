@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>执行过程展示回归</title>
+<div id="app"></div>
+<script type="module">
+  import { createApp, h, ref } from 'vue'
+  import AgentTrace from '../src/components/AgentTrace.vue'
+  import '../src/style.css'
+
+  const root = { id: 'root', type: 'agent_start', status: 'running', metadata: {} }
+  const update = (id, output, streaming, source = id) => ({ id, parent_id: 'root', type: 'reasoning_summary', status: streaming ? 'running' : 'completed', output, metadata: { source_event_id: source, stream_mode: 'snapshot', streaming, span: 'main' } })
+  const call = { id: 'call1', parent_id: 'root', type: 'tool_call', status: 'running', input: '{"query":"付款期限与违约责任"}', metadata: { tool: 'kb_search', stage: 'tool_start' } }
+  const result = { id: 'result1', parent_id: 'call1', type: 'tool_result', status: 'completed', output: '合同约定：付款期限为 30 天；逾期按日计算违约金。', metadata: { stage: 'tool_end', elapsed_ms: 1280 } }
+  const full = [root, update('p1', '我会先检索合同中的付款期限和违约责任，再核对对应条款。', false), call, result,
+    update('p2', '已找到付款期限和违约金条款，接下来按适用条件整理结果。', false),
+    { id: 'final', type: 'final_response', output: '最终答案', status: 'completed' }]
+  createApp({ setup() {
+    const events = ref([root])
+    const running = ref(true)
+    const stopped = ref(false)
+    const error = ref('')
+    const next = () => {
+      const previous = events.value.find(e => e.id === 'p1')
+      const text = (previous?.output || '') + (previous ? '查知识库' : '先')
+      const snapshot = update('p1', text, true)
+      events.value = previous ? events.value.map(e => e.id === 'p1' ? snapshot : e) : [...events.value, snapshot]
+    }
+    const finish = () => { events.value = full; running.value = false; stopped.value = false; error.value = '' }
+    const legacy = () => {
+      const chunks = ['先', '查', '知识', '库']
+      events.value = [root, ...chunks.map((text, i) => ({ ...update(`legacy${i}`, text, i < 3, 'old-stream'), metadata: { source_event_id: 'old-stream', streaming: i < 3 } })), call, result]
+      running.value = false
+    }
+    const fail = () => { events.value = [root, update('p1', '正在检索知识库。', false), call]; running.value = false; stopped.value = false; error.value = '连接中断，请重试。' }
+    const stop = () => { events.value = [root, call]; running.value = false; stopped.value = true; error.value = '' }
+    return () => h('main', { style: 'max-width:720px;margin:36px auto;padding:24px' }, [
+      h('nav', { style: 'display:flex;flex-wrap:wrap;gap:12px;margin-bottom:32px' }, [
+        h('button', { onClick: next }, '流式片段'), h('button', { onClick: finish }, '完成'),
+        h('button', { onClick: legacy }, '旧记录'), h('button', { onClick: fail }, '失败'), h('button', { onClick: stop }, '停止'),
+      ]),
+      h(AgentTrace, { events: events.value, running: running.value, stopped: stopped.value, error: error.value }),
+      !running.value && !error.value && !stopped.value && events.value.some(e => e.type === 'final_response')
+        ? h('section', { class: 'final-answer', style: 'color:var(--gray-900);font-size:14px;line-height:1.9' }, [
+          h('p', '已核对合同，付款期限与违约责任如下：'),
+          h('ul', [h('li', '付款期限：30 天。'), h('li', '逾期责任：按合同约定逐日计算违约金。')]),
+        ]) : null,
+    ])
+  } }).mount('#app')
+</script>
+</html>

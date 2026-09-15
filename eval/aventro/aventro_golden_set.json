@@ -1,0 +1,1553 @@
+{
+  "name": "aventro-golden-v1",
+  "description": "Aventro Motors 评测集 v1，源自 RAG-Multi-Corpus benchmark（agentic chunking + gpt-4.1 相关性标注），221 条。expected_filename 为 md 文件名；若上传 docx 版需先做文件名映射。expected_chunk_ids 待用 chunk-candidates 补齐。",
+  "cases": [
+    {
+      "question": "What are the key features of the Aventro Edge Sedan?",
+      "reference_answer": "The Aventro Edge Sedan is a sophisticated blend of contemporary design, innovative technology, and reliable performance. It includes advanced connectivity and safety features suitable for both city and highway use.\n\nKey features include LED DRLs & Headlamps, projector headlamps, cruise control, wireless charging, automatic climate control, rear AC vent, push button start, keyless entry, rear parking sensors, and electrically adjustable ORVMs. Fast charging is available in the electric variant.",
+      "expected_filename": "Aventro Edge Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the Aventro Edge Sedan Electric variant compare to the Petrol variant?",
+      "reference_answer": "The Electric variant offers features similar to the Petrol Base but includes fast charging support and has an EV range of 380 km. The Petrol variant comes with engine options like 1.5L Turbo with 120 HP, depending on the model, and standard features like an 8-inch infotainment system, ABS, Dual Airbags, and LED DRL.\n\nBoth variants offer different price points and key features based on the customer's preference for engine type and additional technological enhancements.",
+      "expected_filename": "Aventro Edge Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is cruise control available in all variants of the Aventro Edge Sedan?",
+      "reference_answer": "Yes, cruise control is listed as a feature in the Aventro Edge Sedan. The detailed list of features includes cruise control, which suggests its availability across all variants.",
+      "expected_filename": "Aventro Edge Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why does the Aventro Edge ZX Model include a 360-degree camera and ADAS Level 2?",
+      "reference_answer": "The inclusion of a 360-degree camera and ADAS Level 2 in the Edge ZX Model enhances driver assistance and safety. These features provide additional convenience and security by offering advanced technologies like Adaptive Cruise, Lane Change Assist, and Traffic Sign Recognition. This positions the ZX Model as a premium choice for customers seeking enhanced comfort and safety.",
+      "expected_filename": "Aventro Edge Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What engine options are available for the Aventro Edge Sedan?",
+      "reference_answer": "The Aventro Edge Sedan offers a variety of engine options to cater to different customer preferences: a 1.5L Turbo Petrol with 120 HP, a 1.6L Turbo Diesel with 115 HP, a 55kWh Battery Electric with a 380 km ARAI Range, and a 1.5L Petrol + 48V Mild Hybrid System.",
+      "expected_filename": "Aventro Edge Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is Adaptive Cruise Control (ACC)?",
+      "reference_answer": "Adaptive Cruise Control (ACC) is an advanced driver assistance system (ADAS) designed to automatically adjust a vehicle’s cruising speed to maintain a safe following distance from vehicles ahead. It offers greater safety, comfort, and convenience, particularly in highway and stop-and-go traffic scenarios.",
+      "expected_filename": "Adaptive Cruise Control (ACC).md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does Adaptive Cruise Control differ from Traditional Cruise Control?",
+      "reference_answer": "Traditional Cruise Control maintains a set vehicle speed as chosen by the driver. In contrast, Adaptive Cruise Control uses sensors to detect vehicles ahead and can increase, decrease, or maintain speed based on traffic conditions, including automatic braking and acceleration.",
+      "expected_filename": "Adaptive Cruise Control (ACC).md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the advantages of using Adaptive Cruise Control?",
+      "reference_answer": "Adaptive Cruise Control offers several advantages, including increased safety by reducing the risk of rear-end collisions, convenience by reducing driver fatigue on long trips and in traffic jams, and improved efficiency through optimized speed and braking, potentially enhancing fuel economy.",
+      "expected_filename": "Adaptive Cruise Control (ACC).md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does Adaptive Cruise Control work in typical driving conditions?",
+      "reference_answer": "The driver activates ACC and sets a desired speed and following distance. The system continuously scans the road using radar, lidar, and/or cameras. It maintains the set speed if the road is clear and automatically adjusts speed by controlling throttle and brakes when detecting slower vehicles within the pre-set distance.",
+      "expected_filename": "Adaptive Cruise Control (ACC).md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Does Adaptive Cruise Control require continuous driver attention?",
+      "reference_answer": "Despite its advanced capabilities, Adaptive Cruise Control is not a substitute for driver attention. The driver must remain alert and ready to take control at all times, as sensor limitations and other factors can impact its performance.",
+      "expected_filename": "Adaptive Cruise Control (ACC).md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I change a tyre on an Aventro Motor vehicle?",
+      "reference_answer": "Changing a flat tyre is a basic and essential automotive skill for every Aventro Motor car owner. This guide will walk you through:\n- Steps to change a tyre\n- Where the spare tyre and toolkit is found in all Aventro models\n- General tips and safety instructions\n---\n## Steps to Change a Tyre\n1. Park Safely\n2. Gather Tools\n3. Remove the Wheel Cover/Hubcap\n4. Loosen the Lug Nuts\n5. Lift the Vehicle with the Jack\n6. Remove the Lug Nuts and Tyre\n7. Mount the Spare Tyre\n8. Lower the Vehicle\n9. Tighten the Lug Nuts\n10. Replace the Hubcap or Wheel Cover (if applicable)\n11. Stow Equipment\n--- \n## Safety & Tips\n- Never change a tyre on a slope or close to traffic.\n- Use hazard warning triangle if available.\n- After installation, drive slowly and get the spare tyre pressure checked at the nearest Aventro Service Center.",
+      "expected_filename": "Aventro Motors- How to Change a Tyre.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Where can I find the spare tyre and toolkit in Aventro models?",
+      "reference_answer": "## Where to Find the Spare Tyre & Toolkit in Aventro Models\n| Model Type | Common Location of Spare Tyre & Toolkit |\n|--------------|------------------------------------------------|\n| Hatchback | Under the boot floor in the rear compartment |\n| Sedan | Under the boot floor in the trunk |\n| SUV | Under the boot floor or mounted underneath the rear of the car |\n| (All Models) | Toolkit is usually secured next to the spare tyre or inside a side panel of the boot/trunk |",
+      "expected_filename": "Aventro Motors- How to Change a Tyre.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Does Aventro provide roadside assistance in India?",
+      "reference_answer": "## Need Help?\nAventro offers **Roadside Assistance** across India. If you are unable to change the tyre, please contact your nearest:\n- Aventro Service Center\n- Or call Aventro Roadside Assistance (see main service manual/contact card in your glove box)",
+      "expected_filename": "Aventro Motors- How to Change a Tyre.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it important to know how to change a tyre on an Aventro vehicle?",
+      "reference_answer": "Changing a flat tyre is a basic and essential automotive skill for every Aventro Motor car owner. This guide will walk you through:\n- Steps to change a tyre\n- General tips and safety instructions \nKnowing how to change a tyre empowers drivers to handle emergencies confidently without relying solely on assistance, ensuring safety and convenience, especially in remote areas where immediate help might not be available.\n--- \n## Safety & Tips\n- Never change a tyre on a slope or close to traffic.\n- Use hazard warning triangle if available.",
+      "expected_filename": "Aventro Motors- How to Change a Tyre.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a test drive with Aventro Motors?",
+      "reference_answer": "Welcome to Aventro Motors Pvt. Ltd.! Experience the future of mobility from the comfort of your home. Book a test drive for any Aventro car, and we’ll bring your chosen model to your doorstep, anywhere in India.\n\n**Fill in the form below or contact us directly:** \n- **Phone:** +91 124 1234567 \n- **Email:** [info@aventromotors.com](mailto:info@aventromotors.com)\n\n<sup>If you are submitting via email, mention:**Test Drive at Doorstep Request** in the subject line.</sup>\n\n**Required Details:**\n- Full Name\n- Mobile Number\n- Email Address\n- Preferred Model & Variant (e.g., Aventro Zoom Petrol ZX)\n- Preferred Date & Time\n- Complete Address for Test Drive\n- Any Special Requests/Comments",
+      "expected_filename": "Test Drive at Your Doorstep.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Can I schedule a test drive anywhere in India with Aventro Motors?",
+      "reference_answer": "Welcome to Aventro Motors Pvt. Ltd.! Experience the future of mobility from the comfort of your home. Book a test drive for any Aventro car, and we’ll bring your chosen model to your doorstep, anywhere in India.",
+      "expected_filename": "Test Drive at Your Doorstep.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the different car categories and variants offered by Aventro Motors?",
+      "reference_answer": "Choose Your Car \nSelect from 20 models across Hatchback, Sedan, and SUV categories, with Petrol, Diesel, Electric, and Hybrid variants.",
+      "expected_filename": "Test Drive at Your Doorstep.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What details are required to book a test drive with Aventro Motors via email?",
+      "reference_answer": "If you are submitting via email, mention:**Test Drive at Doorstep Request** in the subject line.\n\n**Required Details:**\n- Full Name\n- Mobile Number\n- Email Address\n- Preferred Model & Variant (e.g., Aventro Zoom Petrol ZX)\n- Preferred Date & Time\n- Complete Address for Test Drive\n- Any Special Requests/Comments",
+      "expected_filename": "Test Drive at Your Doorstep.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What makes the Aventro Storm SUV stand out?",
+      "reference_answer": "The Aventro Storm is a premium SUV designed for modern adventurers and families, blending robust performance, advanced safety, elegant design, and cutting-edge technology. Whether city driving or off-the-grid journeys, the Storm SUV ensures comfort, safety, and excitement.\n\nThe SUV offers various engine types including Petrol, Diesel, Electric, and Hybrid, along with transmission options of Automatic and Manual depending on the variant. The vehicle comes with features such as up to 11-inch touchscreen infotainment systems, connectivity options like Android Auto, Apple CarPlay, and advanced safety features like 6 Airbags, ABS, ESP, and ADAS.",
+      "expected_filename": "Aventro Storm SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the ZX variant of the Aventro Storm SUV differ from the X variant?",
+      "reference_answer": "The ZX variant includes a 360º Surround View Camera, 11-inch Harman Infotainment System, ADAS Level 2 with features such as Adaptive Cruise, Lane Centering, and Traffic Sign Recognition, while the X variant offers ADAS Level 1, Lane Keep Assist, Forward Collision Warning, and Panoramic Sunroof. Both have different interior trims with the ZX featuring leather seats and powered driver seat.",
+      "expected_filename": "Aventro Storm SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a test drive for the Aventro Storm SUV?",
+      "reference_answer": "Book a test drive today at your nearest Aventro dealership or service center. You can contact Aventro Motors by phone at +91 124 1234567 or email at info@aventromotors.com for bookings and more information.",
+      "expected_filename": "Aventro Storm SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Does the Aventro Storm offer a hybrid engine option?",
+      "reference_answer": "Yes, the Aventro Storm offers a hybrid engine option. It is available across different variants with various key features and pricing.",
+      "expected_filename": "Aventro Storm SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might someone opt for the Electric variant of the Aventro Storm SUV?",
+      "reference_answer": "The Electric variant of the Aventro Storm SUV provides a sustainable and environmentally friendly option for modern drivers. It includes features like a 7-inch infotainment system, standard safety, and ADAS technology while offering cost savings on fuel and reduced carbon emissions compared to conventional petrol or diesel engines.",
+      "expected_filename": "Aventro Storm SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I open the fuel knob on an Aventro car?",
+      "reference_answer": "Opening the fuel knob (fuel cap) on your Aventro vehicle is a simple process. \nFollow these steps to ensure safe and easy access when you need to refuel: \nEnsure your car is completely stopped and the engine is turned off. Locate the fuel knob release lever. Pull the Release Lever, exit the car, open the fuel lid, and turn and remove the fuel knob.\n\nTwist the fuel knob (cap) **anti-clockwise** to unscrew it. Remove the cap and place it in a secure slot (usually on the lid itself or hold it carefully).",
+      "expected_filename": "How to Open the Fuel Knob in Aventro Cars.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it important to use the parking brake when opening the fuel knob?",
+      "reference_answer": "Ensure your car is completely stopped and the engine is turned off. Engage the parking brake for safety.\n\nUsing the parking brake prevents accidental movement and provides additional safety during the process.",
+      "expected_filename": "How to Open the Fuel Knob in Aventro Cars.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Does the fuel knob release lever in Aventro cars come with a fuel pump icon?",
+      "reference_answer": "The fuel knob release lever is typically found with a **fuel pump icon**.\n\nThe presence of a fuel pump icon helps users easily identify the lever.",
+      "expected_filename": "How to Open the Fuel Knob in Aventro Cars.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What should I do if the fuel knob in an Aventro car is stuck?",
+      "reference_answer": "If the knob is stuck, double-check that the release mechanism is fully engaged.\n\nReferring to the owner's manual or contacting an Aventro Service Center can provide additional guidance if issues persist.",
+      "expected_filename": "How to Open the Fuel Knob in Aventro Cars.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I sell my car with Aventro Motors?",
+      "reference_answer": "Sell your car easily with Aventro Motors by following three steps: Book a free car inspection, get your best offer, and sell & get paid instantly.\n\nContact Aventro online, via phone, or email to schedule a free inspection at your nearest Aventro Service Center. Our expert team will evaluate your car based on its condition, make, model, year, and mileage. Receive a fair and instant offer based on the latest market value. Accept the offer, complete minimal paperwork, and receive payment instantly.",
+      "expected_filename": "Sell Your Car in 3 Easy Steps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What documents are required to sell a car to Aventro Motors?",
+      "reference_answer": "To sell your car to Aventro Motors, you need the Car Registration Certificate (RC), Owner’s ID Proof, Vehicle Service History (if available), and any loan closure documents (if applicable). Aventro will guide you with everything else.",
+      "expected_filename": "Sell Your Car in 3 Easy Steps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Can I sell a non-Aventro model car to Aventro Motors?",
+      "reference_answer": "Yes, you can sell non-Aventro model cars to Aventro Motors. They accept all brands, makes, models, and ages of cars.",
+      "expected_filename": "Sell Your Car in 3 Easy Steps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How long does the Aventro car selling process take?",
+      "reference_answer": "From inspection to payment, the sale process with Aventro can be completed within the same day.",
+      "expected_filename": "Sell Your Car in 3 Easy Steps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How is Aventro's car selling process different from other companies?",
+      "reference_answer": "Aventro Motors offers a hassle-free process that is quick, transparent, and convenient with a best value guarantee and instant payment. They provide pan-India coverage with over 20 service locations for inspections and support, promising a seamless and efficient experience.",
+      "expected_filename": "Sell Your Car in 3 Easy Steps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the price of Aventro's brake service compare to its regular maintenance service?",
+      "reference_answer": "| S.No | Service Type | Industry Standard Price (₹, in thousands) | Frequency/Notes |\n|------|----------------------|-------------------------------------------|---------------------------------|\n| 1 | Regular Maintenance | 3.5 – 7.5 | Per service, varies by model |\n| 5 | Brake Service | 2.2 – 6.5 | Pads & discs extra |",
+      "expected_filename": "Parts-4.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Are battery replacement costs higher for EVs compared to petrol/diesel vehicles at Aventro Motors?",
+      "reference_answer": "| S.No | Service Type | Industry Standard Price (₹, in thousands) |\n|------|---------------------|--------------------------------------------------|\n| 3 | Battery Replacement | 5 – 18 (petrol/diesel)<br>50 – 160 (EV) |\n\n- For Electric Vehicles (EV), battery costs are significantly higher due to advanced technology.",
+      "expected_filename": "Parts-4.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might Aventro Motors' exhaust system prices vary?",
+      "reference_answer": "| S.No | Part Name | Industry Standard Price (₹, in thousands) | Notes |\n|------|-------------------|-------------------------------------------|----------------------------------|\n| 3 | Exhaust System | 9 – 20 | Depends on vehicle & material |\n\nActual prices at Aventro Motors authorized service centers may vary depending on city, model, and part variants.",
+      "expected_filename": "Parts-4.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the types of services offered by Aventro Motors?",
+      "reference_answer": "| S.No | Service Type | Industry Standard Price (₹, in thousands) | Frequency/Notes |\n|------|----------------------|-------------------------------------------|---------------------------------|\n| 1 | Regular Maintenance | 3.5 – 7.5 | Per service, varies by model |\n| 2 | Engine Overhaul | 18 – 35 | Rare, depends on engine size |\n| 3 | Battery Replacement | 5 – 18 (petrol/diesel)<br>50 – 160 (EV) | Lower for standard, high for EV|\n| 4 | Transmission Repair | 10 – 28 | AT costlier than MT |\n| 5 | Brake Service | 2.2 – 6.5 | Pads & discs extra |\n| 6 | Suspension Check | 1.2 – 3.5 | Excludes actual part replacement|",
+      "expected_filename": "Parts-4.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I find an Aventro service center for a mileage check-up?",
+      "reference_answer": "Visit your nearest Aventro Service Center for a mileage check-up and expert maintenance. \n[Find a Service Center ›](#)",
+      "expected_filename": "Best Ways to Maintain Good Mileage.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What tips does Aventro Motors offer for maintaining good mileage?",
+      "reference_answer": "Achieving and maintaining good mileage is essential for saving fuel costs, reducing environmental impact, and ensuring your vehicle’s long-term health. Aventro Motors provides several practices to help get the most out of every journey: regular maintenance, checking tyre pressure, driving smoothly, limiting idling, reducing excess weight, monitoring battery health, using the right fuel and lubricants, maintaining alignment and suspension, using air conditioning wisely, and adopting smart driving habits.",
+      "expected_filename": "Best Ways to Maintain Good Mileage.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why should I use genuine parts for my Aventro vehicle?",
+      "reference_answer": "Regular Maintenance: Always use genuine Aventro spare parts for optimal performance (e.g., Air Filter, Spark Plug, Oil Filter). Using genuine parts ensures that the vehicle operates efficiently and maintains good mileage.",
+      "expected_filename": "Best Ways to Maintain Good Mileage.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the environmental benefits of maintaining good mileage according to Aventro Motors?",
+      "reference_answer": "Maintaining good mileage is not only about saving money but also about fostering a responsible, eco-friendly driving culture. Efficient driving reduces fuel consumption, leading to lower emissions and a reduced environmental impact.",
+      "expected_filename": "Best Ways to Maintain Good Mileage.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How should I handle an \"engine won't start\" issue in my Aventro vehicle?",
+      "reference_answer": "When your Aventro vehicle's engine refuses to start, follow these steps: check the basics like gear position and steering lock, conduct a battery check, inspect the fuel system, examine the starter motor and electricals, look for any warning lights, listen for sounds, inspect engine components, and if necessary, call Aventro Roadside Assistance.",
+      "expected_filename": "How to Handle Engine Wont Start Issue.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What should I do if my Aventro car's dashboard lights are dim or off?",
+      "reference_answer": "If your Aventro car's dashboard lights are dim or off, it's likely a battery issue. Try using headlights or infotainment; if they're also dim, consider jump-starting with a healthy battery.",
+      "expected_filename": "How to Handle Engine Wont Start Issue.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is it necessary to tighten loose battery terminals when experiencing starting issues in an Aventro car?",
+      "reference_answer": "Yes, one of the steps in troubleshooting starting issues is to tighten loose battery terminals if needed, as they can affect the electrical connection.",
+      "expected_filename": "How to Handle Engine Wont Start Issue.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might an Aventro car make a rapid clicking sound when attempting to start?",
+      "reference_answer": "A rapid clicking sound when attempting to start your Aventro car suggests battery or starter issues, indicating insufficient power is reaching the starter motor.",
+      "expected_filename": "How to Handle Engine Wont Start Issue.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I apply for a job at Aventro Motors?",
+      "reference_answer": "Send your updated resume and cover letter to: \n**Email:** [careers@aventromotors.com](mailto:careers@aventromotors.com) \nPlease mention the position and location applied for in the subject line.",
+      "expected_filename": "Careers.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the Sales Executive role at Aventro Motors differ from the Service Technician role?",
+      "reference_answer": "### Sales Executive\n**Location:** Aventro Tower, Sector 18, Gurgaon, Haryana \n**Department:** Sales & Marketing \n**Key Responsibilities:** Generate leads, explain features of models, build customer relationships, achieve sales targets \n**Qualifications:** Graduate, 1-2 years automotive sales experience \n\n### Service Technician\n**Location:** Okhla Industrial Area, New Delhi / Electronic City, Bengaluru \n**Department:** After Sales Service \n**Key Responsibilities:** Diagnose electric vehicle systems, perform maintenance, coordinate problem resolution \n**Qualifications:** ITI/Diploma, experience in servicing electric/hybrid vehicles",
+      "expected_filename": "Careers.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the benefits of working at Aventro Motors?",
+      "reference_answer": "Why Work With Us?\n\n- Work with cutting-edge automotive technologies (Petrol, Diesel, Electric, Hybrid)\n- Be part of a vibrant and diverse team\n- Opportunities for professional growth and training\n- Competitive compensation and benefits\n- Pan-India presence with offices and service centers across the country",
+      "expected_filename": "Careers.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can a student apply for an internship at Aventro Motors?",
+      "reference_answer": "Internship Opportunities\n\nAre you a student or recent graduate? Write to us with your interest and we will find matching opportunities for internships in Sales, Service, R&D, and Marketing.",
+      "expected_filename": "Careers.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the cost of an Engine Assembly compare to a Battery Pack at Aventro Motors?",
+      "reference_answer": "| S.No | Part Name | Unit Price (INR) |\n|------|----------------|------------------|\n| 1 | Engine Assembly | 85,000 |\n| 2 | Battery Pack | 1,20,000 |\n\nThe price of a Battery Pack is higher than that of an Engine Assembly.",
+      "expected_filename": "Parts-5.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What services does Aventro Motors offer for electric vehicles?",
+      "reference_answer": "| S.No | Service | Price (INR) |\n|------|----------------------------------|----------------|\n| 7 | Fast Charging (Electric Vehicles)| 600 / session |\n| 8 | Hybrid System Check | 2,500 |\n\nAventro Motors offers Fast Charging sessions and Hybrid System Checks for electric vehicles.",
+      "expected_filename": "Parts-5.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I contact Aventro Motors for service appointments?",
+      "reference_answer": "Aventro Tower, Sector 18, Gurgaon, Haryana - 122018, India \nContact: +91 124 1234567 \nEmail: info@aventromotors.com\n\nFor exact prices and appointments, contact your nearest Aventro Service Center.",
+      "expected_filename": "Parts-5.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why does Aventro Motors have a range in pricing for Body & Paint Work services?",
+      "reference_answer": "| S.No | Service | Price (INR) |\n|------|-----------------------|----------------|\n| 4 | Body & Paint Work | 5,000-20,000 |\n\nThe price range for Body & Paint Work accounts for variations from minor scratches to full panel repaints. Major repairs incur higher costs.",
+      "expected_filename": "Parts-5.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Does Aventro Motors provide computerized diagnostics?",
+      "reference_answer": "| S.No | Service | Price (INR) |\n|------|----------------------------------|----------------|\n| 2 | Electrical System Diagnostics | 1,000 |\n\nYes, Aventro Motors provides computerized diagnostics for electrical systems.",
+      "expected_filename": "Parts-5.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I apply for a loan to purchase an Aventro Motors vehicle?",
+      "reference_answer": "1. **Select Your Car** \n Choose your favorite Aventro Motors model and variant at our showroom or website.\n\n2. **Apply for Loan** \n - Fill in a simple online/offline loan application form at the dealership or on our website.\n - Provide basic documents (ID, address proof, income proof, bank statement).\n\n3. **Choose Loan Partner** \n - Our finance advisors help you pick the best bank/offer as per your eligibility & preferences.\n\n4. **Quick Approval** \n - Get instant/within 24-hour approval for eligible candidates.\n\n5. **Loan Disbursement** \n - Bank credits the loan amount directly to Aventro Motors for seamless vehicle delivery.\n\n6. **Drive Away** \n - Take delivery of your new Aventro Motors car!",
+      "expected_filename": "loans.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the interest rate range differ between Matrix Bank and Modern India Bank for Aventro Motors loans?",
+      "reference_answer": "| Matrix Bank | 7.99% - 9.5% | Up to 7 years | 90% of car value | ₹2,500 or 0.5% | Instant approval, minimal docs |\n\n| Modern India Bank | 10.00% - 12.0% | Up to 5 years | 80% of car value | ₹2,500 or 0.6% | Online approval in 30 minutes |",
+      "expected_filename": "loans.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What special benefits does SecureFirst Bank offer for Aventro Motors loans?",
+      "reference_answer": "| SecureFirst Bank | 9.10% - 11.2% | Up to 6 years | 100% of car value | ₹1,500 or 0.4% | Flexible EMI, festive discounts |",
+      "expected_filename": "loans.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might someone choose Astra Finance for an auto loan with Aventro Motors?",
+      "reference_answer": "| Astra Finance | 8.25% - 10.1% | Up to 5 years | 85% of car value | ₹3,000 or 0.75% | Pre-closure at zero charges |",
+      "expected_filename": "loans.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I connect my smartwatch to my Aventro vehicle?",
+      "reference_answer": "Smartwatch connectivity allows you to interact with select vehicle functions directly from your smartwatch. Compatible smartwatches include Apple Watch, Android Wear OS Watches, and Samsung Galaxy Watches. \n1. Download the Aventro Connect app from Google Play Store or Apple App Store.\n2. Create or log into your Aventro account.\n3. Pair your smartwatch with your smartphone via Bluetooth.\n4. On your watch, install the Aventro Connect app.\n5. Sign in with your Aventro account or grant permissions.\n6. On your smartphone’s Aventro Connect app, go to Settings > Device Connections > Add Smartwatch and follow instructions to link.",
+      "expected_filename": "Aventro  Connectivity.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Can I use Alexa to control my Aventro car?",
+      "reference_answer": "You can control your Aventro car using Alexa-enabled devices and voice commands. Prerequisites include an Alexa-enabled device, an Aventro Connect account, and a vehicle registered on the Aventro Connect app. \n1. Open the Amazon Alexa app on your smartphone.\n2. Tap Skills & Games and search for Aventro Motors.\n3. Enable the Aventro Connect Skill and log in.\n4. Grant permissions for vehicle control.",
+      "expected_filename": "Aventro  Connectivity.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What features does Apple CarPlay provide in an Aventro vehicle?",
+      "reference_answer": "Apple CarPlay integrates your iPhone with the Aventro vehicle’s infotainment system. Common features include:\n- Voice control via Siri.\n- Navigation using Apple Maps, Google Maps, or Waze.\n- Hands-free calls and messages.\n- Music and audio through Apple Music, Spotify, and Podcasts.\nYou can connect via a genuine Apple Lightning cable or wirelessly on supported models.",
+      "expected_filename": "Aventro  Connectivity.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the steps to enable wireless CarPlay with my iPhone in an Aventro car?",
+      "reference_answer": "To enable wireless CarPlay:\n1. Ensure both Bluetooth and Wi-Fi are enabled on your iPhone.\n2. On the car’s infotainment display, navigate to Settings > Apple CarPlay > Pair New Device.\n3. On your iPhone, go to Settings > General > CarPlay and select your Aventro car.\n4. Follow the on-screen instructions to complete pairing.\nThis feature is available in supported Aventro models.",
+      "expected_filename": "Aventro  Connectivity.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the available fuel types for the Aventro Pulse Hatchback?",
+      "reference_answer": "Aventro Pulse Hatchback is available in Petrol, Diesel, Electric, and Hybrid options.",
+      "expected_filename": "Aventro Pulse Hatchback.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the ZX variant differ from the X variant for the Aventro Pulse Hatchback?",
+      "reference_answer": "The ZX variant offers additional features such as an 11-inch Harman System, 360° Camera, ADAS Level 2, Leather Seats, and Alloy Wheels compared to the X variant, which includes ADAS Level 1 and a Rear View Camera.",
+      "expected_filename": "Aventro Pulse Hatchback.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I schedule a test drive for the Aventro Pulse Hatchback?",
+      "reference_answer": "You can schedule a test drive by emailing info@aventromotors.com, calling +91 124 1234567, or visiting your nearest Aventro Service Center in cities like Mumbai, Delhi, Bengaluru, Chennai, Hyderabad, Pune, Kolkata, etc.",
+      "expected_filename": "Aventro Pulse Hatchback.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What safety features are standard across all variants of the Aventro Pulse Hatchback?",
+      "reference_answer": "Standard safety features across all variants include Dual Airbags, ABS with EBD, and Rear Parking Sensors.",
+      "expected_filename": "Aventro Pulse Hatchback.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How should I adjust my headlamps for urban roads with heavy traffic?",
+      "reference_answer": "Use low beam: High beams can dazzle oncoming drivers and should be avoided in city traffic.\nTurn on your headlamps in the evening/low light: Even if street lights are present, using your headlamps enhances visibility.\nHazards & signal lights: Use these for extra safety during sudden traffic halts or in bumper-to-bumper situations.",
+      "expected_filename": "Best Ways to Use Your headlamps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the recommended practices for using headlamps in foggy or rainy weather?",
+      "reference_answer": "Always use low beam: High beams reflect off fog or rain, worsening visibility.\nActivate fog lamps if available: These cut through the mist close to the road.\nUse hazard lights only when stationary on road shoulder: Do not use hazards while driving as it confuses other road users.\nReduce speed and increase distance: Wet roads mean longer stopping distances.",
+      "expected_filename": "Best Ways to Use Your headlamps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it important to keep headlamps clean in dusty or smoggy conditions?",
+      "reference_answer": "Low beam for better penetration: Cut through dust better and make your car visible to others.\nKeep your headlamps and tail lamps clean: Dirt can cut your light output significantly.\nUse headlamps during the day if visibility is poor: This helps both you and others.",
+      "expected_filename": "Best Ways to Use Your headlamps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does headlamp usage differ between snowy/icy and hilly road conditions?",
+      "reference_answer": "Use low beam in snowy or icy conditions: Snow reflects light, causing glare, and keep headlamps clear of snow/ice.\nAlways use dipper at turns and blind spots in hilly conditions: Alert oncoming vehicles of your presence, and use high beam for long stretches at night.",
+      "expected_filename": "Best Ways to Use Your headlamps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is it sufficient to use only parking lights during night driving according to the guidelines?",
+      "reference_answer": "Avoid using only parking lights: These are not sufficient for visibility or indication.",
+      "expected_filename": "Best Ways to Use Your headlamps.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What do the warning lights in an Aventro Motors vehicle signify?",
+      "reference_answer": "The instrument cluster in Aventro Motors vehicles is designed to inform the driver about the status of various vehicle systems. Each symbol or indicator light provides information on system performance, potential malfunctions, or urgent warnings requiring immediate action.",
+      "expected_filename": "Instrument Cluster Warning Alerts.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is red a critical warning color for Aventro Motors vehicles?",
+      "reference_answer": "Important Notes\n- If any **red** warning light appears, stop the vehicle in a safe location as soon as possible and consult your Aventro Motors dealer or the owner's manual.",
+      "expected_filename": "Instrument Cluster Warning Alerts.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it crucial to address an Engine Warning Light immediately in Aventro Motors vehicles?",
+      "reference_answer": "Engine Warning Light (Check Engine)\n- **Meaning:** Indicates a problem with the engine or emissions control system. Immediate diagnosis is recommended.",
+      "expected_filename": "Instrument Cluster Warning Alerts.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What should I do if my Aventro Motors vehicle shows a Battery Warning Light?",
+      "reference_answer": "Battery Warning Light\n- **Meaning:** The battery is not charging properly. This could signal alternator failure, battery issues, or wiring problems.",
+      "expected_filename": "Instrument Cluster Warning Alerts.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do the warning systems for ABS and Airbag differ in Aventro Motors vehicles?",
+      "reference_answer": "ABS Warning Light\n- **Meaning:** Indicates a malfunction in the Anti-lock Braking System. Normal brakes may function, but ABS will not.\n\nAirbag Warning Light\n- **Meaning:** There may be a problem with the airbag system; airbags may not deploy in a collision.",
+      "expected_filename": "Instrument Cluster Warning Alerts.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“How does the Aventro Spark differ between its X and ZX variants?”",
+      "reference_answer": "The X Variant for the Aventro Spark includes features like an 11-inch touchscreen infotainment system, ADAS Level 1 driver assists, automatic climate control, and alloy wheels. In contrast, the ZX Variant enhances these offerings with a Harman sound system, 360° surround view camera, ADAS Level 2, leather seats, and premium LED lighting.",
+      "expected_filename": "Aventro Spark Hatchback.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“Why did Aventro Motors choose to include multiple powertrain options for the Spark?”",
+      "reference_answer": "The Aventro Spark offers multiple powertrain options, including petrol, diesel, electric, and hybrid, to suit every need. This approach provides flexibility for different customer preferences and regulatory environments, enhances market reach, and underscores Aventro's commitment to sustainability and innovation.",
+      "expected_filename": "Aventro Spark Hatchback.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“What are the main features of the Aventro Spark's ZX variant?”",
+      "reference_answer": "The ZX variant of the Aventro Spark boasts an 11-inch touchscreen with a Harman sound system, 360° surround view camera, ADAS Level 2, leather seats, and premium LED lighting. These features enhance comfort, safety, and driving assistance for a superior user experience.",
+      "expected_filename": "Aventro Spark Hatchback.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“How can I contact Aventro Motors to inquire about the Spark Hatchback?”",
+      "reference_answer": "Contact Aventro Motors Pvt. Ltd. at Aventro Tower, Sector 18, Gurgaon, Haryana - 122018, India. You can reach them by phone at +91 124 1234567 or via email at info@aventromotors.com. Additional information is available on their website, [www.aventromotors.com](http://www.aventromotors.com).",
+      "expected_filename": "Aventro Spark Hatchback.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“Does the Aventro Spark come with a manual or automated manual transmission option?”",
+      "reference_answer": "The Aventro Spark is available with both 5-Speed Manual and Automated Manual transmission options to cater to different driving preferences.",
+      "expected_filename": "Aventro Spark Hatchback.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I adjust the steering wheel in an Aventro Motors vehicle?",
+      "reference_answer": "Proper steering wheel adjustment is essential for comfortable and safe driving. Follow these steps to adjust your steering wheel for an optimal driving position.\n\n1. Park the Vehicle Safely: Ensure the vehicle is on a flat surface and engage the parking brake. Turn off the engine for safety.\n2. Locate the Adjustment Lever: Look for the steering adjustment lever beneath or on the side of the steering column, usually beneath the wheel.\n3. Release the Lever: Pull (or push, depending on the model) the adjustment lever to unlock the steering wheel movement.\n4. Adjust the Steering Wheel: Tilt to move the wheel up or down to a comfortable height and telescopic to set a comfortable distance.\n5. Lock the Steering Wheel Position: Firmly push the adjustment lever back to the locked position.\n6. Check Positioning: Ensure all indicator lights and gauges are fully visible.",
+      "expected_filename": "Adjusting the Steering Wheel.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the benefits of adjusting the steering wheel?",
+      "reference_answer": "Proper steering wheel adjustment is essential for comfortable and safe driving.\n\nComfort: Reduces fatigue during long drives.\nControl: Ensures effective steering and better handling.\nSafety: Ensures clear view of the instrument cluster and optimal airbag positioning.",
+      "expected_filename": "Adjusting the Steering Wheel.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do tilt and telescopic steering adjustments differ in Aventro Motors vehicles?",
+      "reference_answer": "Types of Steering Wheel Adjustments: Most Aventro Motors vehicles come with either or both of the following:\n\nTilt Adjustment: Allows the wheel to move up and down.\nTelescopic Adjustment: Allows the wheel to move closer or farther from the driver.",
+      "expected_filename": "Adjusting the Steering Wheel.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Can you adjust the steering wheel while driving?",
+      "reference_answer": "Never adjust the steering wheel while driving.\n\nFor safety reasons, adjustments should only be made when the vehicle is parked.",
+      "expected_filename": "Adjusting the Steering Wheel.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the key components offered by Aventro Motors and their details?",
+      "reference_answer": "### Genuine Spare Parts – Details & Price (Industry Standard Estimates)\n1. **Engine Assembly:** Core mechanical component for all Petrol, Diesel, and Hybrid variants. Priced between ₹1,20,000 – ₹2,50,000 with a 2-year or 50,000 km warranty.\n \n2. **Battery Pack:** Powers Electric and Hybrid models. Electric variants range from ₹2,00,000 – ₹4,50,000, while Hybrid ranges ₹60,000 – ₹1,50,000, with an 8-year or 1,60,000 km warranty.\n\n3. **Transmission:** Transmits power to wheels. Manual versions cost ₹65,000 – ₹1,20,000, Automatic cost ₹1,10,000 – ₹2,00,000, with a 2-year or 40,000 km warranty.\n\n4. **Brake Pads:** Vehicle stopping key component for all models. Front set costs ₹3,000 – ₹6,000, rear set ₹2,500 – ₹5,000, with a 1-year or 20,000 km warranty.\n\n5. **Suspension System:** Provides ride comfort. Priced ₹18,000 – ₹45,000 per axle with a 1-year or 25,000 km warranty.\n\nPrices are indicative, ex-showroom, exclude labor, taxes, and may vary by region/model.",
+      "expected_filename": "Parta-1.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might the warranty periods vary for different components in Aventro Motors?",
+      "reference_answer": "The warranty periods for Aventro Motors' components vary according to the expected lifecycle and the function of each part. For example, the battery pack has a longer warranty duration of 8 years or 1,60,000 km, which reflects its crucial role and higher cost in electric and hybrid vehicles. In contrast, brake pads and suspension systems have shorter warranty periods due to their higher wear and tear in everyday use.\n\n+\nWarranty periods: \n- Engine Assembly: 2 years or 50,000 km\n- Battery Pack: 8 years or 1,60,000 km\n- Transmission: 2 years or 40,000 km\n- Brake Pads: 1 year or 20,000 km\n- Suspension System: 1 year or 25,000 km",
+      "expected_filename": "Parta-1.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can a customer find the right spare parts for their Aventro Motors vehicle?",
+      "reference_answer": "For authorized fitment and exact part match, customers should contact their nearest Aventro Service Center or email info@aventromotors.com. Detailed information about the applicable models, pricing, and warranty of various parts such as the engine assembly, battery pack, transmission, brake pads, and suspension system is available. Prices are indicative and may vary by region or model.",
+      "expected_filename": "Parta-1.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the pricing of battery packs vary between electric and hybrid models at Aventro Motors?",
+      "reference_answer": "For Electric models, the battery pack is priced between ₹2,00,000 – ₹4,50,000, while for Hybrid models, the battery pack ranges from ₹60,000 – ₹1,50,000. The prices depend on factors like kWh rating, chemistry, and import duties, with electric battery packs generally being more expensive due to higher capacity and complexity.",
+      "expected_filename": "Parta-1.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I adjust the seat distance from the pedals in an Aventro Motors vehicle?",
+      "reference_answer": "Locate the seat adjustment lever under the front edge of the seat. Pull the lever up to unlock the seat. Slide the seat forward or backward until your feet reach the pedals comfortably while keeping a slight bend at your knees. Release the lever to lock the seat in position. Gently rock the seat to ensure it is securely locked.",
+      "expected_filename": "Adjusting the Seat Positions.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What steps should I follow to adjust the headrest in an Aventro Motors vehicle?",
+      "reference_answer": "Hold both sides of the headrest. Press the adjustment button (usually at the base) and move the headrest up or down. The top of the headrest should be level with the top of your head. The headrest should be as close to the back of your head as possible for optimal safety.",
+      "expected_filename": "Adjusting the Seat Positions.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Does Aventro Motors offer electronic seat adjustment controls in their vehicles?",
+      "reference_answer": "Proper seat adjustment is essential for driving comfort, safety, and visibility. Aventro Motors vehicles are equipped with manual and/or electronic seat adjustment controls, depending on the model and trim.",
+      "expected_filename": "Adjusting the Seat Positions.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it important to adjust your seat before starting the engine in an Aventro Motors vehicle?",
+      "reference_answer": "Adjust your seat before starting the engine and while the car is stationary. Ensure all adjustments are firmly locked in place before driving. The distance between your chest and the steering wheel should be at least 25 cm (10 inches). Adjust the steering wheel if required, for optimal hand positioning. All passengers should also adjust their seats and headrests.",
+      "expected_filename": "Adjusting the Seat Positions.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I open the hood of an Aventro vehicle?",
+      "reference_answer": "Opening the hood of your Aventro car is a simple process that gives you access to the engine compartment for checks and maintenance.\n\n1. **Park the Car Safely**: Ensure your car is parked on a level surface, turn off the engine, and engage the parking brake.\n2. **Locate the Hood Release Lever**: Found under the dashboard, near the driver’s seat footwell, marked with a hood icon.\n3. **Pull the Hood Release Lever**: Pull firmly until you hear a slight click.\n4. **Move to the Front of the Car**: The hood should be slightly raised.\n5. **Find the Secondary Latch**: Slide your hand under the front edge, find the latch, and push or slide it to release the hood.\n6. **Lift the Hood**: Open the hood and use the prop rod or rely on hydraulic struts to secure it.",
+      "expected_filename": "How to Open the Hood of an Aventro Vehicle.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What safety precautions should I take when opening the hood of an Aventro vehicle?",
+      "reference_answer": "1. Never open the hood while the car is moving.\n2. Allow engine components to cool before touching.\n3. Always ensure the hood is closed securely before driving.\n\nFor any difficulties or if the hood does not open as expected, refer to your Aventro Owner’s Manual or visit your nearest Aventro Service Center.",
+      "expected_filename": "How to Open the Hood of an Aventro Vehicle.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is it necessary to turn off the engine before opening the hood?",
+      "reference_answer": "Ensure your car is parked on a level surface, turn off the engine, and engage the parking brake.",
+      "expected_filename": "How to Open the Hood of an Aventro Vehicle.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What steps should I follow to close the hood of an Aventro vehicle?",
+      "reference_answer": "1. **Remove the Prop Rod** (if applicable) and place it back into its holder.\n2. **Lower the Hood Gently** to about 30 cm (1 foot) above the latch, then allow it to drop shut.\n3. **Check it is Securely Latched** by pressing gently on the front edge—do not slam.",
+      "expected_filename": "How to Open the Hood of an Aventro Vehicle.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is the doorstep test drive service available throughout India?",
+      "reference_answer": "Yes, we offer this service pan India, including all major cities and nearby locations.",
+      "expected_filename": "Faq part-1.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Are there any charges for test drives compared to other companies?",
+      "reference_answer": "No, this service is absolutely free.",
+      "expected_filename": "Faq part-1.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I request a test drive for more than one model?",
+      "reference_answer": "Absolutely! Just mention all the models/variants in your request.",
+      "expected_filename": "Faq part-1.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What documents are required for a doorstep test drive?",
+      "reference_answer": "Please keep a valid driving license handy for verification before the test drive.",
+      "expected_filename": "Faq part-1.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“How does the pricing of the Aero model compare to the Bolt model?”",
+      "reference_answer": "### 1. Aero (Hatchback)\n| Variant | Trim | Price (Lakh) |\n|-------------|-------|--------------|\n| Petrol | Base | 6.5 |\n| Petrol | X | 7.0 |\n| Petrol | ZX | 7.5 |\n| Diesel | Base | 8.5 |\n| Diesel | X | 9.0 |\n| Diesel | ZX | 9.5 |\n| Electric | Base | 13.5 |\n| Electric | X | 14.0 |\n| Electric | ZX | 14.5 |\n| Hybrid | Base | 10.0 |\n| Hybrid | X | 10.5 |\n| Hybrid | ZX | 11.0 |\n\n### 2. Bolt (Sedan)\n| Variant | Trim | Price (Lakh) |\n|-------------|-------|--------------|\n| Petrol | Base | 8.2 |\n| Petrol | X | 8.7 |\n| Petrol | ZX | 9.2 |\n| Diesel | Base | 10.2 |\n| Diesel | X | 10.7 |\n| Diesel | ZX | 11.2 |\n| Electric | Base | 15.2 |\n| Electric | X | 15.7 |\n| Electric | ZX | 16.2 |\n| Hybrid | Base | 11.7 |\n| Hybrid | X | 12.2 |\n| Hybrid | ZX | 12.7 |",
+      "expected_filename": "Aventro Motors Variants & Pricing.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the available colors for Aventro car models?",
+      "reference_answer": "## Colours Available for All Models\n\n> All car models at Aventro Motors are available in the following colours:\n- Arctic White\n- Sterling Silver\n- Midnight Black\n- Azure Blue\n- Fiery Red\n- Sunburst Orange\n- Forest Green\n\n(Note: Availability of specific colours may vary by model and variant; please check with your nearest Aventro Motors dealer for details.)",
+      "expected_filename": "Aventro Motors Variants & Pricing.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Are all car models from Aventro Motors available in electric variants?",
+      "reference_answer": "Aventro Motors offers a wide range of 20 models, each available in multiple variants (Petrol, Diesel, Electric, Hybrid) and trims (Base, X, ZX).",
+      "expected_filename": "Aventro Motors Variants & Pricing.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I get in touch with Aventro Motors for inquiries?",
+      "reference_answer": "**Head Office:** \nAventro Tower, Sector 18, Gurgaon, Haryana - 122018, India \n**Contact:** +91 124 1234567 \n**Email:** info@aventromotors.com",
+      "expected_filename": "Aventro Motors Variants & Pricing.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is the Aventro Grand SUV?",
+      "reference_answer": "The Aventro Grand SUV is the flagship, full-size SUV offering from Aventro Motors, combining power, technology, and sophistication. It is designed for families and enthusiasts who seek space, comfort, safety, and the latest automotive features. The SUV is available in Petrol, Diesel, Electric, and Hybrid variants.",
+      "expected_filename": "Aventro Grand SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the Grand SUV ZX trim differ from the X trim?",
+      "reference_answer": "The ZX trim offers a 360-degree camera, 11-inch touchscreen with Harman audio system, ADAS Level 2 including adaptive cruise and traffic jam assist, premium leather seats, a panoramic sunroof, powered tailgate, and ventilated front seats. In contrast, the X trim includes an 11-inch advanced infotainment system, ADAS Level 1 driver assist features, and front parking sensors.",
+      "expected_filename": "Aventro Grand SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a test drive for the Aventro Grand SUV?",
+      "reference_answer": "For more details or to book a test drive, contact your nearest Aventro dealership or locate a service center via the provided email info@aventromotors.com.",
+      "expected_filename": "Aventro Grand SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the engine options for the Aventro Grand SUV?",
+      "reference_answer": "The Aventro Grand SUV offers different powertrain options: Petrol with a 2.0L Turbocharged engine and 6-Speed AT, Diesel with a 2.2L Turbo Diesel engine and 8-Speed AT, Electric with an 85 kWh battery (approx. 480 km range), and a Hybrid with a Turbo Petrol and Electric Motor.",
+      "expected_filename": "Aventro Grand SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might someone choose the Electric variant of the Aventro Grand SUV?",
+      "reference_answer": "The Electric variant of the Aventro Grand SUV features an 85 kWh battery with an approximate range of 480 km. It incorporates standard EV features and is ideal for those seeking an eco-friendly option with cutting-edge technology. Additionally, over-the-air updates and multiple connected car features enhance its appeal for tech-savvy consumers.",
+      "expected_filename": "Aventro Grand SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I ensure my third-party accessories do not void the warranty on my Aventro vehicle?",
+      "reference_answer": "Do Verify Warranty Implications: Ask specifically about warranty impact; certified installations at Aventro Service Centers are less likely to void your warranty.\n\nConsult Aventro Authorized Service: Before installation, consult your nearest Aventro Service Center or authorized dealer for advice.",
+      "expected_filename": "Do and Donts About 3rd Party.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Should I avoid using low-cost electrical parts for my Aventro car?",
+      "reference_answer": "Don’t Use Low-Cost, Sub-Standard Parts: Avoid cheap, uncertified or counterfeit electrical accessories—they can cause malfunction, fire, or permanent damage.",
+      "expected_filename": "Do and Donts About 3rd Party.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the recommended practices when installing third-party electrical accessories in an Aventro vehicle?",
+      "reference_answer": "Do Research Thoroughly: Always check the compatibility of the accessory with your specific Aventro model and variant.\n\nDo Buy from Reputed Dealers: Purchase accessories, especially electrical ones, from trusted and reputed vendors.\n\nDo Ensure Professional Installation: Have all accessories, particularly electrical or electronic ones, fitted by trained technicians.",
+      "expected_filename": "Do and Donts About 3rd Party.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it essential to consult Aventro Service Centers before installing third-party accessories?",
+      "reference_answer": "Consult Aventro Authorized Service: Get their approval for high-voltage or safety-critical electrical changes (e.g., battery packs, infotainment systems).\n\nConsulting authorized services helps ensure compatibility and safety, preventing issues like voided warranties or interference with factory safety features.",
+      "expected_filename": "Do and Donts About 3rd Party.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What steps should I take if I notice warning signs after installing an accessory?",
+      "reference_answer": "Don’t Ignore Warning Signs After Installation: If you notice dashboard warnings, flickering lights, or malfunctioning electronics post-installation, stop using the accessory immediately and consult a service center.",
+      "expected_filename": "Do and Donts About 3rd Party.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book an appointment at an Aventro Service Center?",
+      "reference_answer": "For assistance or appointment bookings, contact your nearest Aventro Service Center or email us at: [info@aventromotors.com](mailto:info@aventromotors.com)",
+      "expected_filename": "Aventro Service Center Locations.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Where is the Aventro Service Center located in Mumbai?",
+      "reference_answer": "Aventro Service Center, Mumbai - Location: Andheri East, Mumbai, Maharashtra",
+      "expected_filename": "Aventro Service Center Locations.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is there an Aventro Service Center in Chennai?",
+      "reference_answer": "Yes, there is an Aventro Service Center located in Guindy Industrial Estate, Chennai, Tamil Nadu.",
+      "expected_filename": "Aventro Service Center Locations.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the working hours for Aventro Service Centers across India?",
+      "reference_answer": "The working hours for all Aventro Service Centers across India are Mon-Sat: 9:00 AM – 7:00 PM.",
+      "expected_filename": "Aventro Service Center Locations.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might Aventro Motors have chosen to have a service center in Gurugram?",
+      "reference_answer": "Gurugram, Haryana is a strategic location due to its proximity to the national capital Delhi and its status as a major commercial hub, potentially providing Aventro Motors access to a larger customer base and ample opportunities for business growth.",
+      "expected_filename": "Aventro Service Center Locations.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the ZX trim of the Aventro Aero compare with the Base trim?",
+      "reference_answer": "### ZX Trim (Top of the Line)\n- **360-Degree Camera**\n- **11-inch Infotainment System**\n- **Harman Premium Audio System**\n- **ADAS Level 2:**\n - Adaptive Cruise Control\n - Lane Centering\n - Automatic Emergency Braking\n- **Leather Seats**\n- Wireless charging\n- Ambient cabin lighting\n- Rear-seat armrest with cup holder\n\nvs\n\n### Base\n- 7-inch touchscreen infotainment system\n- Manual AC\n- Standard fabric seats\n- Bluetooth & USB connectivity\n- Dual airbags, ABS, EBD",
+      "expected_filename": "Aventro Aero.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a test drive for the Aventro Aero?",
+      "reference_answer": "**Contact Us:** \nAventro Motors Pvt. Ltd., Aventro Tower, Sector 18, Gurgaon, Haryana - 122018, India \n**Phone:** +91 124 1234567 \n**Email:** [info@aventromotors.com](mailto:info@aventromotors.com) \n**Website:** [www.aventromotors.com](https://www.aventromotors.com)",
+      "expected_filename": "Aventro Aero.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might someone choose the Aventro Aero for urban commuting?",
+      "reference_answer": "The **Aventro Aero** is a versatile and dynamic hatchback designed for the urban commuter and small families. With cutting-edge technology, futuristic design, multiple drivetrain options, and rich features across variants, the Aero caters to every need—whether fuel efficiency, ecology, or performance.\n\n- Multiple Fuel Options: Petrol, Diesel, Electric, Hybrid\n- Segment-leading Tech: ADAS, 360 Camera, 11\" Infotainment\n- Futuristic Design and Spacious Interior\n- Industry-best Safety Standards",
+      "expected_filename": "Aventro Aero.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Does Aventro Motors offer an electric variant of the Aventro Aero?",
+      "reference_answer": "## Aero Model Variants & Prices\n| Variant | Trim | Price (Lakh ₹) |\n|----------------|-------|:-------------:|\n| **Electric** | Base | 13.5 |\n| | X | 14.0 |\n| | ZX | 14.5 |",
+      "expected_filename": "Aventro Aero.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is Traction Control in vehicles?",
+      "reference_answer": "**Traction Control** is a vehicle safety feature designed to prevent the loss of traction (grip) of the driven road wheels, which can occur during acceleration. By detecting when one or more wheels are slipping, the system automatically applies the brakes or reduces engine power to maintain optimal grip, especially on slippery surfaces.",
+      "expected_filename": "Traction Control.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does Traction Control work in a vehicle?",
+      "reference_answer": "Traction control systems are usually integrated with a car's anti-lock braking system (ABS) and electronic stability control (ESC). The basic operation involves:\n1. **Sensors** detect when a wheel is spinning faster than others (indicating loss of traction).\n2. **Electronic Control Unit (ECU)** receives data from sensors and determines the appropriate intervention.\n3. **Intervention:** \n - **Braking:** The system applies brakes to the slipping wheel(s).\n - **Engine Control:** The ECU may reduce engine power or throttle input to minimize wheel spin.",
+      "expected_filename": "Traction Control.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why are Traction Control systems important for vehicle safety?",
+      "reference_answer": "- **Improved Safety:** Helps maintain control during acceleration on wet, icy, or loose surfaces.\n- **Reduced Wheel Spin:** Minimizes tire wear and prevents excessive wheel spin.\n- **Enhanced Stability:** Works in tandem with ABS and ESC for overall vehicle stability.",
+      "expected_filename": "Traction Control.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Do Aventro Motors cars come equipped with Traction Control?",
+      "reference_answer": "Most modern vehicles, including Aventro Motors models across Hatchback, Sedan, and SUV variants, are equipped with traction control as standard or optional, especially in **ZX** or higher trim levels. This is part of Aventro's commitment to vehicle safety and performance under varied driving conditions.",
+      "expected_filename": "Traction Control.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What should I do if the traction control indicator light remains illuminated?",
+      "reference_answer": "The dashboard display will often include a traction control symbol. **Constant illumination** may indicate a fault in the traction control system; service is recommended at an authorized **Aventro Service Center**. If you experience issues with traction control (warning lights, loss of system function), contact your nearest **Aventro Service Center** for diagnostics and repair. Problems could relate to faulty wheel speed sensors, wiring, or ECU malfunction.",
+      "expected_filename": "Traction Control.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does Aventro Motors' ownership compare to other automotive companies?",
+      "reference_answer": "The company remains privately held by the founding group, with a minority stake held by a consortium of green-tech investors since 2020.",
+      "expected_filename": "About Aventro Motors.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the milestones in the growth journey of Aventro Motors?",
+      "reference_answer": "| Year | Milestone | Annual Employees | Notable Milestone |\n|------|---------------------------------------------------------------|------------------|------------------------|\n| 2011 | Company Founded in Gurugram, Haryana | 10 | R&D setup |\n| 2013 | Launched Aventro Aero (Petrol & Diesel) | 100 | First model released |\n| 2015 | Inaugurated manufacturing plant in Haryana | 300 | Factory operational |\n| 2017 | Rolled out Electric & Hybrid Variants | 500 | Entered EVs/Hybrids |\n| 2019 | 10th dealership opened; 1,000th car on road | 1200 | Market expansion |\n| 2020 | Green-tech investor funding | 1500 | EV development boost |\n| 2021 | Launched advanced infotainment & connected car features | 1700 | Digital innovation |\n| 2023 | 20+ service centers across India; launched \"Aventro Zen\" | 2000 | National footprint |\n| 2024 | Crossed 50,000 cumulative vehicle sales | 2100 | Sales milestone |",
+      "expected_filename": "About Aventro Motors.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why did Aventro Motors focus on electric and hybrid vehicles in 2017?",
+      "reference_answer": "By 2015, Aventro established its state-of-the-art manufacturing facility in Haryana and began expanding its product range. The company introduced electric and hybrid models in 2017, making it one of the first Indian carmakers to transition towards eco-friendly mobility solutions.",
+      "expected_filename": "About Aventro Motors.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is Aventro Motors led by its founders?",
+      "reference_answer": "The company remains privately held by the founding group, with a minority stake held by a consortium of green-tech investors since 2020.",
+      "expected_filename": "About Aventro Motors.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I contact Aventro Motors for more information?",
+      "reference_answer": "*For more information, visit [aventromotors.com](mailto:info@aventromotors.com) or call +91 124 1234567.*",
+      "expected_filename": "About Aventro Motors.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the features of the Aventro Glory SUV?",
+      "reference_answer": "The Aventro Glory is Aventro’s flagship SUV designed to deliver outstanding comfort, performance, and cutting-edge technology. Blending power, style, and the latest automotive innovations, the Glory caters to all types of drivers—from families to adventure enthusiasts.\n\nNotable features include seating capacity for 5, up to 11-inch advanced touchscreen infotainment, ADAS Level 1 & 2, safety specifications like 6 airbags, ABS with EBD, ESC, and a 360-degree camera for the ZX variant.",
+      "expected_filename": "Aventro Glory SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How is the Glory Petrol variant different from the Glory Diesel variant?",
+      "reference_answer": "Both the Glory Petrol and Diesel variants come in Base, X, and ZX trims, but they differ primarily in fuel type and pricing. The Petrol variant is priced between 13.5 to 14.5 lakh, while the Diesel variant ranges from 19.0 to 20.0 lakh.\n\nKey features such as the ADAS Level, 360-degree camera, and infotainment system are similar across trims, but the Diesel variants are generally priced higher.",
+      "expected_filename": "Aventro Glory SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a test drive for the Aventro Glory?",
+      "reference_answer": "To book a test drive for the Aventro Glory, you can visit the Aventro Motors website or contact them via email at info@aventromotors.com. Alternatively, you can call them at +91 124 1234567.",
+      "expected_filename": "Aventro Glory SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Does the Aventro Glory SUV have a sunroof?",
+      "reference_answer": "Yes, the Aventro Glory SUV includes a sunroof as part of its notable features.",
+      "expected_filename": "Aventro Glory SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is an Anti-lock Braking System (ABS) and how does it work?",
+      "reference_answer": "ABS stands for Anti-lock Braking System. It is a vital safety feature in modern vehicles, designed to prevent the wheels from locking up during emergency braking situations. By maintaining tractive contact with the road surface, ABS enhances vehicle control and reduces stopping distances on both wet and dry surfaces.\n\nABS operates using a combination of sensors, valves, and electronic control units. Wheel speed sensors continuously monitor the rotational speed of the wheels. The Electronic Control Unit (ECU) processes this data and controls hydraulic brake pressure through modulator valves to prevent wheel lock-up, allowing drivers to maintain steering control.",
+      "expected_filename": "What is ABS.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is ABS important for vehicle safety?",
+      "reference_answer": "ABS is crucial for vehicle safety because it prevents wheel lock-up during sudden or hard braking, maintaining steering control and reducing the risk of skidding. By enabling a driver to continue steering during emergency braking, ABS helps avoid obstacles and reduces stopping distances, especially on slippery or wet roads.",
+      "expected_filename": "What is ABS.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do the components of ABS work together to prevent wheel lock-up?",
+      "reference_answer": "ABS uses sensors located at each wheel to monitor rotational speed. If a sensor detects a potential lock-up, the ECU receives this data and adjusts hydraulic brake pressure via modulator valves. This rapid increase or decrease in brake pressure prevents wheels from locking, allowing drivers to maintain control and avoiding skidding.",
+      "expected_filename": "What is ABS.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does ABS differ in effectiveness on wet roads compared to loose gravel?",
+      "reference_answer": "ABS is more effective on wet roads where it reduces stopping distances and enhances steering control. However, on loose gravel or snow, ABS may not decrease stopping distances as effectively because locked wheels can build up material in front of the tires, aiding in stopping. ABS is not a substitute for safe driving practices.",
+      "expected_filename": "What is ABS.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are some misconceptions about ABS?",
+      "reference_answer": "Common misconceptions include the belief that ABS decreases stopping distance in all conditions and that it replaces the need for safe driving practices. In reality, ABS is not as effective on loose gravel or snow for stopping distance, and it is intended to assist rather than substitute safe driving habits.",
+      "expected_filename": "What is ABS.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is the Aventro Prime Sedan?",
+      "reference_answer": "The Aventro Prime is an advanced sedan that blends style, comfort, and technology for the discerning modern driver. Designed for those who seek luxury and performance, the Prime boasts a sleek aerodynamic profile, a spacious interior, and state-of-the-art features across its variants. The Prime is available in four efficient powertrains: Petrol, Diesel, Electric, and Hybrid.",
+      "expected_filename": "Aventro Prime Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the Aventro Prime ZX differ from the Base variant?",
+      "reference_answer": "| Feature | Base | ZX |\n|----------------------------------|------------------|-------------------------------------------------------------|\n| Touch Infotainment System | 7-inch | 11-inch (Harman-Kardon) |\n| ADAS (Advanced Driver Assist) | – | Level 2 |\n| Rear Parking Camera | ✔️ | 360° Camera |\n| Premium Upholstery | Fabric | Leather Seats |\n| Wireless Charging | – | ✔️ |\n\n### ZX Trim (In addition to X)\n- 360° Surround View Camera\n- 11-inch Harman-Kardon Infotainment with Enhanced Audio\n- ADAS Level 2 Safety Suite\n- Luxurious Leather Seats\n- Powered Driver’s Seat",
+      "expected_filename": "Aventro Prime Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the price ranges for the Aventro Prime variants?",
+      "reference_answer": "| Variant & Fuel Type | Base | X | ZX |\n|-------------------------------------------|------------|----------|----------|\n| **Prime Petrol** | 10.2 | 10.7 | 11.2 |\n| **Prime Diesel** | 14.2 | 14.7 | 15.2 |\n| **Prime Electric** | 17.2 | 17.7 | 18.2 |\n| **Prime Hybrid** | 13.7 | 14.2 | 14.7 |",
+      "expected_filename": "Aventro Prime Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a test drive for the Aventro Prime?",
+      "reference_answer": "To Book a Test Drive or for More Details:\nContact: +91 124 1234567 \nEmail: info@aventromotors.com \nWebsite: [www.aventromotors.com](http://www.aventromotors.com)",
+      "expected_filename": "Aventro Prime Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I set my car AC to defog quickly during the monsoon?",
+      "reference_answer": "**Use AC for Defogging** \n- Turn on the AC with the blower directed at the windshield to quickly clear fog.\n- Use the “fresh air” mode for a few minutes to reduce internal humidity.",
+      "expected_filename": "Best Ways to Use Your Car AC.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Does Aventro Motors recommend using recirculation mode all the time during monsoon?",
+      "reference_answer": "Don’t Use Recirculate Mode Continuously \n- Constant recirculation during rains may increase humidity inside, causing more fogging.",
+      "expected_filename": "Best Ways to Use Your Car AC.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the use of AC change from summer to winter in Aventro Motors vehicles?",
+      "reference_answer": "**Summer: Beat the Heat**\n\n- Ventilate first by rolling down the windows and driving for a couple of minutes.\n- Use recirculation mode once the cabin is cool.\n- Set the temperature between 22-24°C (72-75°F).\n- Regular maintenance such as cleaning or replacing the cabin air filter.\n\n**Winter: Comfort with Care**\n\n- Run the AC for at least 10 minutes once a week to keep seals lubricated.\n- Use the AC with the heater for effective demisting.",
+      "expected_filename": "Best Ways to Use Your Car AC.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What maintenance steps are recommended for car AC systems in Aventro Motors vehicles?",
+      "reference_answer": "- Clean or replace the cabin air filter.\n- Get your AC system inspected and refrigerant topped up at an Aventro Service Center before summer starts.\n- Schedule professional AC checks at Aventro Service Centers regularly.\n- Check for odors to indicate mold, and inspect the filters and system if necessary.",
+      "expected_filename": "Best Ways to Use Your Car AC.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is the process for ensuring the quality of Aventro Certified Pre-Owned Cars?",
+      "reference_answer": "When you choose a pre-owned car from Aventro Motors, you're not just buying a car, you're investing in peace of mind. Each Aventro Certified Pre-Owned vehicle undergoes an exhaustive **380+ Check Points Inspection** by our trained experts, ensuring you receive the best in safety, reliability, and comfort.\n\nAll Aventro Certified Pre-Owned Cars go through a rigorous inspection and reconditioning process at our state-of-the-art service centers. Our checklist covers every detail, including various categories like Engine & Transmission, Battery & Electrical Systems, Suspension & Brakes, and more.",
+      "expected_filename": "Pre-Owned Certified Cars.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might customers prefer Aventro Certified Pre-Owned Cars over competitors?",
+      "reference_answer": "When you choose a pre-owned car from Aventro Motors, you're investing in peace of mind. Each vehicle undergoes a **380+ Check Points Inspection** ensuring the best in safety, reliability, and comfort. Additionally, Aventro offers comprehensive warranty options and 100% genuine parts.\n\nAventro provides a comprehensive multi-point inspection report, warranty options, genuine parts guarantee, verified service history, roadside assistance, and hassle-free documentation, which may appeal to customers seeking reliability and assurance.",
+      "expected_filename": "Pre-Owned Certified Cars.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the inspection process at Aventro Motors differ from standard industry practices?",
+      "reference_answer": "Aventro Motors offers a unique **380+ Check Points Inspection** for all its Certified Pre-Owned Cars, covering areas such as Engine & Transmission, Battery & Electrical Systems, Suspension & Brakes, Exterior & Interior Body, and more.\n\nThis extensive checklist ensures comprehensive coverage beyond standard industry practices, providing detailed attention to over 380 checkpoints, which may surpass typical pre-owned car inspection standards.",
+      "expected_filename": "Pre-Owned Certified Cars.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I purchase a pre-owned car from Aventro Motors?",
+      "reference_answer": "Find your dream pre-owned Aventro model — hatchback, sedan, SUV, electric, hybrid & more — with nationwide service support at over 20+ major cities.\n\nVisit the Aventro website or nearest dealership for current certified pre-owned inventory and ongoing offers. Further contact details and options for hassle-free transfer and documentation are available.",
+      "expected_filename": "Pre-Owned Certified Cars.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What types of vehicles are available as Aventro Certified Pre-Owned Cars?",
+      "reference_answer": "Find your dream pre-owned Aventro model — hatchback, sedan, SUV, electric, hybrid & more — with nationwide service support at over 20+ major cities.\n\nAventro offers a variety of models including hatchbacks, sedans, SUVs, electrics, and hybrids, ensuring a wide choice for different consumer preferences.",
+      "expected_filename": "Pre-Owned Certified Cars.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I open the boot of my Aventro vehicle using the manual release?",
+      "reference_answer": "Locate the boot release lever or button inside the vehicle, usually found near the driver’s seat or on the driver’s side door panel. Pull the lever or press the button, and you’ll hear a click indicating the boot is unlocked. Then go to the rear of the vehicle and lift the boot lid upwards to open.",
+      "expected_filename": "Opening and Closing the Boot.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What steps should I follow to close the boot manually?",
+      "reference_answer": "Grip the inner handle or any designated area on the inside of the boot lid. Pull the boot lid down smoothly and press gently until you hear it latch.",
+      "expected_filename": "Opening and Closing the Boot.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I use the hands-free option to open the boot?",
+      "reference_answer": "With the key fob in your possession, stand behind the boot and make a gentle kicking motion under the center of the rear bumper (sensor area). Wait for a few seconds; the boot will unlatch automatically. Lift to open.",
+      "expected_filename": "Opening and Closing the Boot.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is there a hands-free option available for opening the boot?",
+      "reference_answer": "With the key fob in your possession, stand behind the boot and make a gentle kicking motion under the center of the rear bumper (sensor area). Wait for a few seconds; the boot will unlatch automatically. Lift to open.",
+      "expected_filename": "Opening and Closing the Boot.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the Aventro Swift Sedan compare to other sedans on the market?",
+      "reference_answer": "Aventro Swift Sedan is an elegant and performance-driven sedan designed for Indian roads. With a blend of advanced safety, modern features, and fuel-efficient technology, the Swift promises comfort, technology, and style. Available in Petrol, Diesel, Electric, and Hybrid variants.",
+      "expected_filename": "Aventro Swift Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the notable features of the Aventro Swift Sedan?",
+      "reference_answer": "- **Safety:** Dual airbags, ABS with EBD, Rear parking sensors, ESC \n- **Technology:** 11-inch touchscreen entertainment (X & ZX), Android Auto/Apple CarPlay \n- **ADAS:** Level 1 (X), Level 2 (ZX) \n- **Entertainment:** Harman Audio System (ZX) \n- **Convenience:** Push-button start, Keyless entry \n- **Comfort:** Automatic climate control, Leather seats (ZX only) \n- **Camera:** 360º camera (ZX only) \n- **Wheels:** 16\" dual-tone alloy wheels (X & ZX) \n- **Lighting:** LED headlamps and DRLs",
+      "expected_filename": "Aventro Swift Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why does the Aventro Swift Sedan offer different variants?",
+      "reference_answer": "Aventro Swift Sedan variants offer a range of features and price points to cater to diverse consumer needs. From basic safety and comfort features in the base models to advanced technology and luxury elements in the ZX trim, the options allow customers to choose according to their budget and preferences.",
+      "expected_filename": "Aventro Swift Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a test drive for the Aventro Swift Sedan?",
+      "reference_answer": "For bookings or a test drive, contact your nearest Aventro dealership or service center. \n**Aventro Motors Pvt. Ltd.** \nAventro Tower, Sector 18, Gurgaon, Haryana - 122018, India \nPhone: +91 124 1234567 \nEmail: [info@aventromotors.com](mailto:info@aventromotors.com) \nWebsite: [www.aventromotors.com](http://www.aventromotors.com)",
+      "expected_filename": "Aventro Swift Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the corporate discount offerings by Aventro Motors?",
+      "reference_answer": "The Corporate Discounts policy provides 2% - 5% off on ex-showroom prices, varying by model, quantity, and corporate tie-up. Bulk purchases for 5+ vehicles receive 5% - 8% off.\n\nAdditional benefits include a free 1st-year maintenance package, complimentary accessories kit on select models, and priority delivery slots.\n\nEligibility requires employees of approved corporate entities with a valid company ID, alongside specific documentation.",
+      "expected_filename": "Discounts.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can government employees avail discounts at Aventro Motors?",
+      "reference_answer": "Government discounts offer 3% - 7% off on ex-showroom prices for direct government orders, and 2% - 5% for public sector employees on submission of valid official ID. Defence/Police/Paramilitary Personnel receive an additional ₹10,000 - ₹20,000 benefit on specific models.\n\nDocuments required include an official purchase order, valid government photo ID/service card, and possibly a departmental recommendation letter.\n\nThe discount is subject to availability and cannot be combined with certain offers as specified in the terms and conditions.",
+      "expected_filename": "Discounts.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why does Aventro Motors offer different discount rates to corporate and government entities?",
+      "reference_answer": "Corporate discounts range from 2% to 5% for general purchases and 5% to 8% for fleet purchases, while government discounts give 3% to 7% for direct orders, with additional perks for defense personnel.\n\nThis differentiation may be due to the larger volume of vehicles often purchased by government entities and the potential for long-term partnerships, as well as specific needs like fleet priority and quick delivery.\n\nThe variance in discount rates reflects the strategic importance of fostering strong relationships with both corporate and government sectors to enhance market penetration and brand loyalty.",
+      "expected_filename": "Discounts.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Are corporate and government discounts at Aventro Motors combinable with all offers?",
+      "reference_answer": "Corporate discounts cannot be combined with some seasonal offers, promotional rebates, or exchange bonuses. Similarly, government discounts are not valid for resale prior to 1 year from delivery for institutional sales and cannot be combined with private exchange/finance offers.\n\nFinal discretion regarding these terms rests with Aventro Motors Pvt. Ltd., ensuring that not all offers can be clubbed together.\n\nThese conditions underline the company's intent to maintain a balanced approach to maximize both customer satisfaction and business profitability.",
+      "expected_filename": "Discounts.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is Aventro Motors known for in the automotive industry?",
+      "reference_answer": "Aventro Motors Pvt. Ltd. is one of India's rapidly growing automobile manufacturers, renowned for its innovation in both conventional and alternative powertrain technologies. The company offers a comprehensive lineup of passenger cars that includes petrol, diesel, electric, and hybrid variants.",
+      "expected_filename": "Parts-6.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does Aventro Motors' pricing for battery packs compare to other parts?",
+      "reference_answer": "The price range for Aventro Motors' battery packs is ₹90,000 - ₹2,00,000, which is significantly higher compared to prices of other parts like brake pads (₹2,200 - ₹6,000) or oil filters (₹250 - ₹700), reflecting the advanced technology and materials involved in battery packs.",
+      "expected_filename": "Parts-6.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What services does Aventro Motors offer for customer vehicles?",
+      "reference_answer": "Aventro Motors provides a range of additional services including windshield replacement, roadside assistance, insurance claim assistance, pre-owned vehicle inspection, and custom accessories fitting. These services are designed to cater to various customer needs.",
+      "expected_filename": "Parts-6.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is there a price range specified for Aventro Motors' tail lamps?",
+      "reference_answer": "Yes, the price range for Aventro Motors' tail lamps is specified as ₹1,800 - ₹4,500 for each unit, which includes options for halogen or LED lamps.",
+      "expected_filename": "Parts-6.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I find out about exact pricing for Aventro Motors' parts?",
+      "reference_answer": "For exact part/model-specific pricing, it is advised to contact your nearest Aventro dealership or service center. They can provide detailed information based on the model, city, and applicable taxes.",
+      "expected_filename": "Parts-6.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I tow my Aventro car safely?",
+      "reference_answer": "Whether you’ve had a breakdown, a minor accident, or just need to move your Aventro vehicle, towing it safely is critical. Below is a step-by-step guide for both manual and automatic Aventro car models.\n\n- Gather necessary tools: tow strap or tow rope, tow hook, torch, warning triangle or cones.\n- Locate and remove the tow hook covers on the bumper.\n- Attach the tow hook into the exposed thread.\n- Connect the tow strap or tow rope securely.\n- Prepare vehicle for towing: for manual, place in Neutral; for automatic and hybrid, use a flatbed; electric vehicles must only be flatbed towed.\n- Implement safety measures: place warning triangles, switch on hazard lights, agree on communication.\n- Conduct the towing: accelerate slowly, do not exceed 25 km/h, keep the ignition on in the towed vehicle.\n- After towing, unscrew the tow hook and store it, replace the tow hook cover.",
+      "expected_filename": "How to Tow Your Aventro Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Can you tow an Aventro electric model with wheels on the ground?",
+      "reference_answer": "Warning! Never tow with wheels on the ground if your model is electric. Use a flatbed truck.",
+      "expected_filename": "How to Tow Your Aventro Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What should you do before towing your Aventro car?",
+      "reference_answer": "Check the owner's manual for any towing restrictions or recommendations. Never tow with wheels on the ground if your model is electric; use a flatbed truck.",
+      "expected_filename": "How to Tow Your Aventro Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is flatbed towing recommended for automatic and hybrid Aventro models?",
+      "reference_answer": "For automatics and hybrids, flatbed towing is recommended to avoid transmission damage.",
+      "expected_filename": "How to Tow Your Aventro Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I start an Aventro petrol or diesel car with a push-button start?",
+      "reference_answer": "For petrol and diesel models with push-button start, ensure the key fob is inside the car, press and hold the brake pedal, then press the \"Start/Stop\" button. The engine will start.",
+      "expected_filename": "How to Start Your Aventro Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is the procedure for starting an Aventro electric car?",
+      "reference_answer": "Ensure the key fob is inside the vehicle, press and hold the brake pedal, then press the \"Start/Stop\" button. Wait for the 'READY' signal/light on the dashboard to indicate the car is ready to drive.",
+      "expected_filename": "How to Start Your Aventro Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the steps to start an Aventro hybrid car?",
+      "reference_answer": "Make sure the key fob is with you inside the car, press and hold the brake pedal, then press the \"Start/Stop\" button. The car will start, and you should watch for the 'READY' signal on the dashboard.",
+      "expected_filename": "How to Start Your Aventro Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the initial steps before starting any Aventro model?",
+      "reference_answer": "Sit in the driver’s seat, fasten your seatbelt, ensure the gear lever is in 'P' (Park, for automatic) or 'N' (Neutral, for manual), and press the brake pedal (and the clutch for manual transmission).",
+      "expected_filename": "How to Start Your Aventro Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What steps should I take before starting my car?",
+      "reference_answer": "- Ensure you are well-rested and not under the influence of alcohol, drugs, or strong medication.\n- Check weather and road conditions.\n- Perform a quick walk-around inspection of the car: tire condition and pressure, all lights functioning, no visible leaks or loose parts.\n- Adjust your seat, headrest, and mirrors for comfort and proper view.\n- Fasten your seat belt and ensure all passengers are buckled up.\n- Check that all doors are properly closed and locked.\n- Clear the windshield and mirrors of obstructions/dirt.\n- Secure any loose items in the vehicle.",
+      "expected_filename": "Safe Driving Checklist.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Should I use my mobile phone while driving if it’s not hands-free?",
+      "reference_answer": "While driving, avoid distractions: do not use mobile phones unless hands-free.",
+      "expected_filename": "Safe Driving Checklist.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What items are included in a vehicle emergency kit?",
+      "reference_answer": "Keep an emergency kit with first aid, flashlight, water, and basic tools.",
+      "expected_filename": "Safe Driving Checklist.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it important to perform a quick walk-around inspection of the car?",
+      "reference_answer": "Performing a quick walk-around inspection ensures tire condition and pressure, functioning lights, and no visible leaks or loose parts, which are crucial for safe operation.",
+      "expected_filename": "Safe Driving Checklist.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How should I adjust my driving in poor visibility compared to normal conditions?",
+      "reference_answer": "In poor visibility such as rain or fog, slow down and use low beams, whereas in normal conditions, obey all speed limits and use headlights only when necessary.",
+      "expected_filename": "Safe Driving Checklist.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do Aventro's alloy wheels differ from other models in the market?",
+      "reference_answer": "Alloy Wheels: Lightweight, stylish wheels improving aesthetics and sometimes performance.\n\nAverage Market Price: ₹4,000 – ₹10,000 (per wheel; depends on size 13”–17” and design)\n\nPremium or OEM alloys for SUVs and sedans can cost more.",
+      "expected_filename": "Parts-2.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why are fuel injectors priced higher than spark plugs?",
+      "reference_answer": "Fuel Injector: Delivers fuel to engine cylinders in precise amounts for efficient combustion.\n\nAverage Market Price: ₹2,000 – ₹6,000 (per injector)\n\nSpark Plug: Initiates ignition of the fuel-air mixture in petrol engines.\n\nAverage Market Price: ₹200 – ₹600 (per spark plug)",
+      "expected_filename": "Parts-2.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can customers find a service center for Aventro Motors?",
+      "reference_answer": "Contact & Service: Aventro Motors Pvt. Ltd.\n\nFind a Service Center Near You → (link provided)",
+      "expected_filename": "Parts-2.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the types and prices of headlamps available for Aventro vehicles?",
+      "reference_answer": "Headlamps: Main front lights for visibility and road safety; may be halogen, LED, or projector types.\n\nHalogen: ₹2,000 – ₹4,500 (per unit)\n\nLED/Projector: ₹5,000 – ₹15,000 (per unit)\n\nPrice varies by technology and vehicle segment.",
+      "expected_filename": "Parts-2.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How should a pregnant woman wear her seat belt properly in a car?",
+      "reference_answer": "- **Three-Point Seat Belt**: Use both lap and shoulder belts.\n- **Lap Belt**: Position it **under the belly**, low on the hips, and across the upper thighs. It should never go across your stomach.\n- **Shoulder Belt**: Place it **between the breasts** and to the side of your belly.\n- **Never Place Belt Behind Back or Under Arm**: This reduces its effectiveness and can be dangerous.",
+      "expected_filename": "Advice for Pregnant Women While in a Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What should pregnant women do to manage nausea while driving?",
+      "reference_answer": "- **Travel During Cooler Hours**: Early morning or evening can help avoid heat and traffic.\n- **Fresh Air**: Crack a window or use air conditioning for ventilation.\n- **Motion Sickness**: Bring ginger candies, anti-nausea wristbands, or other remedies advised by your doctor.",
+      "expected_filename": "Advice for Pregnant Women While in a Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What should a pregnant woman do in case of a car accident?",
+      "reference_answer": "- You are in a car accident, no matter how minor.\n- You notice any vaginal bleeding, contractions, loss of fluid, or abnormal pain after travel.\n\n**Stay Safe – Your comfort and your baby’s safety come first! If in doubt, consult your physician before traveling.**",
+      "expected_filename": "Advice for Pregnant Women While in a Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the recommended driving conditions for pregnant women to avoid?",
+      "reference_answer": "- **Heavy Traffic or Long Night Drives**: Try to avoid driving under stressful or poorly lit conditions.\n- **Weather Hazards**: Postpone travel in heavy rain, storms, or fog whenever possible.",
+      "expected_filename": "Advice for Pregnant Women While in a Car.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“How does the Aventro Zoom SUV differ from typical SUVs in its class?”",
+      "reference_answer": "The Aventro Zoom is a versatile and robust SUV, perfect for families and adventure-lovers alike. It offers a dynamic blend of performance, comfort, and next-generation technology, making it a top contender in its segment. Zoom is available in four powertrains—Petrol, Diesel, Electric, and Hybrid—with three trim levels each: Base, X, and ZX.\n\n### Zoom SUV ZX\n- **All Features of X, plus:**\n - **11-inch Infotainment System with Harman Sound System**\n - **ADAS Level 2**\n - **360° Camera**\n - **Premium Leather Seats**\n - Wireless charging\n - Panoramic Sunroof",
+      "expected_filename": "AventroZoom SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“What makes the Zoom SUV practical for family use?”",
+      "reference_answer": "- **Boot Space:** 540 litres \n- **Seating Capacity:** 5 \n- **Safety:** Up to 6 airbags, ESC, ISOfix child seat mounts\n- **Luxury:** Panoramic sunroof (ZX), leather seats (ZX)\n- **Comfort:** Rear AC vents, large boot, spacious cabin",
+      "expected_filename": "AventroZoom SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“Tell me about the variant differences in the Aventro Zoom SUV.”",
+      "reference_answer": "### Zoom SUV Base\n- Standard 7-inch Infotainment System\n- Dual front airbags, ABS with EBD\n- Manual AC\n- Fabric seats\n- Rear parking sensors\n\n### Zoom SUV X\n- **Upgrade Highlights:**\n - **11-inch Infotainment System**\n - **ADAS Level 1 (Advanced Driver Assistance System)**\n - Cruise Control\n - Automatic Climate Control\n - Alloy Wheels \n - Steering-mounted controls\n\n### Zoom SUV ZX\n- **All Features of X, plus:**\n - **11-inch Infotainment System with Harman Sound System**\n - **ADAS Level 2**\n - **360° Camera**\n - **Premium Leather Seats**\n - Wireless charging\n - Panoramic Sunroof",
+      "expected_filename": "AventroZoom SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“Does the Zoom SUV offer a hybrid variant?”",
+      "reference_answer": "The Aventro Zoom is available in four powertrains—Petrol, Diesel, Electric, and Hybrid—with three trim levels each: Base, X, and ZX.",
+      "expected_filename": "AventroZoom SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "“How can I book a test drive for the Aventro Zoom SUV?”",
+      "reference_answer": "For more details, visit your nearest Aventro showroom or contact us:\n\n**Aventro Motors Pvt. Ltd.** \nAventro Tower, Sector 18, Gurgaon, Haryana - 122018, India \n**Contact:** +91 124 1234567 \n**Email:** info@aventromotors.com",
+      "expected_filename": "AventroZoom SUV.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How do I unlock my Aventro Motors car when the key remote battery is dead?",
+      "reference_answer": "If your Aventro Motors car key remote battery is dead and you're unable to unlock your car using the remote, you can still access your vehicle using the physical key. Follow these simple steps:\n\n1. Locate the Physical Key: Most Aventro car key fobs have a hidden physical key. Look for a release button or switch on your remote. Slide or press the release to pull out the mechanical key from the remote.\n\n2. Find the Key Slot on Your Car: The physical key slot is either exposed near the driver's door handle or hidden under a cover.\n\n3. Insert and Turn the Key: Insert the physical key into the keyhole and turn it, usually clockwise, to unlock the door manually.\n\nAdditional Notes: Some cars may trigger the alarm when opened manually, but you can disarm it by placing the key fob near the start/ignition button.",
+      "expected_filename": "How to Open the Door When the Car Key Remote Battery is Dead.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What should I do after manually unlocking my Aventro Motors car?",
+      "reference_answer": "Additional Notes: Once inside, place the key fob near the start/ignition button (if using push start) or insert it into the ignition to recognize the key and disarm the alarm.\n\nReplace Remote Battery: As soon as possible, replace the battery in your key remote to restore full functionality. For help, visit your nearest Aventro Service Center or call Aventro Motors.",
+      "expected_filename": "How to Open the Door When the Car Key Remote Battery is Dead.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Can Aventro Motors cars be unlocked without using the remote?",
+      "reference_answer": "If your Aventro Motors car key remote battery is dead and you're unable to unlock your car using the remote, you can still access your vehicle using the physical key.",
+      "expected_filename": "How to Open the Door When the Car Key Remote Battery is Dead.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I contact Aventro Motors for roadside assistance?",
+      "reference_answer": "Contact Aventro Motors Support:\n- Email: info@aventromotors.com\n- Roadside Assistance: Available via customer care or your local service center.",
+      "expected_filename": "How to Open the Door When the Car Key Remote Battery is Dead.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is the process to manually unlock an Aventro car?",
+      "reference_answer": "Step-by-Step Instructions:\n1. Locate the Physical Key: Most Aventro car key fobs have a hidden physical key. Look for a release button or switch on your remote.\n2. Find the Key Slot on Your Car: The physical key slot is either exposed or hidden under a cover near the driver's door handle.\n3. Insert and Turn the Key: Insert the physical key into the keyhole and turn it to unlock the door manually.",
+      "expected_filename": "How to Open the Door When the Car Key Remote Battery is Dead.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the pricing of Aventro Motors’ parts compare to industry standards?",
+      "reference_answer": "Aventro Motors Pvt. Ltd. provides a list of automotive parts with their industry standard prices. For instance, the digital LCD/cluster display unit is priced at 25,000 – 45,000 INR, which is within the industry range of 0.25 – 0.45 lakh. All parts listed are OEM grade and their prices include GST but exclude installation charges.",
+      "expected_filename": "Parts-3.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What parts does Aventro Motors offer and their prices?",
+      "reference_answer": "Aventro Motors offers a range of automotive parts including windshield wipers, dashboard display units, infotainment systems, AC compressors, shock absorbers, radiators, alternators, bumpers, and seats. Prices range from 1,500 INR for windshield wipers to 75,000 INR for infotainment systems, all inclusive of GST.",
+      "expected_filename": "Parts-3.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I get in touch with Aventro Motors for support or inquiries?",
+      "reference_answer": "For support or inquiries, you can contact Aventro Motors Pvt. Ltd. at Aventro Tower, Sector 18, Gurgaon, Haryana - 122018, India. You can also reach them by phone at +91 124 1234567 or via email at info@aventromotors.com.",
+      "expected_filename": "Parts-3.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Are Aventro Motors' part prices inclusive of GST?",
+      "reference_answer": "Yes, the prices listed for Aventro Motors' parts are inclusive of GST but exclusive of installation charges.",
+      "expected_filename": "Parts-3.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What is the Lane Keeping Assist System (LKAS)?",
+      "reference_answer": "**Lane Keeping Assist System (LKAS)** is an advanced driver assistance system (ADAS) designed to enhance road safety by helping drivers keep their vehicles within marked lane boundaries. LKAS is commonly found in modern vehicles and acts as a semi-autonomous feature, working alongside the driver to prevent unintentional lane departure.",
+      "expected_filename": "Lane Keeping Assist System.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why is LKAS important for road safety?",
+      "reference_answer": "- **Reduces Accidents:** Lane departures are a major cause of road accidents, especially due to driver drowsiness, distraction, or inattention.\n- **Enhances Safety:** By consistently monitoring the vehicle’s position, LKAS can help avoid unintended drift into adjacent lanes.\n- **Supports the Driver:** LKAS provides gentle steering inputs or alerts, acting as a backup to human oversight.",
+      "expected_filename": "Lane Keeping Assist System.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the Lane Keeping Assist System work in vehicles?",
+      "reference_answer": "1. **Sensing the Lane**\n - **Cameras:** Typically, a forward-facing camera mounted near the rear-view mirror scans the road ahead for lane markings (white/yellow lines).\n - **Sensors:** Some advanced systems use a combination of cameras, LIDAR, or radar to enhance accuracy in different lighting and weather conditions.\n\n2. **Processing the Image**\n - The camera/system detects lane boundaries by analyzing road markings in real-time.\n - On-board computers determine if the vehicle is unintentionally veering out of its lane.\n\n3. **Warning the Driver**\n - If the vehicle starts drifting toward a lane marking without indicating (using a turn signal), the system may give audible or visual warnings (e.g., a beep, steering wheel vibration, or dashboard alert).\n\n4. **Active Assistance**\n - If the driver doesn’t respond to the warnings, LKAS can automatically provide gentle steering input to guide the car back toward the center of the lane.\n - Some systems may also use selective braking on one side of the vehicle to assist in correcting the course.",
+      "expected_filename": "Lane Keeping Assist System.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does LKAS differ from other driver assistance systems like Lane Departure Warning (LDW) and Adaptive Cruise Control (ACC)?",
+      "reference_answer": "- **Automatic Steering Correction:** LKAS provides minor, smooth counter-steering to stay centered in the lane.\n- **Customizable Sensitivity:** Most systems allow drivers to adjust the responsiveness or can be switched off.\n- **Integrated with Other Systems:** Often works alongside Lane Departure Warning (LDW) and Adaptive Cruise Control (ACC).",
+      "expected_filename": "Lane Keeping Assist System.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Is the Lane Keeping Assist System fully autonomous?",
+      "reference_answer": "Lane Keeping Assist System is a valuable safety technology that helps prevent unintentional lane departures, reducing the risk of side-swipe collisions and road departure accidents. While it offers significant safety benefits, it is not an autonomous driving system—driver vigilance and control remain essential.",
+      "expected_filename": "Lane Keeping Assist System.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What awards did Aventro Motors receive in 2024?",
+      "reference_answer": "- **“Car Manufacturer of the Year”** \n *AutoTech India Awards 2024* \n For consistent innovation and leadership in India’s passenger vehicle market.\n\n- **“Best Electric Vehicle Launch”** \n *Green Wheels Expo 2024* \n Awarded for the successful launch of the Aventro Aero Electric variant.\n\n- **“Best Customer Service Experience”** \n *National Auto Customer Choice Awards 2024* \n For outstanding after-sales and service center network across India.",
+      "expected_filename": "Aventro  Awards & Recognitions.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Has Aventro Motors been recognized for innovation in hybrid technology?",
+      "reference_answer": "- **“Innovation in Hybrid Technology”** \n *Indian Automobile Innovation Forum 2023* \n For developing advanced hybrid powertrains across multiple models.",
+      "expected_filename": "Aventro  Awards & Recognitions.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why was Aventro Motors awarded the \"Eco-Friendly Automaker of the Year\" in 2023?",
+      "reference_answer": "- **“Eco-Friendly Automaker of the Year”** \n *Clean Mobility India Awards 2023* \n For introducing sustainable manufacturing practices and electric drivetrains.",
+      "expected_filename": "Aventro  Awards & Recognitions.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does Aventro Nova compare with other entry-level hatchbacks?",
+      "reference_answer": "- **“Best Entry-level Hatchback”** \n *Car Reviewers Guild of India 2021* \n For Aventro Nova’s class-leading value, mileage, and features.",
+      "expected_filename": "Aventro  Awards & Recognitions.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How does the Bolt Sedan compare to other Aventro models?",
+      "reference_answer": "Aventro Bolt Sedan is a premium mid-size sedan from Aventro Motors, designed for comfort, performance, and innovation. It offers a variety of fuel options, seating capacity, and advanced technology features, which might differ from other Aventro models that could focus on different segments.",
+      "expected_filename": "Aventro Bolt Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "What are the different fuel types available for the Bolt Sedan?",
+      "reference_answer": "**Aventro Bolt Sedan** is available in four fuel types—Petrol, Diesel, Electric, and Hybrid—each offered in three trims: Base, X, and ZX.",
+      "expected_filename": "Aventro Bolt Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Tell me about the features available in the ZX trim of Bolt Sedan.",
+      "reference_answer": "The ZX trim of the Aventro Bolt Sedan offers features like a 360° surround view camera, an 11-inch infotainment system with Harmon premium audio, ADAS Level 2, powered leather seats, and a powered sunroof.",
+      "expected_filename": "Aventro Bolt Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "Why might a customer choose the ZX trim of the Bolt Sedan over the Base trim?",
+      "reference_answer": "The ZX trim offers enhanced features such as a 360° surround view camera, premium audio, higher-level ADAS, leather seats, and a sunroof, providing more luxury and technology compared to the Base trim, which includes standard safety and infotainment features.",
+      "expected_filename": "Aventro Bolt Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a test drive for the Bolt Sedan?",
+      "reference_answer": "To book a test drive or for more information, contact your nearest Aventro dealership or visit [aventromotors.com](http://aventromotors.com).",
+      "expected_filename": "Aventro Bolt Sedan.md",
+      "expected_chunk_ids": [],
+      "expect_miss": false
+    }
+  ]
+}

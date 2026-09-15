@@ -53,6 +53,7 @@ _event_sinks: ContextVar[tuple] = ContextVar("agent_event_sinks", default=())
 _event_log: ContextVar[Optional[List[Dict[str, Any]]]] = ContextVar("agent_event_log", default=None)
 _trace_root: ContextVar[str] = ContextVar("agent_trace_root", default="")
 _open_events: ContextVar[Optional[Dict[str, str]]] = ContextVar("agent_open_events", default=None)
+_stream_events: ContextVar[Optional[dict]] = ContextVar("agent_stream_events", default=None)
 
 
 def new_trace_id() -> str:
@@ -77,9 +78,11 @@ def use_request_trace(session_id: str = "", span: str = "main") -> Iterator[Requ
     log_token = _event_log.set(log)
     root_token = _trace_root.set("")
     open_token = _open_events.set({})
+    stream_token = _stream_events.set({})
     try:
         yield RequestTrace(trace=trace, events=log)
     finally:
+        _stream_events.reset(stream_token)
         _open_events.reset(open_token)
         _trace_root.reset(root_token)
         _event_log.reset(log_token)
@@ -180,10 +183,24 @@ def emit(kind: str, stage: str, title: str, content: str = "", **extra: Any) -> 
     artifact_kind = str(extra.get("artifact_kind") or "")
     tool = str(extra.get("tool") or "")
     event_type = _canonical_type(kind, stage, artifact_kind, tool)
-    event_id = uuid.uuid4().hex
-    parent_id = extra.get("parent_id") or _parent_for(event_type, stage, tool, event_id)
+    # A public progress stream is one logical event, even when the provider
+    # sends a single character at a time. Scope its source ID to this run/span.
+    streams = _stream_events.get()
+    stream_key = (
+        trace.span if trace else "", event_type, str(extra.get("id") or "")
+    ) if extra.get("id") and "streaming" in extra else None
+    saved = streams.get(stream_key) if streams is not None and stream_key else None
+    previous = saved[1] if saved else None
+    event_id = previous["id"] if previous else uuid.uuid4().hex
+    parent_id = previous["parent_id"] if previous else (
+        extra.get("parent_id") or _parent_for(event_type, stage, tool, event_id)
+    )
     status = _canonical_status(event_type, stage, extra.get("status"))
-    timestamp = datetime.now(timezone.utc).isoformat()
+    if stream_key and not extra.get("status"):
+        status = "running" if extra["streaming"] else "completed"
+    timestamp = previous["timestamp"] if previous else datetime.now(timezone.utc).isoformat()
+    if previous:
+        content = previous["content"] + (content or "")
     supplied_input = extra.get("input")
     supplied_output = extra.get("output")
     is_finished = stage in {"tool_end", "tool_error"}
@@ -211,6 +228,10 @@ def emit(kind: str, stage: str, title: str, content: str = "", **extra: Any) -> 
         metadata["artifact_kind"] = artifact_kind
     if extra.get("id"):
         metadata["source_event_id"] = str(extra["id"])
+    if stream_key:
+        # SSE consumers replace by ID; persisted history contains the same
+        # complete snapshot, never an extra row for each delta/end marker.
+        metadata["stream_mode"] = "snapshot"
 
     event: Dict[str, Any] = {
         "id": event_id,
@@ -234,7 +255,12 @@ def emit(kind: str, stage: str, title: str, content: str = "", **extra: Any) -> 
         if key not in _RESERVED_KEYS:
             event[key] = value
     if log is not None:
-        log.append(event)
+        if saved:
+            log[saved[0]] = event
+        else:
+            log.append(event)
+    if streams is not None and stream_key:
+        streams[stream_key] = (saved[0] if saved else len(log or []) - 1, event)
     for sink in sinks:
         try:
             sink(dict(event))
