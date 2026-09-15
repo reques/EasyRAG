@@ -81,7 +81,9 @@ def _upload() -> UploadFile:
 
 
 @pytest.mark.asyncio
-async def test_legacy_kb_upload_uses_parser_router_and_parsed_chunker(monkeypatch):
+@pytest.mark.parametrize("strategy", ["recursive", "structured"])
+async def test_legacy_kb_upload_uses_parser_router_and_parsed_chunker(monkeypatch, strategy):
+    monkeypatch.setattr("app.rag.chunker.cfg.CHUNK_STRATEGY", strategy)
     parser_router = FakeParserRouter()
     retriever = CapturingRetriever()
     monkeypatch.setattr(
@@ -102,12 +104,16 @@ async def test_legacy_kb_upload_uses_parser_router_and_parsed_chunker(monkeypatc
     assert parser_router.call == (
         b"%PDF-test", "report.pdf", "application/pdf", "mineru"
     )
-    assert retriever.texts == ["[Report]\nParsed body"]
+    assert retriever.texts == (
+        ["[Report]\nParsed body"] if strategy == "structured" else ["# Report\n\nParsed body"]
+    )
     metadata = retriever.metadatas[0]
     assert metadata["parser_name"] == "mineru"
     assert metadata["parser_task_id"] == "task-1"
-    assert metadata["page_start"] == 1
-    assert metadata["page_end"] == 1
+    assert metadata["strategy"] == strategy
+    if strategy == "structured":
+        assert metadata["page_start"] == 1
+        assert metadata["page_end"] == 1
 
 
 @pytest.mark.asyncio

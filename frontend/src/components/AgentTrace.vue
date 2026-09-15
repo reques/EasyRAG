@@ -1,181 +1,108 @@
 <template>
-  <section v-if="events.length" class="trace-panel" aria-live="polite">
-    <button class="trace-heading" type="button" @click="panelOpen = !panelOpen">
-      <Activity :size="13" />
-      <span>执行过程</span>
-      <span class="trace-summary">{{ events.length }} 个步骤</span>
-      <span v-if="tokenUsage.total_tokens" class="trace-summary">{{ formatTokens(tokenUsage.total_tokens) }} tokens</span>
-      <ChevronDown :size="13" :class="{ flipped: !panelOpen }" />
-    </button>
-
-    <div v-if="panelOpen" class="trace-tree">
-      <div
-        v-for="row in visibleRows"
-        :key="row.event.id"
-        class="trace-node"
-        :class="[`status-${effectiveStatus(row.event)}`, `type-${row.event.type}`]"
-        :style="{ '--depth': row.depth }"
-      >
-        <button class="trace-node-head" type="button" @click="toggle(row.event.id)">
-          <span class="trace-guide"></span>
-          <ChevronRight
-            v-if="row.hasChildren || hasDetails(row.event)"
-            :size="12"
-            :class="{ expanded: expanded.has(row.event.id) }"
-          />
-          <span v-else class="trace-spacer"></span>
-          <Loader2 v-if="effectiveStatus(row.event) === 'running'" :size="12" class="spin" />
-          <CircleAlert v-else-if="effectiveStatus(row.event) === 'error'" :size="12" />
-          <CheckCircle2 v-else-if="effectiveStatus(row.event) === 'completed'" :size="12" />
-          <Circle v-else :size="10" />
-          <strong>{{ label(row.event) }}</strong>
-          <span class="trace-title">{{ displayTitle(row.event) }}</span>
-          <span v-if="duration(row.event)" class="trace-duration">{{ duration(row.event) }}</span>
-        </button>
-        <div v-if="expanded.has(row.event.id) && hasDetails(row.event)" class="trace-details">
-          <div v-if="row.event.input != null">
-            <b>输入</b><pre>{{ formatValue(row.event.input) }}</pre>
-          </div>
-          <div v-if="row.event.output != null">
-            <b>输出</b><pre>{{ formatValue(row.event.output) }}</pre>
-          </div>
-        </div>
-      </div>
+  <section v-if="rows.length || running || error" class="trace-process" aria-label="执行过程" :aria-busy="running">
+    <div v-if="!rows.length && running" class="trace-preparing" role="status">
+      <Loader2 :size="13" class="spin" /> 正在处理
     </div>
+    <ol class="trace-flow">
+      <li v-for="row in rows" :key="row.id" :class="[`trace-${row.kind}`, `status-${status(row)}`]">
+        <!-- Public action summaries stay readable after completion. -->
+        <p v-if="row.kind === 'commentary'" class="trace-commentary-text">{{ row.text }}<span v-if="running && row.event.metadata?.streaming" class="trace-caret" aria-hidden="true"></span></p>
+        <template v-else>
+          <button type="button" class="trace-operation-head" :aria-expanded="expanded.has(row.id)" @click="toggle(row.id)">
+            <Loader2 v-if="status(row) === 'running'" :size="13" class="spin" />
+            <CircleAlert v-else-if="['error', 'stopped'].includes(status(row))" :size="13" />
+            <component v-else :is="operationIcon(row)" :size="13" />
+            <span>{{ operationLabel(row) }}</span>
+            <span v-if="worker(row)" class="trace-worker">{{ worker(row) }}</span>
+            <span v-if="duration(row)" class="trace-duration">{{ duration(row) }}</span>
+            <ChevronRight :size="12" class="trace-chevron" :class="{ expanded: expanded.has(row.id) }" />
+          </button>
+          <div v-if="expanded.has(row.id)" class="trace-operation-details">
+            <div v-if="row.event.input != null"><b>输入</b><pre>{{ formatTraceValue(row.event.input) }}</pre></div>
+            <div v-if="row.event.output != null"><b>输出</b><pre>{{ formatTraceValue(row.event.output) }}</pre></div>
+            <div v-for="result in row.results" :key="result.id"><b>{{ result.status === 'error' ? '错误' : '结果' }}</b><pre>{{ formatTraceValue(result.output) }}</pre></div>
+            <p v-if="row.event.input == null && row.event.output == null && !row.results.length">{{ status(row) === 'running' ? '正在执行…' : '没有更多详情' }}</p>
+          </div>
+        </template>
+      </li>
+    </ol>
+    <p v-if="error" class="trace-error" role="alert"><CircleAlert :size="13" /> {{ error }}</p>
   </section>
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
-import {
-  Activity, CheckCircle2, ChevronDown, ChevronRight, Circle, CircleAlert, Loader2,
-} from 'lucide-vue-next'
+import { computed, reactive } from 'vue'
+import { Activity, BookOpen, ChevronRight, CircleAlert, FilePenLine, Loader2, Search, Terminal, Wrench } from 'lucide-vue-next'
+import { buildTraceRows, formatTraceValue, traceRowStatus } from '../utils/agent-trace.js'
 
 const props = defineProps({
   events: { type: Array, default: () => [] },
   running: { type: Boolean, default: false },
-  tokenUsage: { type: Object, default: () => ({}) },
+  error: { type: String, default: '' },
+  stopped: { type: Boolean, default: false },
 })
-
-const panelOpen = ref(false)
+const rows = computed(() => buildTraceRows(props.events))
 const expanded = reactive(new Set())
-
-watch(() => props.running, (running) => {
-  if (running) panelOpen.value = true
-  else {
-    panelOpen.value = false
-    expanded.clear()
-  }
-}, { immediate: true })
-watch(() => props.events.length, () => {
-  if (props.running) {
-    const root = props.events.find(event => event.type === 'agent_start')
-    if (root) expanded.add(root.id)
-  }
-})
-
-const rows = computed(() => {
-  const ordered = [...props.events].sort((a, b) =>
-    (a.sequence || 0) - (b.sequence || 0)
-    || String(a.timestamp || '').localeCompare(String(b.timestamp || ''))
-  )
-  const byParent = new Map()
-  for (const event of ordered) {
-    const parent = event.parent_id || ''
-    if (!byParent.has(parent)) byParent.set(parent, [])
-    byParent.get(parent).push(event)
-  }
-  const ids = new Set(ordered.map(event => event.id))
-  const result = []
-  const seen = new Set()
-  const visit = (event, depth) => {
-    if (seen.has(event.id)) return
-    seen.add(event.id)
-    const children = byParent.get(event.id) || []
-    result.push({ event, depth, hasChildren: children.length > 0 })
-    if (expanded.has(event.id)) children.forEach(child => visit(child, depth + 1))
-  }
-  ordered
-    .filter(event => !event.parent_id || !ids.has(event.parent_id))
-    .forEach(event => visit(event, 0))
-  return result
-})
-
-const visibleRows = rows
-const labels = {
-  agent_start: '开始处理',
-  planning: '任务进度',
-  reasoning_summary: '分析摘要',
-  tool_call: '调用工具',
-  tool_result: '工具结果',
-  file_operation: '文件操作',
-  code_execution: '执行代码',
-  error: '执行异常',
-  final_response: '回复完成',
-}
-const stageTitles = {
-  understand: '分析任务',
-  generate: '正在生成回复',
-  generate_done: '回复生成完成',
-  reason: '分析下一步操作',
-  tool: '执行所需工具',
-  tool_done: '工具执行完成',
-}
-
-function label(event) { return labels[event.type] || event.type }
-function displayTitle(event) {
-  if (event.type === 'agent_start') return ''
-  if (event.type === 'final_response') return ''
-  const stage = event.metadata?.stage || ''
-  const title = event.metadata?.title || ''
-  return stageTitles[stage] || stageTitles[title] || title
-}
-function effectiveStatus(event) {
-  if (!props.running && event.status === 'running') return 'completed'
-  return event.status
-}
-function hasDetails(event) {
-  if (event.type === 'agent_start') return false
-  return event.input != null || event.output != null
-}
+const status = row => traceRowStatus(row, props)
 function toggle(id) {
   if (expanded.has(id)) expanded.delete(id)
   else expanded.add(id)
 }
-function duration(event) {
-  const ms = event.metadata?.elapsed_ms
-  if (ms == null) return ''
-  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
+function toolName(row) {
+  return row.event.metadata?.tool || (row.event.metadata?.title || '').replace(/^调用\s+/, '')
 }
-function formatValue(value) {
-  if (typeof value === 'string') return value
-  try { return JSON.stringify(value, null, 2) } catch { return String(value) }
+function operationLabel(row) {
+  if (row.event.type === 'file_operation') return `操作文件 · ${toolName(row)}`
+  if (row.event.type === 'code_execution') return `执行命令 · ${toolName(row)}`
+  if (row.event.type === 'tool_call') {
+    const name = toolName(row)
+    const labels = { kb_search: '检索知识库', web_search: '搜索网页', read_skill: '读取技能', calculator: '计算', task: '执行子任务', spawn_tasks: '执行子任务' }
+    return labels[name] || `调用工具 · ${name || '工具'}`
+  }
+  if (row.event.type === 'tool_result') return row.event.metadata?.title || '工具返回结果'
+  const stage = row.event.metadata?.stage || ''
+  return ({ task_start: '执行子任务', task_end: '子任务完成', task_error: '子任务失败', task_skip: '跳过子任务' })[stage]
+    || row.event.metadata?.title || (row.event.type === 'error' ? '执行遇到问题' : '处理任务')
 }
-function formatTokens(value) { return Number(value || 0).toLocaleString() }
+function operationIcon(row) {
+  if (row.event.type === 'code_execution') return Terminal
+  if (row.event.type === 'file_operation') return FilePenLine
+  if (toolName(row) === 'kb_search') return BookOpen
+  if (toolName(row) === 'web_search') return Search
+  return row.event.type.startsWith('tool') ? Wrench : Activity
+}
+function worker(row) {
+  const span = row.event.metadata?.span
+  return span && span !== 'main' ? span : ''
+}
+function duration(row) {
+  const ms = [...row.results, row.event].find(event => event.metadata?.elapsed_ms != null)?.metadata.elapsed_ms
+  return ms == null ? '' : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
+}
 </script>
 
 <style scoped>
-.trace-panel { margin: 4px 0 12px; color: var(--text-secondary, #68707d); font-size: 12px; }
-.trace-heading, .trace-node-head { width: 100%; border: 0; background: transparent; color: inherit; display: flex; align-items: center; gap: 7px; cursor: pointer; text-align: left; }
-.trace-heading { padding: 5px 0; font-weight: 650; color: var(--text-primary, #2d333b); }
-.trace-heading .trace-summary { margin-left: 3px; font-weight: 400; color: var(--text-tertiary, #9098a5); }
-.trace-heading svg:last-child { margin-left: auto; transition: transform .15s; }
-.trace-heading svg.flipped { transform: rotate(-90deg); }
-.trace-tree { margin: 2px 0 5px; }
-.trace-node { --depth: 0; }
-.trace-node-head { min-height: 27px; padding-left: calc(var(--depth) * 18px); }
-.trace-node-head strong { color: var(--text-primary, #343a43); font-size: 11px; white-space: nowrap; }
-.trace-node-head > svg:first-of-type { transition: transform .15s; }
-.trace-node-head > svg.expanded { transform: rotate(90deg); }
-.trace-spacer { width: 12px; }
-.trace-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trace-duration { margin-left: auto; color: var(--text-tertiary, #959da8); font-variant-numeric: tabular-nums; }
-.status-error .trace-node-head { color: #d14343; }
-.status-error .trace-node-head strong { color: #b83232; }
-.trace-details { margin: 0 0 6px calc(var(--depth) * 18px + 46px); padding: 7px 9px; border-left: 2px solid var(--border-color, #e3e6ea); background: rgba(127,127,127,.045); border-radius: 4px; }
-.trace-details b { display: block; margin: 2px 0 3px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
-.trace-details pre { margin: 0 0 7px; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--text-primary, #343a43); }
-.trace-details code { font-size: 11px; }
+.trace-process { margin: 4px 0 22px; color: var(--gray-600, #666); font-size: 13px; line-height: 1.8; }
+.trace-flow { margin: 0; padding: 0; list-style: none; }
+.trace-flow > li + li { margin-top: 13px; }
+.trace-commentary-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.trace-operation-head { display: flex; align-items: center; gap: 7px; max-width: 100%; padding: 3px 0; border: 0; background: transparent; color: var(--gray-500, #7d7d7d); font: inherit; font-size: 12px; line-height: 1.6; cursor: pointer; text-align: left; }
+.trace-operation-head > svg { flex-shrink: 0; }
+.trace-operation-head > span { min-width: 0; overflow-wrap: anywhere; }
+.trace-operation-head:hover { color: var(--gray-900, #1a1a1a); }
+.trace-operation-head:focus-visible { outline: 2px solid var(--gray-500, #7d7d7d); outline-offset: 4px; border-radius: 3px; }
+.trace-worker, .trace-duration { font-size: 11px; color: var(--gray-500, #7d7d7d); }
+.trace-chevron { transition: transform .15s; }
+.trace-chevron.expanded { transform: rotate(90deg); }
+.trace-operation-details { margin: 7px 0 0 20px; padding: 8px 12px; border-left: 2px solid var(--gray-150, #e4e4e4); background: var(--gray-50, #f5f5f5); border-radius: 3px; }
+.trace-operation-details b { font-size: 11px; font-weight: 500; }
+.trace-operation-details pre { margin: 4px 0 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.trace-operation-details p { margin: 0; }
+.trace-error, .trace-preparing { display: flex; align-items: center; gap: 7px; }
+.trace-error, .status-error .trace-operation-head { color: var(--color-error-700, #a53333); }
+.trace-caret { display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -.1em; background: currentColor; animation: blink 1s step-end infinite; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .spin, .trace-caret { animation: none; } }
 </style>

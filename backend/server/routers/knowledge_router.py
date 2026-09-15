@@ -1479,20 +1479,16 @@ async def _run_reindex(
     from backend.services.knowledge_service import update_file_progress
 
     try:
-        # 阶段 1: 重新分块（法律文本自动按条切分）
-        from app.rag.chunker import _chunk_parsed_text, _looks_like_legal
+        # 阶段 1: 按显式策略或 CHUNK_STRATEGY 配置重新分块
+        from app.rag.chunker import _chunk_parsed_text
 
         effective_strategy = strategy or cfg.CHUNK_STRATEGY
-        use_legal = effective_strategy == "legal" or (
-            not strategy and _looks_like_legal(text_content)
-        )
-        chunk_strategy = "legal" if use_legal else effective_strategy
 
         chunks = _chunk_parsed_text(
             text_content,
             chunk_size=None,
             chunk_overlap=None,
-            strategy=chunk_strategy,
+            strategy=effective_strategy,
             base_meta={"source": filename},
         )
         if not chunks:

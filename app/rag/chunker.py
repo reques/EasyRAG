@@ -11,6 +11,7 @@ Chunking strategies (阶段 2A, selected by ``Settings.CHUNK_STRATEGY``):
     markdown     – Markdown structure-aware (heading hierarchy, code blocks kept whole)
     parent_child – small child chunks for retrieval + large parent chunk as context
     legal        – 法律条文结构感知切分（每个「第X条」一个 chunk，附章节标题）
+    structured   – parser blocks or text structure with section metadata
 """
 from __future__ import annotations
 
@@ -385,13 +386,7 @@ def split_parent_child(
 
 # ── 法律条文结构感知切分 ─────────────────────────────────────────────────────
 
-_LEGAL_ARTICLE_RE = re.compile(r"第[零一二三四五六七八九十百千〇0-9]+条")
 _LEGAL_BOUNDARY_RE = re.compile(r"第[零一二三四五六七八九十百千〇0-9]+(?:条|编|章|节)")
-
-
-def _looks_like_legal(text: str, min_articles: int = 20) -> bool:
-    """判断文本是否为法律条文（含大量「第X条」）。"""
-    return len(_LEGAL_ARTICLE_RE.findall(text)) >= min_articles
 
 
 def split_legal(text: str, chunk_size: int | None = None) -> List[str]:
@@ -532,8 +527,9 @@ def chunk_parsed_document(
 ) -> List[Chunk]:
     """Chunk a parser-neutral ``ParsedDocument``.
 
-    Structured parser output uses block-aware chunking by default. An explicit
-    legacy strategy still overrides that behavior for compatibility.
+    Use the explicit strategy or ``Settings.CHUNK_STRATEGY`` for every parser.
+    Only the structured strategy uses non-local parser blocks; local output
+    uses text structure because its single block contains the whole document.
     """
     from app.rag.parsers.models import ParsedDocument
 
@@ -543,19 +539,10 @@ def chunk_parsed_document(
     base_meta = _parsed_document_metadata(document)
     effective_strategy = strategy or cfg.CHUNK_STRATEGY
 
-    # 法律条文自动检测：含大量「第X条」时按条切分（优于结构化 block 切分，
-    # 后者会把相邻条文合并到同一 chunk，导致向量表示混杂、检索语义漂移）。
-    if effective_strategy == "legal" or (
-        strategy is None and _looks_like_legal(document.text)
+    if (
+        effective_strategy == "structured"
+        and document.provenance.parser_name != "local"
     ):
-        result = _chunk_parsed_text(
-            document.text,
-            chunk_size=chunk_size,
-            chunk_overlap=None,
-            strategy="legal",
-            base_meta=base_meta,
-        )
-    elif strategy is None and document.provenance.parser_name != "local":
         result = _chunk_structured_document(
             document,
             chunk_size=chunk_size,
@@ -572,10 +559,11 @@ def chunk_parsed_document(
         )
 
     logger.info(
-        "[chunker] parsed '%s' (%s) -> %d chunks",
+        "[chunker] parsed '%s' (%s) -> %d chunks (strategy=%s)",
         document.source_name,
         document.provenance.parser_name,
         len(result),
+        effective_strategy,
     )
     return result
 
@@ -799,8 +787,8 @@ def _chunk_structured_document(
     return _chunk_parsed_text(
         document.text,
         chunk_size=chunk_size,
-        chunk_overlap=None,
-        strategy="recursive",
+        chunk_overlap=chunk_overlap,
+        strategy="structured",
         base_meta=base_meta,
     )
 

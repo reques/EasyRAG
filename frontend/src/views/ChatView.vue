@@ -60,7 +60,8 @@
               v-if="msg.traceEvents && msg.traceEvents.length"
               :events="msg.traceEvents"
               :running="msg.stepsLoading"
-              :token-usage="msg.meta?.tokenUsage || {}"
+              :error="msg.error || ''"
+              :stopped="!!msg.stopped"
             />
             <WorkProgress
               v-else-if="(msg.workItems && msg.workItems.length) || (msg.progressSummaries && msg.progressSummaries.length)"
@@ -173,7 +174,8 @@
           v-model="input"
           @keydown.enter.exact.prevent="send"
           @paste="onPaste"
-          placeholder="和 EasyRAG 一起思考…"
+          placeholder="问点什么？"
+          aria-label="消息内容"
           rows="1"
           ref="inputEl"
           @input="autoResize"
@@ -187,55 +189,29 @@
         />
         <div class="chat-input-actions">
           <div class="composer-control-group">
-          <div ref="modelPickerEl" class="model-picker-shell">
             <button
               type="button"
-              class="model-picker"
-              :class="{ 'has-error': modelLoadError, open: modelMenuOpen }"
-              :title="modelPickerTitle"
-              :disabled="sending || modelsLoading"
-              @click="modelMenuOpen = !modelMenuOpen"
+              class="image-attach-btn"
+              aria-label="添加图片"
+              :class="{ active: attachedImage }"
+              :disabled="sending"
+              @click="fileInput?.click()"
+              :title="attachedImage ? '已添加图片，点击可替换' : '粘贴或上传图片（模型支持时直接理解，否则自动 OCR 识别文字）'"
             >
-              <span class="model-status-dot" :class="{ ready: selectedModel?.available }"></span>
-              <span class="model-picker-label">
-                {{ modelsLoading ? '加载模型中…' : (selectedModel?.name || '添加自定义模型') }}
-              </span>
-              <ChevronDown :size="13" />
+              <Plus :size="20" />
             </button>
-            <div v-if="modelMenuOpen" class="model-dropdown">
-              <div class="model-dropdown-title">对话模型</div>
-              <button
-                v-for="model in modelOptions"
-                :key="model.id"
-                type="button"
-                class="model-dropdown-item"
-                :class="{ selected: model.id === selectedModelId }"
-                :disabled="!model.available"
-                @click="selectModel(model)"
-              >
-                <span class="model-status-dot" :class="{ ready: model.available }"></span>
-                <span class="model-option-copy">
-                  <strong>{{ model.name }}</strong>
-                  <small>{{ model.provider_type === 'local' ? '本地' : model.provider }}</small>
-                </span>
-                <span v-if="!model.available" class="model-unavailable">未配置</span>
-                <CheckCircle2 v-else-if="model.id === selectedModelId" :size="14" />
-              </button>
-              <button type="button" class="model-dropdown-add" @click="openCustomModelModal">
-                <Plus :size="14" /> 添加自定义模型
-              </button>
-            </div>
-          </div>
           <div ref="skillPickerEl" class="skill-picker-shell">
             <button
               type="button"
               class="skill-picker"
               :class="{ open: skillMenuOpen, active: selectedSkills.length }"
               :disabled="sending || skillsLoading"
+              aria-label="选择技能"
+              :aria-expanded="skillMenuOpen"
               @click="toggleSkillMenu"
             >
               <WandSparkles :size="14" />
-              <span>{{ skillsLoading ? '加载 Skill…' : 'Skill' }}</span>
+              <span>{{ skillsLoading ? '加载技能…' : '技能' }}</span>
               <span v-if="selectedSkills.length" class="skill-picker-count">{{ selectedSkills.length }}</span>
               <ChevronDown :size="13" />
             </button>
@@ -279,23 +255,11 @@
               </button>
             </div>
           </div>
-          </div>
-          <!-- 右侧按钮组：图片 + 深度研究（紧贴发送按钮左侧）+ 停止/发送 -->
-          <div class="composer-send-group">
-            <button
-              type="button"
-              class="image-attach-btn"
-              :class="{ active: attachedImage }"
-              :disabled="sending"
-              @click="fileInput?.click()"
-              :title="attachedImage ? '已添加图片，点击可替换' : '粘贴或上传图片（模型支持时直接理解，否则自动 OCR 识别文字）'"
-            >
-              <ImageIcon :size="15" />
-            </button>
             <button
               type="button"
               class="deep-research-toggle"
               :class="{ active: deepResearch }"
+              :aria-pressed="deepResearch"
               :disabled="sending"
               @click="deepResearch = !deepResearch"
               :title="deepResearch ? '关闭深度研究（恢复自动模式）' : '开启深度研究：由主 Agent 调度研究子智能体，多步检索与推理，回答更深入'"
@@ -303,12 +267,56 @@
               <Sparkles :size="13" :class="{ 'is-on': deepResearch }" />
               <span>深度研究</span>
             </button>
+          </div>
+          <!-- 模型和发送动作固定在输入框右下角。 -->
+          <div class="composer-send-group">
+          <div ref="modelPickerEl" class="model-picker-shell">
+            <button
+              type="button"
+              class="model-picker"
+              :class="{ 'has-error': modelLoadError, open: modelMenuOpen }"
+              :title="modelPickerTitle"
+              aria-label="选择对话模型"
+              :aria-expanded="modelMenuOpen"
+              :disabled="sending || modelsLoading"
+              @click="modelMenuOpen = !modelMenuOpen"
+            >
+              <span class="model-status-dot" :class="{ ready: selectedModel?.available }"></span>
+              <span class="model-picker-label">
+                {{ modelsLoading ? '加载模型中…' : (selectedModel?.name || '添加自定义模型') }}
+              </span>
+              <ChevronDown :size="13" />
+            </button>
+            <div v-if="modelMenuOpen" class="model-dropdown">
+              <div class="model-dropdown-title">对话模型</div>
+              <button
+                v-for="model in modelOptions"
+                :key="model.id"
+                type="button"
+                class="model-dropdown-item"
+                :class="{ selected: model.id === selectedModelId }"
+                :disabled="!model.available"
+                @click="selectModel(model)"
+              >
+                <span class="model-status-dot" :class="{ ready: model.available }"></span>
+                <span class="model-option-copy">
+                  <strong>{{ model.name }}</strong>
+                  <small>{{ model.provider_type === 'local' ? '本地' : model.provider }}</small>
+                </span>
+                <span v-if="!model.available" class="model-unavailable">未配置</span>
+                <CheckCircle2 v-else-if="model.id === selectedModelId" :size="14" />
+              </button>
+              <button type="button" class="model-dropdown-add" @click="openCustomModelModal">
+                <Plus :size="14" /> 添加自定义模型
+              </button>
+            </div>
+          </div>
             <!-- 生成中显示"停止"按钮：终止当前对话轮（被终止的一轮不保存到记录） -->
             <button v-if="sending" type="button" class="btn-send btn-stop" @click="stopGeneration" title="停止生成">
               <Square :size="16" />
             </button>
             <button v-else @click="send" :disabled="!input.trim() || sending || !selectedModelId" class="btn-send" title="发送">
-              <ArrowUp :size="16" />
+              <ArrowUp :size="20" />
             </button>
           </div>
         </div>
@@ -631,7 +639,6 @@ import {
   HardDrive,
   FileSearch2,
   Globe2,
-  Image as ImageIcon,
   ListTree,
   ListChecks,
   Loader2,

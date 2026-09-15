@@ -375,7 +375,7 @@ final_score = fusion_score × answerability   (answerability 下限 max(0.1, ans
 - 解析失败且 `MINERU_FALLBACK_TO_LOCAL=True` 时降级本地解析
 - OCR：`app/rag/ocr.py` 扫描件识别（图片 OCR + PDF 按页渲染再 OCR）
 
-### 8.2 分块（chunker.py）——5 种策略
+### 8.2 分块（chunker.py）——6 种策略
 
 | 策略 | 机制 | 适用 |
 |------|------|------|
@@ -384,8 +384,9 @@ final_score = fusion_score × answerability   (answerability 下限 max(0.1, ans
 | markdown | 按标题层级聚合，代码块不拆 | Markdown 文档 |
 | parent_child | 小块（500）索引，命中回填父块（1500）上下文 | 长文档 |
 | **legal** | 按「第X条」正则切分 + 章节标题前缀 `[第十二章 借款合同]` | 法律文本 |
+| structured | 利用解析器结构块保留章节、页码和表格；本地解析或无可用块时按文本结构切分 | 报告、论文、结构化文档 |
 
-- **法律文本自动检测**：`_looks_like_legal`（≥20 个「第X条」判定，避免误判普通文本），`CHUNK_STRATEGY` 未指定时自动走 legal
+- **策略选择**：上传与重新索引统一使用显式 `strategy` 参数，否则读取 `CHUNK_STRATEGY`；解析器类型和法律文本内容不会自动覆盖策略。按法律条款切分需选择 `legal`。
 - 效果：民法典 272 chunks → 1313 chunks（平均 100 字/条），第 675 条独立成块且带章节上下文
 - **改分块策略后必须重新索引才生效**（Milvus 里是旧 chunk），已提供 `POST /files/{id}/reindex` 入口
 

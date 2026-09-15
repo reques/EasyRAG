@@ -51,7 +51,7 @@ services:
       NEO4J_URI: bolt://neo4j:7687
       EMBEDDING_TYPE: ${DOCKER_EMBEDDING_TYPE:-ollama}
       OLLAMA_BASE_URL: http://ollama:11434
-      MINERU_ENABLED: ${DOCKER_MINERU_ENABLED:-false}
+      MINERU_ENABLED: ${DOCKER_MINERU_ENABLED:-true}
       MINERU_API_URL: http://mineru-api:8000
       EMBEDDING_MODEL_PATH: /app/models/bge-m3
       MILVUS_DATA_DIR: /app/volumes/milvus-metadata
