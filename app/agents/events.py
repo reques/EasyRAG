@@ -27,7 +27,7 @@ _RESERVED_KEYS = frozenset({
 })
 _FILE_TOOLS = frozenset({
     "read_file", "write_file", "edit_file", "delete_file", "move_file",
-    "copy_file", "search_file", "list_files", "apply_patch",
+    "copy_file", "search_file", "list_files", "apply_patch", "create_file",
 })
 _CODE_TOOLS = frozenset({
     "execute_python", "execute_code", "execute_shell", "run_command", "shell",

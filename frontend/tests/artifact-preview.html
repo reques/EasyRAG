@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<div id="app"></div>
+<script type="module">
+import { createApp, h, ref } from 'vue'
+import ArtifactPreview from '../src/components/ArtifactPreview.vue'
+import api from '../src/api/index.js'
+const path = '/artifacts/22222222-2222-4222-8222-222222222222/11111111-1111-4111-8111-111111111111'
+let type = 'docx', fail = false
+api.get = async () => {
+  if (fail) throw new Error('offline')
+  return type === 'xlsx'
+    ? { kind: 'sheets', sheets: [{ name: '销售明细', rows: [['产品', '金额'], ['产品甲', 100], ['产品乙', 0]], truncated: true }, { name: '汇总', rows: [['总额', '是否完成'], [100, false]] }] }
+    : { kind: 'html', content: '<h1>项目分析报告</h1><p>这是<strong>重要结论</strong>，支持中文、表格和段落预览。</p><table><tr><th>项目</th><th>金额</th></tr><tr><td>甲</td><td>100</td></tr></table><img src="https://preview-unsafe.invalid/image" onerror="parent.document.body.dataset.pwned=1"><a href="javascript:alert(1)">不安全链接</a>', note: '内容预览，分页与 Word 中的排版可能不同' }
+}
+createApp({ setup() {
+  const selected = ref(null)
+  const open = (format, error = false) => { type = format; fail = error; selected.value = { id: '1', filename: '项目分析报告.' + format, download_url: path } }
+  return () => h('main', [
+    ...['docx', 'xlsx'].map(format => h('button', { 'data-format': format, onClick: () => open(format) }, format)),
+    h('button', { 'data-error': '', onClick: () => open('docx', true) }, 'error'),
+    selected.value && h(ArtifactPreview, { artifact: selected.value, onClose: () => { selected.value = null }, onDownload: () => { document.body.dataset.downloaded = 'yes' } }),
+  ])
+} }).mount('#app')
+</script>
+</html>

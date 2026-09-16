@@ -16,6 +16,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         file \
+        fonts-wqy-zenhei \
         libgl1 \
         libglib2.0-0 \
         libmagic1 \

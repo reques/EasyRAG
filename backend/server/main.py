@@ -241,6 +241,9 @@ def create_app() -> FastAPI:
     from backend.server.routers.memory_router import router as memory_router
     from backend.server.routers.mcp_router import router as mcp_router
 
+    from backend.server.routers.artifact_router import router as artifact_router
+    application.include_router(artifact_router, prefix="/api/v1")
+
     application.include_router(auth_router, prefix="/api/v1")
     application.include_router(chat_router, prefix="/api/v1")
     application.include_router(kb_router, prefix="/api/v1")
