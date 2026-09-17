@@ -1,6 +1,6 @@
 """MCP 外部工具服务配置加载。
 
-配置文件：项目根 `mcp_servers.json`（可被环境变量 MCP_SERVERS_FILE 覆盖）。
+配置文件：项目根下的 `config/mcp_servers.json`（可被环境变量 MCP_SERVERS_FILE 覆盖）。
 
 格式：
 {
@@ -30,7 +30,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_SERVERS_FILE = "mcp_servers.json"
+DEFAULT_SERVERS_FILE = str(Path(__file__).resolve().parents[3] / "config" / "mcp_servers.json")
 
 
 @dataclass

@@ -1,6 +1,6 @@
 # EasyRAG 项目架构与设计
 
-> 最后更新：2026-08-31（上传管线迁 Redis Stream 队列、structured 分块、图谱命名空间隔离） | 快速上手见 [README](../README.md)，演进记录见 [PROGRESS.md](../PROGRESS.md)
+> 最后更新：2026-08-31（上传管线迁 Redis Stream 队列、structured 分块、图谱命名空间隔离） | 快速上手见 [README](../README.md)，演进记录见 [PROGRESS.md](PROGRESS.md)
 
 ---
 
@@ -114,14 +114,16 @@ EasyRAG/
 │       ├── api/                  #   Axios + JWT 拦截器
 │       └── router/ / styles/
 ├── deploy/mineru/                # MinerU 独立解析服务旁路部署（compose + Dockerfile + smoke-test）
-├── verify/                       # 人工验证脚本（multi-agent / blackboard / ragas / auto-route …）
+├── config/                       # MCP 本地 / Docker 配置
+├── examples/legacy/              # 旧版 FastAPI 与 Gradio 入口
+├── eval/                         # 评估数据集与可选 Ragas 依赖
 ├── scripts/                      # 迁移/验证脚本（migrate_milvus_kb_id、verify_*.py）
 ├── tests/                        # pytest（检索隔离/进度/解析器/skill 配置/MinerU 客户端…）
 ├── docs/                         # 文档（本架构文档、plans/ 设计稿、specs/ 规格、ragas-evaluator）
 ├── docker-compose.yml            # etcd + milvus + minio-s3 + postgres + redis + minio 编排
-├── requirements.txt / requirements-ragas.txt
+├── requirements.txt             # 主服务依赖；可选依赖见 eval/requirements-ragas.txt
 ├── .env.template                 # 完整配置模板
-└── PROGRESS.md                   # 逐次迭代的演进记录
+└── docs/PROGRESS.md              # 逐次迭代的演进记录
 ```
 
 ---
@@ -331,7 +333,7 @@ Agent（``create_react_agent`` + 注册表工具，无委派工具）：
 - [x] 阶段 4：产品化（Vue 3 SPA / SSE 流式 / 任务状态栏 / 自定义模型与 Skill）
 - [ ] 阶段 5：多租户 / 管理后台 / 生产化（Alembic 迁移、网关鉴权）
 
-详细迭代记录见 [PROGRESS.md](../PROGRESS.md)
+详细迭代记录见 [PROGRESS.md](PROGRESS.md)
 
 ---
 
@@ -340,8 +342,8 @@ Agent（``create_react_agent`` + 注册表工具，无委派工具）：
 | 文档 | 内容 |
 |------|------|
 | [README](../README.md) | 项目简介、技术栈、快速开始 |
-| [PROGRESS.md](../PROGRESS.md) | 逐次迭代的演进记录与路线图 |
-| [docs/plans/](../plans/) | 设计稿（ReAct 内核、Skill 配置） |
-| [docs/specs/](../specs/) | 规格说明 |
-| [docs/ragas-evaluator.md](../ragas-evaluator.md) | 可选 Ragas 评估的独立环境部署 |
-| [deploy/mineru/README.md](../../deploy/mineru/README.md) | MinerU 独立解析服务部署与运维 |
+| [PROGRESS.md](PROGRESS.md) | 逐次迭代的演进记录与路线图 |
+| [docs/plans/](plans/) | 设计稿（ReAct 内核、Skill 配置） |
+| [docs/specs/](specs/) | 规格说明 |
+| [docs/ragas-evaluator.md](ragas-evaluator.md) | 可选 Ragas 评估的独立环境部署 |
+| [deploy/mineru/README.md](../deploy/mineru/README.md) | MinerU 独立解析服务部署与运维 |

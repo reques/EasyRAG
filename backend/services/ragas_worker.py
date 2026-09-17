@@ -33,7 +33,7 @@ async def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "status": "unavailable",
             "error": (
                 "Ragas is not installed in the evaluation environment. "
-                "Install requirements-ragas.txt. "
+                "Install eval/requirements-ragas.txt. "
                 f"Original error: {exc}"
             ),
         }

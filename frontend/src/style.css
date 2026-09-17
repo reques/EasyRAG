@@ -85,9 +85,7 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans SC', 'Roboto',
-    'HarmonyOS Sans SC', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
-    'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--font-sans);
   background: var(--gray-0);
   color: var(--gray-900);
   font-size: 15px;
@@ -97,7 +95,7 @@ body {
 }
 
 a { color: inherit; text-decoration: none; }
-input, textarea, button { font-family: inherit; font-size: inherit; }
+input, textarea, button, select { font-family: inherit; font-size: inherit; }
 button { cursor: pointer; }
 
 /* lucide 图标按钮对齐(Yuxi 模式) */
@@ -2742,10 +2740,9 @@ body.task-panel-resizing {
   --radius-md: 9px;
   --radius-lg: 14px;
   --col: 860px;
-  /* Francisco Serial is a commercial SoftMaker family. These names use a
-     licensed local/webfont installation when available; CJK falls back. */
-  --font-sans: "Francisco Serial", "FranciscoSerial", Georgia, "MiSans", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  --font-display: "Francisco Serial", "FranciscoSerial", "Francisco Serial Bold", Georgia, "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  /* 全局正文和标题优先使用微软雅黑（包含英文）；未安装时使用后备字体。 */
+  --font-sans: "Microsoft YaHei", "微软雅黑", "PingFang SC", "Noto Sans SC", sans-serif;
+  --font-display: var(--font-sans);
   --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
   --font-display-weight: 700;
   --main-color: var(--gray-1000);
@@ -3020,7 +3017,7 @@ select:focus-visible {
 .chat-starter-grid > button:hover > svg { color: var(--main-500); transform: rotate(45deg) translateY(-2px); }
 .chat-input { padding-bottom: 24px; }
 .chat-input--center { padding-top: 10px; }
-.chat-input-inner { container-type: inline-size; min-height: 146px; padding: 16px 16px 12px; gap: 16px; border-color: var(--gray-150); border-radius: 24px; box-shadow: 0 2px 10px rgba(0,0,0,.045); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; }
+.chat-input-inner { container-type: inline-size; min-height: 146px; padding: 16px 16px 12px; gap: 16px; border-color: var(--gray-150); border-radius: 24px; box-shadow: 0 2px 10px rgba(0,0,0,.045); font-family: var(--font-sans); }
 .chat-input-inner:focus-within { border-color: var(--gray-300); box-shadow: 0 2px 12px rgba(0,0,0,.06); }
 .chat-input textarea { min-height: 64px; max-height: 180px; padding: 2px 1px; font-size: 15px; line-height: 1.65; }
 .chat-input textarea:focus-visible { outline: none; }
@@ -3280,7 +3277,7 @@ select:focus-visible {
 .session-status-toggle:hover, .session-status-toggle.active { color: var(--gray-900); background: var(--gray-100); }
 .session-running-dot { width: 6px; height: 6px; border-radius: 50%; background: #3898af; }
 .session-status-card { padding: 14px; border: 1px solid var(--gray-150); border-radius: 12px; background: var(--gray-0); }
-.task-panel { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; }
+.task-panel { font-family: var(--font-sans); }
 .session-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--gray-500); font-size: 12px; }
 .session-card-heading strong { color: var(--gray-900); font-size: 20px; }
 .session-run-state { display: block; margin-top: 9px; color: var(--gray-900); font-size: 15px; }

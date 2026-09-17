@@ -13,6 +13,8 @@ __pycache__
 frontend
 tests
 docs
+examples
+eval
 deploy
 volumes
 models

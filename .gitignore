@@ -33,6 +33,8 @@ node_modules/
 frontend/dist/
 
 # Temp
+.pytest_cache/
+.ruff_cache/
 *.log
 image.png
 tbd.txt

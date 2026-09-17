@@ -8,7 +8,7 @@ Windows PowerShell 示例：
 
 ```powershell
 python -m venv .venv-ragas
-.\.venv-ragas\Scripts\python.exe -m pip install -r requirements-ragas.txt
+.\.venv-ragas\Scripts\python.exe -m pip install -r eval/requirements-ragas.txt
 ```
 
 ## 2. 启用无 LLM 指标

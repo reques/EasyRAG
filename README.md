@@ -97,11 +97,23 @@ docker compose --profile mineru up --build -d
 
 ## 文档导航
 
+根目录保留项目说明、依赖声明、测试配置和 Docker 启动文件。MCP 配置集中在
+`config/`，维护脚本在 `scripts/`，可选评估依赖在 `eval/`，旧版入口保存在
+`examples/legacy/`。本地后端开发使用：
+
+```bash
+python -m uvicorn backend.server.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Windows 重启脚本为 `scripts/restart-backend.bat`，使用当前 Python 环境；也可通过
+`PYTHON_EXECUTABLE` 指定解释器。MCP 默认读取 `config/mcp_servers.json`，
+可通过 `MCP_SERVERS_FILE` 指定其他配置文件。
+
 | 文档 | 内容 |
 |------|------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 项目结构与逻辑（模块详解、核心设计、API 概览） |
 | [docs/ARCHITECTURE_DETAILED.md](docs/ARCHITECTURE_DETAILED.md) | 整体架构深度详解（请求生命周期、LangGraph 工作流、增强检索流水线、图谱子系统） |
-| [PROGRESS.md](PROGRESS.md) | 逐次迭代的演进记录 |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 逐次迭代的演进记录 |
 | [docs/plans/](docs/plans/) · [docs/specs/](docs/specs/) | 设计稿与规格说明 |
 | [deploy/mineru/README.md](deploy/mineru/README.md) | MinerU 解析服务部署与运维 |
 | [docs/ragas-evaluator.md](docs/ragas-evaluator.md) | 可选 Ragas 评估部署 |
