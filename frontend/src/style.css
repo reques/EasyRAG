@@ -464,9 +464,8 @@ button { cursor: pointer; }
 .main-content > * { height: 100%; }
 
 /* ── Chat View ─────────────────────────────────────────────────────────── */
-.chat-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-/* 有侧边任务面板时：消息区 + 右侧任务面板双列布局 */
-.chat-view.has-task-panel { flex-direction: row; }
+/* 面板退出动画期间仍占据布局，保持横向排列，避免关闭时切换成上下布局挤压消息区。 */
+.chat-view { display: flex; flex-direction: row; height: 100%; overflow: hidden; }
 /* .chat-main 是消息区+输入区的包裹层，无论有无任务面板都必须建立 flex 上下文，
    否则内部 .chat-messages 的 flex:1 失效、内容撑开被外层 overflow:hidden 裁掉，无法滚动 */
 .chat-main {
