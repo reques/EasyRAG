@@ -123,13 +123,15 @@ EasyRAG/
 │   ├── src/api/index.js          # axios 封装 + fetch SSE 流式封装
 │   └── src/router/               # 路由 + 登录守卫
 ├── deploy/mineru/                # MinerU 解析服务（已合并进主 compose）
-├── verify/                       # 人工验证脚本
+├── config/                       # MCP 本地 / Docker 配置
+├── examples/legacy/              # 旧版 FastAPI 与 Gradio 入口
+├── eval/                         # 评估数据集与可选 Ragas 依赖
 ├── scripts/                      # 迁移/验证脚本
 ├── tests/                        # pytest（36+ 测试文件）
 ├── docs/                         # 本架构文档、plans/、specs/
 ├── docker-compose.yml            # 7 服务编排（etcd/minio-s3/milvus/postgres/redis/minio/mineru-api）
 ├── .env / .env.template          # 配置（.env 优先级高于代码默认值！）
-└── PROGRESS.md                   # 逐次迭代的演进记录（93KB 历史）
+└── docs/PROGRESS.md              # 逐次迭代的演进记录（93KB 历史）
 ```
 
 > 注意：`app/rag/` 下的 `graph_retriever.py`、`graph_vector_index.py`、`rrf.py`、`extractors/`、`app/agents/deep/` 来自一次 Neo4j 分支合并。**用户已明确不要 Neo4j GraphRAG**，这些文件保留但不应启用。
@@ -678,7 +680,7 @@ minio:9090(Console)/9091(API)    mineru-api:18000(→容器8000, GPU, 仅 127.0.
 | 文档 | 内容 |
 |------|------|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 宏观架构总览（技术栈/目录/API 概览/演进路线） |
-| [../PROGRESS.md](../PROGRESS.md) | 逐次迭代的演进记录（含历史踩坑） |
+| [PROGRESS.md](PROGRESS.md) | 逐次迭代的演进记录（含历史踩坑） |
 | [plans/](./plans/) · [specs/](./specs/) | 设计稿与规格说明 |
 | [../README.md](../README.md) | 快速开始 |
 | [ragas-evaluator.md](./ragas-evaluator.md) | Ragas 评估部署 |

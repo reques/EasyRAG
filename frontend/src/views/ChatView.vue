@@ -442,10 +442,19 @@
       <section class="workbench-section">
         <div class="workbench-section-header"><span><FileSearch2 :size="14" /> 产物</span><span>{{ panelArtifacts.length }}</span></div>
         <p v-if="!panelArtifacts.length" class="session-empty">尚无文件或任务产出</p>
-        <details v-for="artifact in panelArtifacts" :key="artifact.id" class="session-artifact">
-          <summary>{{ artifact.title }}</summary>
-          <pre>{{ artifact.content }}</pre>
-        </details>
+        <p v-if="artifactError" class="session-empty" role="alert">{{ artifactError }} <button @click="loadFiles(conversationId)">重试加载</button></p>
+        <template v-for="artifact in panelArtifacts" :key="artifact.id">
+          <div v-if="artifact.download_url" class="download-artifact">
+            <FileSearch2 :size="22" />
+            <div><strong>{{ artifact.filename }}</strong><small>{{ Math.max(1, Math.ceil(artifact.size / 1024)) }} KB · 文件</small></div>
+            <button @click="previewArtifact = artifact">预览</button>
+            <button class="artifact-download-button" :disabled="downloadingFiles.has(artifact.id)" @click="downloadFile(artifact)">{{ downloadingFiles.has(artifact.id) ? '下载中' : '下载' }}</button>
+          </div>
+          <details v-else class="session-artifact">
+            <summary>{{ artifact.title }}</summary>
+            <pre>{{ artifact.content }}</pre>
+          </details>
+        </template>
       </section>
 
       <section class="workbench-section">
@@ -686,6 +695,7 @@
         </div>
       </div>
     </Teleport>
+    <ArtifactPreview v-if="previewArtifact" :artifact="previewArtifact" @close="previewArtifact = null" @download="downloadFile" />
   </div>
 </template>
 
@@ -729,6 +739,8 @@ import {
 import api from '../api'
 import AgentTrace from '../components/AgentTrace.vue'
 import WorkProgress from '../components/WorkProgress.vue'
+import ArtifactPreview from '../components/ArtifactPreview.vue'
+import { artifactRoute } from '../utils/artifact-preview.js'
 
 // Render LLM markdown (bold, lists, links) to HTML. Links get target=_blank
 // and rel=noopener so external sources open safely in a new tab.
@@ -1427,7 +1439,43 @@ const taskProgress = computed(() => {
 const latestAssistant = computed(() => [...messages.value].reverse().find(m => m.role === 'assistant'))
 const currentUsage = computed(() => messageUsage(latestAssistant.value))
 const conversationUsage = computed(() => sessionUsage(messages.value))
-const panelArtifacts = computed(() => statusArtifacts(latestAssistant.value, taskPanel.value.tasks))
+const generatedFiles = ref([])
+const previewArtifact = ref(null)
+const artifactError = ref('')
+const downloadingFiles = ref(new Set())
+async function loadFiles(id) {
+  if (!id) return
+  try {
+    const data = await api.get(`/artifacts/${id}`)
+    if (conversationId.value === id) {
+      generatedFiles.value = data.artifacts || []
+      artifactError.value = ''
+    }
+  } catch {
+    if (conversationId.value === id) artifactError.value = '文件列表加载失败，请重试'
+  }
+}
+async function downloadFile(artifact) {
+  downloadingFiles.value.add(artifact.id)
+  artifactError.value = ''
+  try {
+    // Only accept our authenticated download route, never a model-provided URL.
+    const { data } = await api.getBlob(artifactRoute(artifact))
+    const url = URL.createObjectURL(data)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = artifact.filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch {
+    artifactError.value = '下载失败，请重试；文件可能已被删除'
+  } finally {
+    downloadingFiles.value.delete(artifact.id)
+  }
+}
+const panelArtifacts = computed(() => [...generatedFiles.value, ...statusArtifacts(latestAssistant.value, taskPanel.value.tasks)])
 watch(() => panelArtifacts.value.length, (count, previous) => { if (sending.value && count > previous) autoOpenStatusPanel(true) })
 const runElapsed = computed(() => {
   const seconds = sending.value ? Math.max(0, (statusNow.value - runStartedAt.value) / 1000)
@@ -1537,6 +1585,10 @@ function shouldShowTimeSeparator(i) {
 watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   if (newId === oldId) return
   conversationId.value = newId
+  generatedFiles.value = []
+  previewArtifact.value = null
+  artifactError.value = ''
+  void loadFiles(newId)
   messages.value = []
   ctxRingOpen.value = false
   input.value = ''
@@ -1731,6 +1783,11 @@ async function send(options = {}) {
       } else if (ev.type === 'agent_event') {
         const tm = messages.value[msgIndex]
         const event = ev.event
+        const file = event?.metadata?.artifact
+        if (file?.kind === 'file' && file.id && !generatedFiles.value.some(a => a.id === file.id)) {
+          generatedFiles.value.push(file)
+          autoOpenStatusPanel(true)
+        }
         if (event?.id) {
           const list = [...(tm.traceEvents || [])]
           const existing = list.findIndex(item => item.id === event.id)
@@ -1843,6 +1900,7 @@ async function send(options = {}) {
         messages.value[msgIndex] = { ...m }
         scrollBottom()
       } else if (ev.type === 'done') {
+        void loadFiles(conversationId.value)
         const m = messages.value[msgIndex]
         // 正文已逐 token 流过（kind=answer 流）→ 气泡内容即最终回答；
         // 未流过（无 on_artifact 的降级路径/旧缓存）→ 用 done 的整段兜底。
@@ -1988,3 +2046,12 @@ onUnmounted(() => {
   if (copyFeedbackTimer) window.clearTimeout(copyFeedbackTimer)
 })
 </script>
+
+<style scoped>
+.download-artifact { display:flex; align-items:center; gap:10px; padding:12px; margin-top:8px; border:1px solid var(--border-color, #e7e5e2); border-radius:12px; background:var(--bg-secondary, #f8f8f7); }
+.download-artifact > div { flex:1; min-width:0; }
+.download-artifact strong { display:block; font-size:13px; overflow-wrap:anywhere; }
+.download-artifact small { display:block; margin-top:5px; color:#888; }
+.download-artifact button { flex-shrink:0; border:1px solid #ddd; border-radius:8px; padding:5px 9px; background:transparent; color:inherit; cursor:pointer; }
+.download-artifact button:disabled { opacity:.5; cursor:wait; }
+</style>

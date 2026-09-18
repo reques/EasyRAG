@@ -16,6 +16,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         file \
+        fonts-wqy-zenhei \
         libgl1 \
         libglib2.0-0 \
         libmagic1 \
@@ -36,7 +37,7 @@ RUN python -m pip install --upgrade pip --index-url "${PIP_INDEX_URL}" \
 COPY app ./app
 COPY backend ./backend
 COPY skills ./skills
-COPY mcp_servers.docker.json ./mcp_servers.json
+COPY config/mcp_servers.docker.json ./config/mcp_servers.json
 
 RUN mkdir -p /app/volumes/checkpoints /app/volumes/user-skills \
     /app/volumes/milvus-metadata /app/volumes/chroma /app/volumes/workspace

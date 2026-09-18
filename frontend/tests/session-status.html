@@ -13,7 +13,16 @@ import api from '../src/api/index.js'
 import { useChatStore } from '../src/stores/chat.js'
 import '../src/style.css'
 // Isolated UI fixture; all requests stay in memory.
+const files = []
+const file = { id: '11111111-1111-4111-8111-111111111111', kind: 'file', title: '分析报告.md', filename: '分析报告.md', size: 100, download_url: '/artifacts/22222222-2222-4222-8222-222222222222/11111111-1111-4111-8111-111111111111' }
+api.getBlob = async path => {
+  if (path !== file.download_url) throw new Error('Unexpected download')
+  document.body.dataset.downloaded = file.filename
+  return { data: new Blob(['# 报告\n内容'], { type: 'text/markdown' }) }
+}
 api.get = async path => {
+  if (path.endsWith('/preview') && path.split('/').length === 5) return { kind: 'html', content: '<h1>分析报告</h1><p>这是可预览的报告。</p>' }
+  if (path.startsWith('/artifacts/')) return { artifacts: [...files] }
   if (path.endsWith('/models')) return { models: [{ id: 'demo', name: 'Demo Model', provider: 'Demo', available: true }], context_window: 200000 }
   if (path.endsWith('/skills')) return { skills: [], max_selected: 10 }
   if (path.endsWith('/history')) return { messages: [{ role: 'user', content: '整理这份材料。' }, { role: 'assistant', content: '材料已整理。', meta: { model_name: 'Demo Model', token_usage: { input_tokens: 30000, output_tokens: 300, total_tokens: 30300 }, context_usage: { input_tokens: 12000, output_tokens: 100, total_tokens: 12100 } } }] }
@@ -29,6 +38,11 @@ api.streamChat = async (url, body, cb, { signal }) => {
 }
 const emit = event => callback?.(event)
 const actions = {
+  file: () => {
+    if (!files.length) files.push(file)
+    emit({ type: 'agent_event', event: { id: 'file-created', type: 'file_operation', status: 'completed', metadata: { artifact: file } } })
+  },
+  history: () => { useChatStore(pinia).selectConversation(null); setTimeout(() => useChatStore(pinia).selectConversation('preview'), 0) },
   task1: () => emit({ type: 'sub_tasks', tasks: [{ task_id: 'a', goal: '检索资料', worker_hint: 'rag' }] }),
   result: () => emit({ type: 'worker_output', task_id: 'a', status: 'done', worker: 'rag', content: '检索报告：已找到相关材料。' }),
   task2: () => emit({ type: 'sub_tasks', tasks: [{ task_id: 'a', goal: '检索资料' }, { task_id: 'b', goal: '交叉验证', worker_hint: 'rag' }] }),

@@ -40,6 +40,7 @@ def use_request_context(
     - ``use_authorised_kb_ids`` —— kb_search 授权边界（空元组 = 显式无授权）；
     - ``use_request_trace`` —— 请求级 trace + 事件日志（随响应返回）；
     - ``use_task_observers`` —— SSE 步骤/工件回调透传（on_step/on_artifact）。
+    - ``use_artifact_owner`` —— 文件产物归属，使用服务端认证的用户和会话。
 
     ``skill_definitions``：路由层已解析好的有效集合（``SkillDefinition``）直接
     注入；为 None 时按 ``ctx.skill_ids`` 回查内置目录。
@@ -52,6 +53,7 @@ def use_request_context(
 
     model_id 为空时模型层按"未选择"进入（回退项目配置模型，与旧行为一致）。
     """
+    from app.services.artifact_context import use_artifact_owner
     from app.agents.deep.observe import use_task_observers
     from app.agents.events import use_request_trace
     from app.llm.client import use_chat_model
@@ -73,6 +75,7 @@ def use_request_context(
         use_authorised_kb_ids(list(ctx.knowledge_base_ids) or None),
         use_request_trace(session_id=ctx.thread_id),
         use_task_observers(ctx.on_step, ctx.on_artifact),
+        use_artifact_owner(ctx.user_id, ctx.thread_id),
     ):
         yield ctx
 
