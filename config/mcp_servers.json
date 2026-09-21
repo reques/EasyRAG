@@ -5,6 +5,7 @@
       "transport": "stdio",
       "enabled": true,
       "command": ["python", "-m", "app.tools.mcp.demo_server"],
+      "capabilities": ["none"],
       "allowed_tools": ["*"]
     },
     {
@@ -12,6 +13,7 @@
       "transport": "stdio",
       "enabled": true,
       "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "./volumes"],
+      "capabilities": ["fs.read", "proc.exec"],
       "allowed_tools": [
         "read_file",
         "read_directory",

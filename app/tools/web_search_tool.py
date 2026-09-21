@@ -181,5 +181,6 @@ TOOL = ToolDefinition(
     metadata={
         "scenarios": ["联网搜索", "网络搜索", "上网查", "新闻", "天气", "实时", "最新", "近期", "行情", "价格"],
         "tags": ["search", "web", "internet"],
+        "capabilities": ["net.out"],
     },
 )

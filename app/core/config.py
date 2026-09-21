@@ -208,6 +208,12 @@ class Settings(BaseSettings):
     #   按 auto 处理并告警）
     AGENT_MODE: Literal["auto", "single", "dynamic", "multi", "deepagents"] = "auto"
 
+    # Tool permission sandbox. Keep audit mode enabled first so deployments can
+    # review real traffic before switching config/sandbox_policy.json to enforce.
+    SANDBOX_ENABLED: bool = True
+    SANDBOX_POLICY_FILE: str = "./config/sandbox_policy.json"
+    SANDBOX_AUDIT_FILE: str = "./volumes/logs/tool_audit.jsonl"
+
     # ── DeepAgents (AGENT_MODE=deepagents) ────────────────────────────────
     # 外部 SubAgent 配置文件（JSON/YAML，见 subagents.load_subagents 的格式；
     # 为空使用内置默认 research-agent / coding-agent）

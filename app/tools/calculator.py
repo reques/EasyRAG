@@ -130,5 +130,6 @@ TOOL = ToolDefinition(
         # 公共工具（2026-09-04 Skill 重构）：纯计算、无副作用、不出网，
         # 不受 Skill 门控 —— 否则启用 Skill 的请求首轮连算术都做不了。
         "public": True,
+        "capabilities": ["none"],
     },
 )

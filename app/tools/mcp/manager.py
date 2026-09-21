@@ -36,7 +36,11 @@ def _mcp_tool_name(server_name: str, tool_name: str) -> str:
     return f"mcp_{server_name}_{tool_name}"
 
 
-def _mcp_tool_metadata(tool_name: str, description: str) -> Dict[str, Any]:
+def _mcp_tool_metadata(
+    tool_name: str,
+    description: str,
+    capabilities: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """注册时从工具名/描述提取发现元数据（阶段 2，v1 轻量规则）。
 
     tags 取自工具名的单词段（供 ``@tag`` 绑定与词匹配）；scenarios 取
@@ -51,7 +55,11 @@ def _mcp_tool_metadata(tool_name: str, description: str) -> Dict[str, Any]:
         for seg in _re.split(r"[。.;；\n]", description or "")
         if seg.strip()
     ][:2]
-    return {"scenarios": scenarios, "tags": tags}
+    return {
+        "scenarios": scenarios,
+        "tags": tags,
+        "capabilities": list(capabilities or ["none"]),
+    }
 
 
 class MCPServerHandle:
@@ -245,7 +253,9 @@ class MCPServerHandle:
                     # MCP 桥接工具自带 120s 超时（call_tool_sync），外层不再包裹
                     timeout_s=0,
                     metadata=_mcp_tool_metadata(
-                        t.name, getattr(t, "description", "") or ""
+                        t.name,
+                        getattr(t, "description", "") or "",
+                        cfg.capabilities,
                     ),
                 )
             )

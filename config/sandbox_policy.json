@@ -1,0 +1,16 @@
+{
+  "defaults": {
+    "mode": "audit",
+    "deny_capabilities": ["proc.exec"]
+  },
+  "rules": [
+    {
+      "tool": "web_search",
+      "allow": true
+    },
+    {
+      "tool": "create_file",
+      "allow": true
+    }
+  ]
+}

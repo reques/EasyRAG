@@ -48,6 +48,8 @@ class MCPServerConfig:
     url: str = ""
     # 权限白名单：工具名列表；["*"] 表示该 server 的全部工具
     allowed_tools: List[str] = field(default_factory=lambda: ["*"])
+    # Sandboxing capability labels inherited by every bridged MCP tool.
+    capabilities: List[str] = field(default_factory=list)
 
     @property
     def is_stdio(self) -> bool:
@@ -89,6 +91,7 @@ def load_mcp_servers(path: Optional[str] = None) -> List[MCPServerConfig]:
                 env={str(k): str(v) for k, v in item.get("env", {}).items()},
                 url=item.get("url", ""),
                 allowed_tools=[str(t) for t in item.get("allowed_tools", ["*"])],
+                capabilities=[str(c) for c in item.get("capabilities", [])],
             )
         )
     logger.info("MCP servers loaded from %s: %s", file_path, [s.name for s in servers])

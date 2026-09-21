@@ -23,7 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FutureTimeoutError
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.exceptions import (
     ToolExecutionError,
@@ -33,6 +33,9 @@ from app.core.exceptions import (
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from app.tools.sandbox.policy import PolicyEngine
 
 
 def _args_digest(kwargs: Dict[str, Any]) -> str:
@@ -163,9 +166,16 @@ class ToolRegistry:
     raising ``RuntimeError: dictionary changed size during iteration``.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        policy_engine: Optional["PolicyEngine"] = None,
+        audit_file: Optional[str] = None,
+    ):
         self._tools: Dict[str, ToolDefinition] = {}
         self._lock = threading.RLock()
+        self._policy_engine = policy_engine
+        self._audit_file = audit_file
 
     def register(self, tool: ToolDefinition) -> None:
         with self._lock:
@@ -261,8 +271,31 @@ class ToolRegistry:
             )
         if not tool.is_available():
             raise ToolExecutionError(
-                f"Tool '{name}' is not available (check_fn failed — missing config or dependency)"
+                f"Tool '{name}' is not available (check_fn failed – missing config or dependency)"
             )
+        from app.core.config import get_settings
+        from app.tools.sandbox.audit import record_decision
+        from app.tools.sandbox.context import get_sandbox_context
+        from app.tools.sandbox.policy import get_policy_engine
+
+        sandbox_context = get_sandbox_context()
+        policy_engine = self._policy_engine or get_policy_engine()
+        decision = policy_engine.check(
+            tool_name=name,
+            metadata=tool.metadata,
+            context=sandbox_context,
+        )
+        audit_file = self._audit_file or get_settings().SANDBOX_AUDIT_FILE
+        if not decision.allowed:
+            record_decision(
+                audit_file,
+                context=sandbox_context,
+                tool_name=name,
+                decision=decision,
+                arguments=kwargs,
+                outcome="denied",
+            )
+            raise ToolExecutionError(f"Tool '{name}' denied by sandbox policy: {decision.reason}")
         # 阶段 5：进度回调提取（不进入参数摘要/日志/工具入参转发判断）
         progress_cb = kwargs.pop("progress_callback", None)
         if callable(progress_cb):
@@ -291,6 +324,15 @@ class ToolRegistry:
                         elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
                     )
                     logger.info("Tool '%s' succeeded.", name)
+                    record_decision(
+                        audit_file,
+                        context=sandbox_context,
+                        tool_name=name,
+                        decision=decision,
+                        arguments=kwargs,
+                        elapsed_ms=(time.perf_counter() - started) * 1000,
+                        outcome="success",
+                    )
                     return result
                 except (ToolNotFoundError, ToolTimeoutError) as exc:
                     # 未注册 / 超时不可重试：重试只会翻倍等待
@@ -312,6 +354,16 @@ class ToolRegistry:
             "tool", "tool_error", f"{name} 失败", str(last_exc)[:200],
             tool=name,
             elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
+        )
+        record_decision(
+            audit_file,
+            context=sandbox_context,
+            tool_name=name,
+            decision=decision,
+            arguments=kwargs,
+            elapsed_ms=(time.perf_counter() - started) * 1000,
+            outcome="error",
+            error=str(last_exc),
         )
         if isinstance(last_exc, (ToolExecutionError, ToolNotFoundError)):
             raise last_exc

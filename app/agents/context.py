@@ -121,6 +121,7 @@ class ChatContext(BaseContext):
         history: Optional[Sequence[Dict[str, Any]]] = None,
         input_message_id: Optional[str] = None,
         resume_checkpoint: bool = False,
+        deep_research: bool = False,
         on_step: Optional[StepCallback] = None,
         on_artifact: Optional[ArtifactCallback] = None,
     ) -> "ChatContext":
@@ -142,6 +143,7 @@ class ChatContext(BaseContext):
             history=tuple(history or ()),
             input_message_id=(str(input_message_id) if input_message_id else None),
             resume_checkpoint=resume_checkpoint,
+            deep_research=deep_research,
             on_step=on_step,
             on_artifact=on_artifact,
             query=query,
