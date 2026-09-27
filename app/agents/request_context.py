@@ -59,6 +59,7 @@ def use_request_context(
     from app.llm.client import use_chat_model
     from app.services.knowledge_context import use_authorised_kb_ids
     from app.skills.runtime import SkillRuntimeContext, use_skill_context
+    from app.tools.sandbox.context import SandboxContext, use_sandbox_context
 
     definitions = (
         skill_definitions
@@ -76,6 +77,12 @@ def use_request_context(
         use_request_trace(session_id=ctx.thread_id),
         use_task_observers(ctx.on_step, ctx.on_artifact),
         use_artifact_owner(ctx.user_id, ctx.thread_id),
+        use_sandbox_context(SandboxContext(
+            user_id=ctx.user_id,
+            session_id=ctx.thread_id,
+            agent_mode="deep" if ctx.deep_research else "chat",
+            skill_ids=tuple(ctx.skill_ids),
+        )),
     ):
         yield ctx
 

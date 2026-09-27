@@ -78,5 +78,6 @@ TOOL = ToolDefinition(
         # ContextVar 独立把控（与 Skill 门控是两套正交机制），因此放行
         # 不会扩大用户的知识库访问范围。
         "public": True,
+        "capabilities": ["kb.read"],
     },
 )

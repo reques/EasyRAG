@@ -773,6 +773,7 @@ async def send_message(
             history=db_history,          # ← 关键：传入 DB 历史
             input_message_id=str(user_message_id),
             resume_checkpoint=req.resume_checkpoint,
+            deep_research=req.deep_research,
         )
         with use_request_context(chat_ctx, skill_definitions=selected_skills, model_profile=selected_model):
             result = agent.run(query=effective_query, context=chat_ctx)
@@ -1039,6 +1040,7 @@ async def send_message_stream(
         history=db_history,          # ← 关键：传入 DB 历史
         input_message_id=str(user_message_id),
         resume_checkpoint=req.resume_checkpoint,
+        deep_research=use_deep,
     )
 
     async def _event_gen_inner():

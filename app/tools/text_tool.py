@@ -101,5 +101,6 @@ TOOL = ToolDefinition(
     metadata={
         "scenarios": ["字数", "字符数", "单词数", "句子数", "文本处理", "文本统计", "大写", "小写", "反转", "提取数字"],
         "tags": ["text", "processing"],
+        "capabilities": ["none"],
     },
 )

@@ -23,5 +23,6 @@ TOOL = ToolDefinition(
     arg_schema={'filename': ('string', '带扩展名的文件名，不含路径', True),
                 'content': ('string', 'docx/pdf: Markdown 正文；xlsx: 工作表 JSON 字符串或 CSV；其他格式: 完整正文。不要包裹代码围栏', True)},
     metadata={'public': True, 'tags': ['file', 'export', 'report'],
+              'capabilities': ['artifact.write'],
               'scenarios': ['文件', '下载', '报告', '导出', '文档', '表格', 'word', 'excel', 'pdf', 'docx', 'xlsx', 'csv', 'html', 'markdown']},
 )

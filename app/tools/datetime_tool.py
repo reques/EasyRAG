@@ -96,5 +96,6 @@ TOOL = ToolDefinition(
         "tags": ["time", "datetime"],
         # 公共工具（2026-09-04 Skill 重构）：只读系统时钟、无副作用、不出网。
         "public": True,
+        "capabilities": ["none"],
     },
 )

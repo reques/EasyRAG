@@ -178,7 +178,7 @@ class AgentService:
         logger.info("[agent_service] session=%s query=%r", session_id, query[:80])
 
         # ── DeepAgents 模式（AGENT_MODE=deepagents）：主 Agent + SubAgent ──
-        if cfg.AGENT_MODE == "deepagents":
+        if cfg.AGENT_MODE == "deepagents" or context.deep_research:
             return self._run_deep(query, context=context)
 
         # ── 多智能体分支：multi / auto 命中均路由到 DeepAgents（统一实现）──
