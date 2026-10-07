@@ -11,13 +11,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Replace default apt sources with Tsinghua mirror for better network stability in China
-RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list 2>/dev/null || true
-
-# curl is used by the container healthcheck. Node/npm keeps the existing
-# stdio filesystem MCP server available inside the backend container.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Use Aliyun Debian mirror（清华 TUNA 会对部分网络/出口 IP 返回 403 Forbidden）
+RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' \
+        /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
         curl \
         file \
         fonts-wqy-zenhei \
@@ -33,17 +31,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip --index-url "${PIP_INDEX_URL}" \
-    && python -m pip install \
     && python -m pip install --default-timeout=1000 --retries=20 \
         torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
         --index-url "${PYTORCH_INDEX_URL}" \
     && python -m pip install -r requirements.txt --index-url "${PIP_INDEX_URL}"
-    && python -m pip install --default-timeout=1000 --retries=20 -r requirements.txt --index-url "${PIP_INDEX_URL}"
+
+# uv/uvx：MCP 广场上相当一部分服务以 `uvx <package>` 启动（单独一层，
+# 避免改动上一层的重型依赖缓存）。镜像内提供 uvx 后即可直接安装这类服务。
+RUN python -m pip install --no-cache-dir --default-timeout=1000 --retries=20 uv \
+    --index-url "${PIP_INDEX_URL}"
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+RUN npm config set registry "${NPM_REGISTRY}" \
+    && npm install -g @modelcontextprotocol/server-filesystem @modelcontextprotocol/server-postgres
 
 COPY app ./app
 COPY backend ./backend
 COPY skills ./skills
-COPY config/mcp_servers.docker.json ./config/mcp_servers.json
+COPY config ./config
 
 RUN mkdir -p /app/volumes/checkpoints /app/volumes/user-skills \
     /app/volumes/milvus-metadata /app/volumes/chroma /app/volumes/workspace

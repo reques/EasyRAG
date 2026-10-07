@@ -34,7 +34,7 @@ EasyRAG 是一个面向真实业务场景的企业知识库智能问答平台：
 │ app/graph      │ │ (chunker/    │ │ registry     │ │ Postgres(pgvector│
 │ (LangGraph)    │ │  embedding/  │ │ + MCP 桥接   │ │  +图谱+业务)     │
 │ DeepAgents     │ │  retriever/  │ │ skills/*.md  │ │ Milvus(向量)     │
-│ 委派协同        │ │  bm25/rerank/│ │              │ │ Redis · MinIO    │
+│ 委派协同        │ │  bm25/rerank/│ │              │ │ Redis · RustFS   │
 │                │ │  ocr/parsers)│ │              │ │ Ollama(embedding)│
 └────────────────┘ └──────────────┘ └──────────────┘ │ MinerU(旁路解析) │
                                                      └──────────────────┘
@@ -49,8 +49,8 @@ EasyRAG 是一个面向真实业务场景的企业知识库智能问答平台：
 | 前端 | Vue 3.5 · Vite 6 · Pinia · Axios · lucide 图标 |
 | 后端 | FastAPI（async）· SQLAlchemy 2.0 async · LangGraph 工作流 |
 | Agent | LangGraph StateGraph（意图分流 / ReAct 循环 / 校验重试）· DeepAgents 统一多智能体（主 Agent + SubAgent + DAG 委派 + 结构化黑板） |
-| 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 索引）· Redis · MinIO（文件对象存储）· 本地文件系统（Skill 定义 `SKILL.md`） |
-| 向量 | Milvus 2.5（etcd + MinIO 依赖）· BGE-M3 embedding（Ollama 本地 / API） |
+| 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 索引）· Redis · RustFS（S3 兼容对象存储）· 本地文件系统（Skill 定义 `SKILL.md`） |
+| 向量 | Milvus 2.5（etcd + RustFS 依赖）· BGE-M3 embedding（Ollama 本地 / API） |
 | LLM | DeepSeek / MiniMax / Qwen(DashScope) / GLM / 任意 OpenAI 兼容 API（可配置 base_url，支持自定义模型） |
 | 文档解析 | 本地解析器 + 旁路部署 MinerU Pipeline API（Docker，见 `deploy/mineru`） |
 | 评估 | 本地确定性指标（HitRate / MRR / avg_score）+ 可选 Ragas（独立 venv worker） |
@@ -106,7 +106,7 @@ EasyRAG/
 │   │                             #   ingestion_service（索引执行）/ ingestion_queue（Redis Stream 发布/ACK）
 │   ├── worker/                   #   ingestion_worker（队列消费者，默认内嵌 uvicorn）
 │   ├── repositories/             #   数据访问层（skill_config 等）
-│   └── storage/                  #   postgres（models_*.py）/ redis（manager 单例 + RedisLock 工厂）/ minio 客户端
+│   └── storage/                  #   postgres（models_*.py）/ redis（manager 单例 + RedisLock 工厂）/ minio 客户端（S3 兼容，对接 RustFS）
 ├── frontend/                     # Vue 3 SPA
 │   └── src/
 │       ├── views/                #   ChatView / KnowledgeView / Login / Register / Layout
@@ -120,7 +120,7 @@ EasyRAG/
 ├── scripts/                      # 迁移/验证脚本（migrate_milvus_kb_id、verify_*.py）
 ├── tests/                        # pytest（检索隔离/进度/解析器/skill 配置/MinerU 客户端…）
 ├── docs/                         # 文档（本架构文档、plans/ 设计稿、specs/ 规格、ragas-evaluator）
-├── docker-compose.yml            # etcd + milvus + minio-s3 + postgres + redis + minio 编排
+├── docker-compose.yml            # etcd + milvus + rustfs-milvus + postgres + redis + rustfs 编排
 ├── requirements.txt             # 主服务依赖；可选依赖见 eval/requirements-ragas.txt
 ├── .env.template                 # 完整配置模板
 └── docs/PROGRESS.md              # 逐次迭代的演进记录

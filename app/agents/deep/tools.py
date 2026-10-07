@@ -79,21 +79,28 @@ def _to_structured(tool: ToolDefinition) -> Any:
 
 def registry_to_langchain_tools(
     tool_names: Optional[List[str]] = None,
+    mcp_server_ids: Optional[List[str]] = None,
 ) -> List[Any]:
     """把注册表（可用）工具转换为 langchain 工具列表（不含 Skill 门控）。
 
     Args:
         tool_names: 白名单过滤（None = 全部可用工具）。SubAgent 用它做
             工具子集配置；主 Agent 传 None 拿全量。
+        mcp_server_ids: MCP 服务标识白名单过滤（None = 全部 MCP 工具；
+            若传入列表，则只保留来自指定 MCP Server 的工具，内置工具保留）。
     """
     registry = get_tool_registry()
     tools = []
-    # 不含 Skill 门控（渐进式披露）：构建期视图必须是稳定的全量集，否则首个
-    # 请求（激活集为空）会把未激活工具从进程级缓存的 Agent 里永久剔除，
-    # read_skill 之后也无从解锁。调用时门控在 registry.invoke + SkillsMiddleware。
     for t in registry.list_all():
         if tool_names is not None and t.name not in tool_names:
             continue
+
+        # MCP Tool Routing 路由过滤
+        if mcp_server_ids is not None:
+            tool_server_id = (t.metadata or {}).get("server_id")
+            if tool_server_id and tool_server_id not in mcp_server_ids:
+                continue
+
         try:
             tools.append(_to_structured(t))
         except Exception as exc:

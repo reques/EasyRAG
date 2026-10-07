@@ -11,6 +11,45 @@
     {
       "tool": "create_file",
       "allow": true
+    },
+    {
+      "tool": "mcp_filesystem_read_file",
+      "allow": true,
+      "_comment": "文件只读操作"
+    },
+    {
+      "tool": "mcp_filesystem_list_directory",
+      "allow": true
+    },
+    {
+      "tool": "mcp_filesystem_directory_tree",
+      "allow": true
+    },
+    {
+      "tool": "mcp_filesystem_get_file_info",
+      "allow": true
+    },
+    {
+      "tool": "mcp_postgres-query_query",
+      "allow": true,
+      "_comment": "数据库只读查询"
+    },
+    {
+      "tool": "mcp_system-health_check_postgres",
+      "allow": true,
+      "_comment": "服务健康检查"
+    },
+    {
+      "tool": "mcp_system-health_check_redis",
+      "allow": true
+    },
+    {
+      "tool": "mcp_system-health_check_milvus",
+      "allow": true
+    },
+    {
+      "tool": "mcp_system-health_check_neo4j",
+      "allow": true
     }
   ]
 }

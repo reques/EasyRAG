@@ -17,8 +17,8 @@
 | 前端 | Vue 3.5 · Vite 6 · Pinia · Axios · lucide 图标 |
 | 后端 | FastAPI（async）· SQLAlchemy 2.0 async · LangGraph 工作流 |
 | Agent | LangGraph（意图分流 / ReAct 循环 / 校验重试）· DeepAgents 统一多智能体（主 Agent + SubAgent + DAG 委派 + 结构化黑板） |
-| 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 配置）· Redis · MinIO |
-| 向量 | Milvus 2.5（etcd + MinIO 依赖）· BGE-M3 embedding（Ollama 本地 / API） |
+| 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 配置）· Redis · RustFS（S3 兼容对象存储） |
+| 向量 | Milvus 2.5（etcd + RustFS 依赖）· BGE-M3 embedding（Ollama 本地 / API） |
 | LLM | DeepSeek / MiniMax / Qwen(DashScope) / GLM / 任意 OpenAI 兼容 API |
 | 文档解析 | 本地解析器 + 旁路部署 MinerU Pipeline API（Docker） |
 | 评估 | 本地确定性指标（HitRate / MRR / avg_score）+ 可选 Ragas（独立 venv） |
@@ -54,8 +54,8 @@ docker compose up --build -d
 
 - Vue 前端（Nginx）
 - FastAPI 后端和内嵌文件索引 Worker
-- PostgreSQL、Redis、应用 MinIO
-- Milvus、etcd 和 Milvus 专用 MinIO
+- PostgreSQL、Redis、应用 RustFS（S3 兼容对象存储，原 MinIO）
+- Milvus、etcd 和 Milvus 专用 RustFS
 - Neo4j
 - Ollama，并在首次启动时自动拉取 `bge-m3` 嵌入模型
 

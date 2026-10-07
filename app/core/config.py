@@ -165,6 +165,15 @@ class Settings(BaseSettings):
     MINERU_POLL_INTERVAL: float = 2.0
     MINERU_FALLBACK_TO_LOCAL: bool = True
 
+    # ── MCP 广场（ModelScope）───────────────────────────────────────────────
+    # 目录检索不需要凭据；MODELSCOPE_API_KEY 仅在需要"托管部署"时使用。
+    MODELSCOPE_MCP_ENDPOINT: str = "https://www.modelscope.cn/openapi/v1"
+    MODELSCOPE_API_KEY: str = ""
+    MCP_CATALOG_TIMEOUT: float = 15.0
+    MCP_CATALOG_CACHE_TTL: float = 60.0
+    # 单页最大条目数；ModelScope 侧限制 page_number × page_size ≤ 100
+    MCP_CATALOG_PAGE_SIZE: int = 12
+
     # ── 增强检索 (阶段 3) ──────────────────────────────────────────────────
     # 是否启用增强检索（查询分解 × 四路并行 × 图谱融合重排 × 知识块聚类 × 迭代补充）
     ENHANCED_RETRIEVAL_ENABLED: bool = False

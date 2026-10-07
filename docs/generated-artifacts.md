@@ -32,15 +32,15 @@ Excel 工具输入示例（`content` 为以下 JSON 的字符串）：
 
 ## 存储与访问
 
-复用 `MINIO_*` 配置。文件保存在已有 bucket 的 `artifacts/<user UUID>/<conversation UUID>/<artifact UUID>` 下，原文件名存于对象元数据。元数据和正文通过一次对象写入保存，不需要数据库迁移。
+复用 `MINIO_*` 配置（S3 兼容，默认对接 RustFS）。文件保存在已有 bucket 的 `artifacts/<user UUID>/<conversation UUID>/<artifact UUID>` 下，原文件名存于对象元数据。元数据和正文通过一次对象写入保存，不需要数据库迁移。
 
 - `GET /api/v1/artifacts/{conversation_id}`：会话的文件列表。
 - `GET /api/v1/artifacts/{conversation_id}/{artifact_id}`：附件下载。
 - `GET /api/v1/artifacts/{conversation_id}/{artifact_id}/preview`：预览数据；PDF 返回可内联显示的二进制，其他格式返回 JSON。
 
-所有接口均要求登录，并检查会话归属。前端通过带 JWT 的请求取得数据，不暴露 MinIO 凭据或依赖公开 bucket。会话切换时加载持久化文件列表，文件创建事件即时更新 UI；中断回答不影响已成功保存的文件。
+所有接口均要求登录，并检查会话归属。前端通过带 JWT 的请求取得数据，不暴露对象存储凭据或依赖公开 bucket。会话切换时加载持久化文件列表，文件创建事件即时更新 UI；中断回答不影响已成功保存的文件。
 
-删除会话后，鉴权接口不再允许访问其文件；存储对象目前保留，部署方可按保留需求配置 MinIO 生命周期清理。
+删除会话后，鉴权接口不再允许访问其文件；存储对象目前保留，部署方可按保留需求配置对象存储生命周期清理。
 
 ## 验证与部署
 
