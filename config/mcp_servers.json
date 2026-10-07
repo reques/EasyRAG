@@ -1,27 +1,37 @@
 {
   "servers": [
     {
-      "name": "demo",
-      "transport": "stdio",
-      "enabled": true,
-      "command": ["python", "-m", "app.tools.mcp.demo_server"],
-      "capabilities": ["none"],
-      "allowed_tools": ["*"]
-    },
-    {
       "name": "filesystem",
       "transport": "stdio",
       "enabled": true,
-      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "./volumes"],
-      "capabilities": ["fs.read", "proc.exec"],
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "${MCP_FS_ROOT:-./volumes}"],
+      "capabilities": ["fs.read"],
       "allowed_tools": [
         "read_file",
-        "read_directory",
         "list_directory",
-        "get_file_info",
-        "search_files",
-        "directory_tree"
+        "directory_tree",
+        "get_file_info"
       ]
+    },
+    {
+      "name": "postgres-query",
+      "transport": "stdio",
+      "enabled": true,
+      "command": [
+        "npx", "-y", "@modelcontextprotocol/server-postgres",
+        "postgresql://${POSTGRES_USER:-easyrag}:${POSTGRES_PASSWORD:-easyrag_secret}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-easyrag}"
+      ],
+      "capabilities": ["db.read"],
+      "allowed_tools": ["query"]
+    },
+    {
+      "name": "system-health",
+      "transport": "stdio",
+      "enabled": false,
+      "command": ["python", "-m", "app.tools.mcp.health_server"],
+      "capabilities": ["ops.monitor"],
+      "allowed_tools": ["check_postgres", "check_redis", "check_milvus", "check_neo4j"],
+      "_comment": "服务健康检查，DeepAgents 模式或调试时手动启用。"
     }
   ]
 }

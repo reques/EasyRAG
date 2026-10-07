@@ -27,17 +27,26 @@ RAG 系统的质量由两个独立环节决定，必须分开评估：
 
 ## 2. 评测数据层：Golden Set 怎么构造（最关键）
 
+> **实操流水线见 [`docs/GOLDEN_SET.md`](GOLDEN_SET.md)** —— 含三段式构建脚本
+> （`eval/golden_prepare.py` → `eval/build_golden_set.py` → `eval/verify_import.py`）、
+> 上游语料缺陷处理、以及 CloudWay-24 的已验证产出与基线。
+> 本节讲口径与原理。
+
 ### 2.1 一条用例长什么样
 
 ```json
 {
   "question": "消费者享有公平交易的权利依据哪一条？",
   "expected_file_id": "uuid",
-  "expected_chunk_ids": ["sha256-..."],
+  "expected_chunk_ids": ["3f2a…64位十六进制…"],
   "reference_answer": "《消费者权益保护法》第十条……",
   "expect_miss": false
 }
 ```
+
+> `expected_chunk_ids` 元素是 64 位小写十六进制 sha256（**无前缀**），
+> 由 `sha256(kb_uuid + U+001F + source + U+001F + chunk_index + U+001F + content)`
+> 生成。具体构建流水线见 [`docs/GOLDEN_SET.md`](GOLDEN_SET.md)。
 
 ### 2.2 为什么 reference 必须是「与问题相关的 chunk 集」，而不是整份文件
 

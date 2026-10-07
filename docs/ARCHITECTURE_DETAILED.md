@@ -22,8 +22,8 @@ EasyRAG 是一个面向真实业务场景的**企业知识库智能问答平台*
 | 前端 | Vue 3.5 · Vite 6 · Pinia · Axios · lucide 图标 · ECharts 5（图谱） |
 | 后端 | FastAPI（async）· SQLAlchemy 2.0 async · LangGraph 工作流 |
 | Agent | LangGraph StateGraph（意图分流 / ReAct 循环 / 校验重试）· DeepAgents 统一多智能体（主 Agent + SubAgent + DAG 委派 + 结构化黑板） |
-| 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 配置）· Redis · MinIO |
-| 向量 | Milvus 2.5（etcd + MinIO 依赖）· BGE-M3 embedding（本地 / Ollama / API） |
+| 存储 | PostgreSQL（pgvector 镜像，业务数据 + 图谱 + Skill 配置）· Redis · RustFS（S3 兼容对象存储） |
+| 向量 | Milvus 2.5（etcd + RustFS 依赖）· BGE-M3 embedding（本地 / Ollama / API） |
 | LLM | DeepSeek / MiniMax / Qwen(DashScope) / GLM / 任意 OpenAI 兼容 API（自定义 base_url + 加密 API Key） |
 | 文档解析 | 本地解析器 + 旁路部署 MinerU Pipeline API（Docker，GPU） |
 | 评估 | 本地确定性指标（HitRate / MRR / avg_score）+ 可选 Ragas（独立 venv） |
@@ -53,7 +53,7 @@ EasyRAG 是一个面向真实业务场景的**企业知识库智能问答平台*
 │ app/graph      │ │ (chunker/    │ │ registry     │ │ Postgres(pgvector│
 │ (LangGraph)    │ │  embedding/  │ │ + MCP 桥接   │ │  +图谱+业务)     │
 │ DeepAgents     │ │  retriever/  │ │ app/skills   │ │ Milvus(向量)     │
-│ 委派协同        │ │  bm25/rerank/│ │ app/memory   │ │ Redis · MinIO    │
+│ 委派协同        │ │  bm25/rerank/│ │ app/memory   │ │ Redis · RustFS   │
 │                │ │  ocr/parsers)│ │              │ │ Ollama(embedding)│
 │                │ │  graph_cache)│ │              │ │ MinerU(旁路解析) │
 └────────────────┘ └──────────────┘ └──────────────┘ │  Tavily(联网搜索) │
@@ -115,7 +115,7 @@ EasyRAG/
 │   ├── services/                 # chat / knowledge / graph / evaluation / model_config
 │   │                             # skill_config / ragas_evaluator / ragas_worker / agent_run
 │   ├── repositories/             # BaseRepository[T] 泛型 + 各实体仓库
-│   └── storage/                  # postgres(models_*.py) / redis / minio 客户端
+│   └── storage/                  # postgres(models_*.py) / redis / minio 客户端（S3 兼容，对接 RustFS）
 ├── frontend/                     # Vue 3 SPA
 │   ├── src/views/                # ChatView / KnowledgeView / EvaluationView / Login / Register / Layout
 │   ├── src/components/           # AgentActivity(任务面板) / ProgressJournal
@@ -129,7 +129,7 @@ EasyRAG/
 ├── scripts/                      # 迁移/验证脚本
 ├── tests/                        # pytest（36+ 测试文件）
 ├── docs/                         # 本架构文档、plans/、specs/
-├── docker-compose.yml            # 7 服务编排（etcd/minio-s3/milvus/postgres/redis/minio/mineru-api）
+├── docker-compose.yml            # 11 服务编排（etcd/rustfs-milvus/milvus/postgres/redis/rustfs/neo4j/ollama/ollama-pull/backend/frontend）
 ├── .env / .env.template          # 配置（.env 优先级高于代码默认值！）
 └── docs/PROGRESS.md              # 逐次迭代的演进记录（93KB 历史）
 ```
@@ -550,21 +550,22 @@ POST /bases/{kb_id}/upload → 202 + file_id（立刻返回）
 ### 13.2 Milvus 2.5
 
 - collection `rag_docs`：向量 + metadata（knowledge_base_id / source / chunk_id / parent_id）
-- etcd（元数据）+ 内部 MinIO（存储）依赖；Docker 重建时版本变化会导致 volume 数据不兼容 → 检查 `col.num_entities`
+- etcd（元数据）+ 内部 RustFS（S3 兼容存储）依赖；Docker 重建时版本变化会导致 volume 数据不兼容 → 检查 `col.num_entities`
 
-### 13.3 Redis / MinIO / 外部服务
+### 13.3 Redis / 对象存储 / 外部服务
 
 - Redis：缓存/会话（当前主要为生命周期预留，核心状态在 PG）
-- MinIO（easyrag-minio :9090 Console / 9091 API）：上传文件原始二进制对象存储
+- RustFS（easyrag-rustfs，S3 兼容；:9090 Console / 9091 API）：上传文件原始二进制对象存储
 - Tavily：web_search 工具
 - Ollama：本地 embedding（可选）
 
-### 13.4 Docker Compose 拓扑（7 服务）
+### 13.4 Docker Compose 拓扑
 
 ```
-etcd:2379 ──→ milvus-standalone:19530 ──→ minio-s3:9000/9001
-postgres(pgvector/pg17):5432     redis:7:6379
-minio:9090(Console)/9091(API)    mineru-api:18000(→容器8000, GPU, 仅 127.0.0.1)
+etcd:2379 ──→ milvus-standalone:19530 ──→ rustfs-milvus:9000（容器内）
+postgres(pgvector/pg17):5432     redis:7.4:6379
+rustfs:9090(Console)/9091(API)   neo4j:7474/7687   ollama:11434
+mineru-api:18000(→容器8000, GPU, 仅 127.0.0.1, 可选 profile)
 ```
 
 数据卷在 `volumes/`（Docker Desktop WSL2 下注意 C 盘写爆，可 junction 迁移到 D 盘）。MinerU 已合并进主 compose（`MINERU_VERSION=3.4.4`，清华源拉模型，CUDA_VISIBLE_DEVICES=0）。

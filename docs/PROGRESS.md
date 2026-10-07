@@ -235,7 +235,7 @@ backend/
 │   │   └── manager.py              # Redis async 客户端
 │   └── minio/
 │       ├── __init__.py
-│       └── client.py               # MinIO 文件存储客户端
+│       └── client.py               # 对象存储客户端（minio Python SDK 走标准 S3 API，对接 RustFS）
 ├── repositories/
 │   ├── __init__.py
 │   ├── base.py                     # BaseRepository[T] 泛型基类
@@ -286,8 +286,8 @@ backend/
 | 服务 | 端口 | 镜像 |
 |---|---|---|
 | postgres | 5432 | pgvector/pgvector:pg17 |
-| redis | 6379 | redis:7-alpine |
-| minio | 9090(console) / 9091(API) | minio/minio:latest |
+| redis | 6379 | redis:7.4-alpine |
+| rustfs | 9090(console) / 9091(API) | rustfs/rustfs:1.0.0（2026-10 由 minio/minio 迁移，见文末更新记录） |
 
 ### 数据库表结构
 
@@ -1361,3 +1361,83 @@ DeepAgents：**由主 Agent（create_react_agent）根据工具描述自主决�
 4. **测试与验证**：新增 tests/test_dynamic_agent.py （路由、构建、结果解析）全部通过；
    真实服务冒烟：“你好”直接回答、“现在几点”调 datetime_tool、
    “15*17+3”调 calculator、“最新 AI 新闻”调 web_search；全量测试无新失败（原 5 个环境性失败与本改动无关）
+
+#### 2026-10-03 — 对象存储从 MinIO 迁移到 RustFS（镜像断供）
+
+**背景：**MinIO 把社区版 Docker 镜像与预编译二进制全部下架——`minio/minio` 于 2026-09-11 从
+Docker Hub 整体移除（所有 tag 404 / pull access denied），`dl.min.io/server/minio/release/...`
+返回 410 Gone，`quay.io/minio/minio` 也已无公开 tag。`docker compose up --build -d` 因此在
+`minio` 与 `minio-s3` 两个服务上直接失败。同时本机 `registry-1.docker.io:443` 不可达，
+所有走 Docker Hub 的镜像都拉不下来。
+
+**实现：**
+1. **存储后端换为 RustFS 1.0.0**（Apache-2.0，S3 兼容，自带 Web Console）：
+   `docker-compose.yml` 的 `minio` → `rustfs`（`container_name: easyrag-rustfs`），
+   `minio-s3` → `rustfs-milvus`（`container_name: milvus-rustfs`，不暴露宿主机端口，仅供 Milvus）。
+   数据卷 `./volumes/minio_app` → `./volumes/rustfs_app`、`./volumes/minio` → `./volumes/rustfs_milvus`。
+2. **后端代码零改动**：`backend/storage/minio/client.py` 用 minio Python SDK 走标准 S3 API，
+   已用 `bucket_exists` / `make_bucket` / `put_object` / `get_object` / `list_objects` / `remove_object`
+   实测通过；`MINIO_*` 配置项与数据库 `minio_bucket`/`minio_object` 字段保持不变，
+   仅 `MINIO_ENDPOINT` 指向 `rustfs:9000`。
+3. **端口/环境变量**：宿主端口映射不变（9090 Console / 9091 API），
+   `.env` / `.env.template` 的 `MINIO_CONSOLE_PORT` / `MINIO_API_PORT` 改名
+   `RUSTFS_CONSOLE_PORT` / `RUSTFS_API_PORT`；RustFS 凭据复用 `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`。
+   健康检查改用 RustFS 的 `GET /health`（HTTP 200，返回 `{"status":"ok",...}`）。
+4. **构建期网络**：`~/.docker/daemon.json` 增加 `registry-mirrors`
+   （`docker.1ms.run` / `docker.m.daocloud.io` / `dockerproxy.net`），解决 Docker Hub 不可达。
+   注意该文件必须**无 BOM**，带 BOM 会导致 Docker Desktop 后端启动即崩（`parsing JSON: invalid character`）。
+5. **RustFS 注意点**：容器以非 root 用户 `rustfs`（uid 10001）运行、数据目录 `/data`；
+   Windows 绑定挂载实测可写（Docker Desktop 下目录为 0777）。compose 中钉 `1.0.0` 稳定 tag
+   （`latest` 为滚动构建）。
+6. **文档同步**：README / `docs/ARCHITECTURE.md` / `docs/ARCHITECTURE_DETAILED.md` /
+   本文件的镜像与端点说明。
+
+#### 2026-10-03 — Golden Set 规范化构建流水线（RAG-Multi-Corpus）
+
+**背景：** 用户要求把评测集构建标准化。核查发现三类问题：
+
+1. 存量 `eval/aventro`（221 条）/`eval/zx_bank`（321 条）存在系统性缺陷——
+   `expected_chunk_ids` 全空（退化为「整文件兜底」，即 `RAG_EVALUATION.md` §2.2
+   警告的 Recall 被压扁 / Precision 虚高）、零负样本、用不稳定的
+   `expected_filename` 而非 `expected_file_id`、两份集子格式不一致（md vs docx）、
+   zx_bank 5 条重复问题未剔除；
+2. **这两份集子当前无法执行**——直连 Postgres 核查：`knowledge_bases` 仅
+   `CloudWay-24`（37 文件），`evaluation_datasets` 与 `evaluation_runs` 均为 0 条；
+   而唯一入库的 CloudWay-24 恰好没有评测集，因为上游 benchmark 口径文件
+   （1088 条）整体剔除了 Cloudway（master 1252 条 = 1088 + Cloudway 164 条）；
+3. 上游语料固有缺陷：5 处脏文件名、1 个证据文件完全缺失（`Account Close Guide.md`）、
+   181 条重复问题、4 条非规范 Query Type，且 **`Supporting Facts` 是 LLM 复述而非原文
+   （仅 25.9% 可在源 md 原样命中）**，字符串匹配无法用于 chunk 级标注。
+
+**核心发现（决定方案）：** chunk_id 由 `sha256(kb + U+001F + source + U+001F +
+chunk_index + U+001F + content)` 派生；当前 Milvus 集合只持久化
+`content/source/knowledge_base_id/vector`，`chunk_index` 恒为空，因此 **chunk_id
+可离线精确复算**——已与容器内真实函数逐条比对，374/374 一致。配合用建索引同一
+embedder（ollama bge-m3）做证据↔chunk 余弦匹配，即可离线产出 chunk 级标注。
+
+**实现：** 三段式流水线，新增 5 个脚本 + 1 篇规范文档：
+
+- `eval/golden_prepare.py`（容器内）：导出 KB 全部 chunk（用真实
+  `get_document_chunk_id` 生成 id）+ 嵌入问题与证据事实；
+- `eval/build_golden_set.py`（宿主机）：企业名/文件名折叠归一（修复全部 5 处脏名）、
+  语义匹配选 chunk（接受阈值 0.70 / 兜底 0.60 / 每例上限 5）、reference_answer 拼接、
+  负样本（要求问题对该文件全部 chunk 的最大相似度 ≤0.55，即**可证明无关**，
+  按企业×问题类型两级轮转取题）、Query Type 归一到 7 类、无法解析的用例写入 excluded；
+- `eval/validate_golden_set.py`：11 项合同结构校验 + chunk_id 完整性；
+- `eval/verify_import.py`（容器内）：调用真实 `parse_dataset_import` 验证可导入；
+- `eval/run_golden_baseline.py`（容器内）：调用真实 `run_evaluation` 跑基线并存档快照。
+
+**产出（CloudWay-24）：** `eval/cloudway24/cloudway24_golden_set.json` 204 条
+（164 正样本 + 40 负样本，0 排除，chunk 标注覆盖率 100%，`sim_max` 中位数 0.8775，
+平均 2.89 chunk/例，35 条待人工复核），附 review/excluded/summary/kb_files 映射表。
+
+**验证：** 结构校验 11/11 通过；474 个引用 chunk_id 全部存在于线上索引；
+真实 importer **204/204 解析通过、0 error**；真实检索跑通，`reference_mode`
+为 `chunk_ids` 164 / `negative` 40（**无一条退化为 file 兜底**），k=6 基线
+chunk HitRate 0.6127 / MRR 0.5152 / Recall 0.4306 / nDCG 0.4167、file HitRate 0.7794，
+失败分析 missed 5 / low_recall 27 / **false_positive 0**（40 条负样本 0 误命中）。
+
+**文档：** 新增 `docs/GOLDEN_SET.md`（现状诊断、目标契约、三段式流水线、设计取舍、
+新企业接入检查清单）；`docs/RAG_EVALUATION.md` 修正 chunk_id 格式说明
+（实际输出为**无前缀** 64 位十六进制，原文误写为 `"sha256-..."`）并交叉引用新文档。
+

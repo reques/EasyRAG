@@ -1,0 +1,2072 @@
+{
+  "name": "cloudway24-golden-v1",
+  "description": "Cloudway 24 评测集 v1（规范化构建）。来源：RAG-Multi-Corpus master query CSV；expected_file_id 已绑定当前知识库真实文件 UUID；expected_chunk_ids 由 BGE-M3 证据语义匹配得到（接受阈值 0.7，兜底 0.6，每例上限 5）；reference_answer 为 golden evidence 原文；负样本 40 条。",
+  "cases": [
+    {
+      "question": "How is the CloudWay 24 Armed Forces Discount different from other promotional offers?",
+      "expected_file_id": "dd9f8502-e385-4967-a2c1-ad61476d43ff",
+      "expected_chunk_ids": [
+        "05c4ef8680359f471d0907bedcf99c31c8c63b7bc1ab5a0977c3736e2831f671"
+      ],
+      "reference_answer": "The armed forces discount is applicable only on base fare, not including taxes, surcharges or add-ons. It is not combinable with other promotional offers.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I avail the CloudWay 24 Armed Forces Discount?",
+      "expected_file_id": "dd9f8502-e385-4967-a2c1-ad61476d43ff",
+      "expected_chunk_ids": [
+        "b7074bb7228d34486abae532df639119fcb6282f94828f9c019f459016f99f52",
+        "2b09aa3390e2d602011e429ad18d2b84f2d5c4f8a53bafbd403abbd5ad74780b"
+      ],
+      "reference_answer": "1. Sign Up / Login with your email or mobile on CloudWay24.com or the CloudWay24 App (iOS/Android).\n2. Select “Plan My Flight” and enter your round trip or one-way details.\n3. On the passenger details page, choose “Armed Forces Discount” and upload valid service/retirement ID proof.\n4. Proceed to payment — discounted fare and baggage benefits will be automatically applied.\n5. Complete booking using credit/debit card, netbanking, or SkyPoints 24 points.",
+      "expect_miss": false
+    },
+    {
+      "question": "Who is eligible for the CloudWay 24 Armed Forces Discount?",
+      "expected_file_id": "dd9f8502-e385-4967-a2c1-ad61476d43ff",
+      "expected_chunk_ids": [
+        "f086c879680fc47e80527ffc26d0cc62156f657bc9c412b40b720f85e96e641d"
+      ],
+      "reference_answer": "Serving Personnel of the Indian Army, Navy, Air Force, Coast Guard, and Paramilitary Forces.\nRetired/ Ex-Servicemen of the above services.\nImmediate Family Members (spouse and dependent children) when traveling with the eligible personnel.",
+      "expect_miss": false
+    },
+    {
+      "question": "What benefits are included in CloudWay 24's Armed Forces Discount Program?",
+      "expected_file_id": "dd9f8502-e385-4967-a2c1-ad61476d43ff",
+      "expected_chunk_ids": [
+        "c60de516d8d8fe3ff822ab360ebb2329837e7830fc76ee08ac4c80c0548d83d7",
+        "05c4ef8680359f471d0907bedcf99c31c8c63b7bc1ab5a0977c3736e2831f671",
+        "2b09aa3390e2d602011e429ad18d2b84f2d5c4f8a53bafbd403abbd5ad74780b"
+      ],
+      "reference_answer": "Flat 15% Discount on base airfare for all eligible serving and retired armed forces personnel.\nApplicable for CloudSaver (Economy), CloudComfort (Premium Economy), and CloudElite (Business Class) fares.\nComplimentary Additional 10kg Baggage Allowance.\nPriority Check-in and Boarding Privileges at all major hubs.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I cancel a booking with CloudWay 24?",
+      "expected_file_id": "2d860e5d-ff2b-46a3-b152-3f2dc2913787",
+      "expected_chunk_ids": [
+        "68d51cef941a968e3ed0be592c838a482bfc35ae0c655f8bcbbcddd12309ce7c",
+        "6ce301e155c90bec68c3965bd89c0929644e20f27b19eab7b757f4c863773980",
+        "8fd4ff5eabe78ea90342f5220d823f3fd0b261edc9fb9b1b33f9339b27b3e1ee",
+        "12238b4f1341b675e7279e00e3ff625b0b898c030d2730cc7895d26acf99ec38"
+      ],
+      "reference_answer": "You can cancel your booking in two convenient ways:\n\n**Website**: Visit [CloudWay24.com](https://cloudway24.com), sign in, navigate to **Manage My Flight**, select **Cancel Your Booking**, enter booking details, and confirm.\n\n**CloudWay 24 Mobile App (iOS/Android)**: Open the app, log in, go to **Manage My Flight**, tap **Cancel Your Booking**, select your trip, and confirm.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why might a refund not be provided by CloudWay 24?",
+      "expected_file_id": "2d860e5d-ff2b-46a3-b152-3f2dc2913787",
+      "expected_chunk_ids": [
+        "553d95d070cab186ad524155bc1dec88ad86d835d5c2a460ce75ded70223fd4f"
+      ],
+      "reference_answer": "Refund eligibility depends on fare type, class of travel, and time of cancellation. Flexible tickets may be eligible for a full or partial refund. Promotional or non-refundable fares are generally non-refundable except for taxes, based on policy.",
+      "expect_miss": false
+    },
+    {
+      "question": "What support options are available if I need help with a cancellation?",
+      "expected_file_id": "2d860e5d-ff2b-46a3-b152-3f2dc2913787",
+      "expected_chunk_ids": [
+        "12238b4f1341b675e7279e00e3ff625b0b898c030d2730cc7895d26acf99ec38"
+      ],
+      "reference_answer": "CloudWay 24 provides 24/7 customer care via website chat, app support, or helpline for assistance.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudWay 24 offer refunds for no-shows?",
+      "expected_file_id": "2d860e5d-ff2b-46a3-b152-3f2dc2913787",
+      "expected_chunk_ids": [
+        "553d95d070cab186ad524155bc1dec88ad86d835d5c2a460ce75ded70223fd4f"
+      ],
+      "reference_answer": "No-shows or last-minute cancellations may receive reduced refunds, according to the cancellation policy.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are some key awards CloudWay 24 has received?",
+      "expected_file_id": "3275cd41-7f33-4f24-bd4a-f40af31a9f2c",
+      "expected_chunk_ids": [
+        "587f3d9e276de8a4730aa4c397207ba7f7169d453a6fe4d7048428b09c60e5fc",
+        "9613c3f0b8efe36f29edb7c0bcdeb67b1caa00592dd95f80a01b6e5a435e06eb",
+        "0d10b241f685d664028bd56877465796fa835113bca9de13be7f82a1bead5d4c",
+        "3b2087eac028dec2873369845797d0e430315602844f466513dc90ce4460f2fc"
+      ],
+      "reference_answer": "Since its inception in 2013, CloudWay 24 has earned prestigious accolades for outstanding service, reliability, and innovation, including awards from SkyTrax, World Travel Awards, and APEX/IFSA.\n\nSkyTrax World Airline Awards include Best Full-Service Airline in India (2022, 2023), Best Long Haul Airline: South Asia (2023), and Top 10 World’s Most Improved Airlines (2021).\n\nWorld Travel Awards recognize CloudWay 24 as Asia’s Leading Airline – Business Class (2022, 2023) and India’s Best In-Flight Entertainment (2021, 2022).\n\nAPEX/IFSA Awards honored them with Best Cabin Service (Asia-Pacific) (2023) and Passenger Choice Award for Seat Comfort (2022).",
+      "expect_miss": false
+    },
+    {
+      "question": "How do the SkyTrax awards for CloudWay 24 in 2022 differ from those in 2023?",
+      "expected_file_id": "3275cd41-7f33-4f24-bd4a-f40af31a9f2c",
+      "expected_chunk_ids": [
+        "587f3d9e276de8a4730aa4c397207ba7f7169d453a6fe4d7048428b09c60e5fc",
+        "3b2087eac028dec2873369845797d0e430315602844f466513dc90ce4460f2fc"
+      ],
+      "reference_answer": "In 2022, CloudWay 24 received the Best Full-Service Airline in India award from SkyTrax.\n\nIn 2023, they maintained the Best Full-Service Airline in India award and added the Best Long Haul Airline: South Asia to their accolades.",
+      "expect_miss": false
+    },
+    {
+      "question": "What initiatives has CloudWay 24 implemented for environmental sustainability?",
+      "expected_file_id": "3275cd41-7f33-4f24-bd4a-f40af31a9f2c",
+      "expected_chunk_ids": [
+        "0d10b241f685d664028bd56877465796fa835113bca9de13be7f82a1bead5d4c"
+      ],
+      "reference_answer": "CloudWay 24 is recognized under the Green Skies Initiative for fuel-efficient operations with their Boeing 787 and Airbus A350 fleets.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why might CloudWay 24 have achieved the Top 3 on-time performance among Indian international airlines in 2022?",
+      "expected_file_id": "3275cd41-7f33-4f24-bd4a-f40af31a9f2c",
+      "expected_chunk_ids": [
+        "9613c3f0b8efe36f29edb7c0bcdeb67b1caa00592dd95f80a01b6e5a435e06eb"
+      ],
+      "reference_answer": "CloudWay 24's commitment to excellence is evident in its recognition for On-Time Performance Excellence by Cirium, highlighting their operational efficiency and reliability.\n\nTheir consistent delivery of services may be attributed to their strategic approach in maintaining high standards and operational efficiency.",
+      "expect_miss": false
+    },
+    {
+      "question": "How are visa policies different for Singapore and Thailand for Indian citizens?",
+      "expected_file_id": "75e2961f-f59a-4ffd-9afb-e1251091e7f3",
+      "expected_chunk_ids": [
+        "00a09ea98ff679b0e663e99ec5d5c0386652719e97ca4fbb929058d9b271a259",
+        "60f6d6d2af8990b4dfbc657c121eadef3615ca88a1bccd5a29f8fc49a63418a6",
+        "fcb60521db8559ef3ef0cc017e1e842e578cd2a89fa92b607f53a96ce13c90b7",
+        "dada2828c5da287b1df57557c76bc00e92e9b7602937c27acc6cfe2ddec08052",
+        "b5efd606e06e70beb29dca68de1a82d37ead7a5bdd9dd53ca78d4a92f237c36c"
+      ],
+      "reference_answer": "Singapore requires Indian citizens to obtain an e-visa before travel, and there is no visa-on-arrival option available. Proof of funds, a return ticket, and hotel booking are necessary.\n\nIn contrast, Thailand offers a visa-on-arrival for Indian citizens for up to 15 days with a fee, limited entry points, and also has an e-visa option. Requirements include proof of accommodation, funds, and a return ticket.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can an Indian citizen apply for a visa to Japan?",
+      "expected_file_id": "75e2961f-f59a-4ffd-9afb-e1251091e7f3",
+      "expected_chunk_ids": [
+        "00a09ea98ff679b0e663e99ec5d5c0386652719e97ca4fbb929058d9b271a259"
+      ],
+      "reference_answer": "All Indian citizens must obtain a visa in advance from the Japanese embassy or consulate. Required documents include an invitation letter or travel itinerary, a bank statement, and a return ticket.",
+      "expect_miss": false
+    },
+    {
+      "question": "Do Indian citizens need a visa to enter Nepal?",
+      "expected_file_id": "75e2961f-f59a-4ffd-9afb-e1251091e7f3",
+      "expected_chunk_ids": [
+        "cc7cb5d68dfafcf44b705b546b191fa3f30265ebb81caaef4abdff4fab105b5a"
+      ],
+      "reference_answer": "Indian citizens do not need a visa to enter Nepal. They must carry a valid passport or election ID.",
+      "expect_miss": false
+    },
+    {
+      "question": "As of now, how long can Indian citizens stay visa-free in Hong Kong?",
+      "expected_file_id": "75e2961f-f59a-4ffd-9afb-e1251091e7f3",
+      "expected_chunk_ids": [
+        "b5efd606e06e70beb29dca68de1a82d37ead7a5bdd9dd53ca78d4a92f237c36c"
+      ],
+      "reference_answer": "Indian citizens can stay in Hong Kong visa-free for up to 14 days after completing mandatory pre-arrival online registration.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why is travel insurance strongly recommended for Asian destinations?",
+      "expected_file_id": "75e2961f-f59a-4ffd-9afb-e1251091e7f3",
+      "expected_chunk_ids": [
+        "5f41e6e9a02b5de66273f43cbe8d940317fae5d86e81abd2d5ac19bb8590df60"
+      ],
+      "reference_answer": "Travel insurance is strongly recommended for Asian destinations because it provides financial protection against potential risks like medical emergencies, trip cancellations, or loss of belongings. Some destinations even mandate insurance for entry.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does the Airbus A380 compare to other passenger aircraft in terms of capacity?",
+      "expected_file_id": "a5d4dee2-49b2-45fa-8bb5-e82c78d9aec4",
+      "expected_chunk_ids": [
+        "9205ac68cead1c3f034a76cfb5507ce51cb96ad7736ddea82e158860d9a54ba3",
+        "36f2df1251de9ac7853070ffba593b93bb21d1a77b6055c3e06e39b2bdace1df"
+      ],
+      "reference_answer": "The Airbus A380 is the world’s largest passenger airliner, offering unmatched space with its double-deck design. It typically seats 500–575 passengers and can be configured to accommodate up to 853 in an all-economy layout.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the main features of the Airbus A380's First Class?",
+      "expected_file_id": "a5d4dee2-49b2-45fa-8bb5-e82c78d9aec4",
+      "expected_chunk_ids": [
+        "3307b8b5f59bf2f0cba2fc71775b7783fed397359ee00d5dca969302850b7823",
+        "ace38bc110b967ad6a87fadcdfff4ff897590d19d95ad82247b162ec6698bdec",
+        "4caeed71cc24e6bcc157623e46495a9d125200831db76a35bab5097e95c8cb33",
+        "46a52e3d1d85556b4b9dcf9264c5b3b24cce87d4032556b08da9405b8f04e3ce"
+      ],
+      "reference_answer": "First Class features fully flat suites with privacy doors, offering personal suites with lie-flat beds, direct aisle access, luxury amenity kits, designer bedding, personal wardrobe storage, a private minibar, in-seat power and USB charging, 32-40” HD entertainment screens, access to an onboard lounge/bar (on select airlines), and fine-dining menus served on demand.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the cabin features available in the Airbus A380's Economy Class?",
+      "expected_file_id": "a5d4dee2-49b2-45fa-8bb5-e82c78d9aec4",
+      "expected_chunk_ids": [
+        "816223e688dfec59f7759046a0909b50b1c677a5f98503bb1cfd00efc5d515f5",
+        "46a52e3d1d85556b4b9dcf9264c5b3b24cce87d4032556b08da9405b8f04e3ce",
+        "ace38bc110b967ad6a87fadcdfff4ff897590d19d95ad82247b162ec6698bdec",
+        "36f2df1251de9ac7853070ffba593b93bb21d1a77b6055c3e06e39b2bdace1df"
+      ],
+      "reference_answer": "In Economy Class, seating is configured with a pitch of 31–33” and a width of 18–18.5”. The class includes adjustable headrests, personal 10–13” HD screens, hundreds of movies, music, games, complimentary meals and beverages, family and bassinet seating options, and power outlets on select fleets.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why might airlines choose to use the Airbus A380 for long-haul routes?",
+      "expected_file_id": "a5d4dee2-49b2-45fa-8bb5-e82c78d9aec4",
+      "expected_chunk_ids": [
+        "9205ac68cead1c3f034a76cfb5507ce51cb96ad7736ddea82e158860d9a54ba3",
+        "4caeed71cc24e6bcc157623e46495a9d125200831db76a35bab5097e95c8cb33"
+      ],
+      "reference_answer": "The Airbus A380 offers a wide-body design, optimizing both capacity and passenger experience with its advanced aerodynamics and efficient engines. Its spacious cabins, reduced noise levels, mood lighting, wide aisles, larger lavatories, and additional features like onboard bars/lounges make it ideal for enhancing long-haul travel comfort.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does the cabin baggage allowance differ between CloudLux and CloudSaver classes?",
+      "expected_file_id": "e2b192cc-e9fb-4b5b-993a-295b6e149d4f",
+      "expected_chunk_ids": [
+        "cdd7ad1651cafcd98e96771435c0a1824dce9bf9f7e87d181caa78b473721263",
+        "26f6beb4f97a7e5185bedacd5d77bb21aa5129c201f10134672728478b18a2bc",
+        "0eb608189f69ceaa203bdf4573b1f40d187da3ba20fe2a51426c1e570fad7455",
+        "72beac7fd7179d6cd2dc973dca6bd979872506b50434db5d807ff075a51259ce",
+        "db4df7c7321616282a3bf26a6e69ef74cbfb2f5f660bd51d976e462a2f21ea7f"
+      ],
+      "reference_answer": "CloudWay 24 offers generous and convenient baggage allowances tailored to each cabin class, ensuring a comfortable and seamless journey for all passengers.\n\n| Class | Number of Bags | Max Weight (per bag) | Maximum Dimensions (L x W x H) |\n| -------------- | -------------- | -------------------- | ------------------------------- |\n| **CloudLux (First)** | 2 | 10 kg each | 55 x 40 x 23 cm |\n| **CloudSaver (Economy)** | 1 | 7 kg | 55 x 40 x 23 cm |\n\n> *In addition, 1 small personal item (laptop bag/handbag) per passenger is permitted.*",
+      "expect_miss": false
+    },
+    {
+      "question": "Why should travelers consider pre-purchasing excess baggage at CloudWay 24?",
+      "expected_file_id": "e2b192cc-e9fb-4b5b-993a-295b6e149d4f",
+      "expected_chunk_ids": [
+        "3317f24e3e544c84456314590ae4cb478d42ebe8db07a8e4a07c2261b6ee857c",
+        "1345a43532e3ec86b29bebceec468b61779e6d931fa535ac6328988f0e9cf155",
+        "89ec2ec7c49e41c95864b6e4e11df143789049f01233a64478b9073bc84035fb"
+      ],
+      "reference_answer": "Excess Baggage: Can be pre-purchased at a discounted rate via the CloudWay24 app or website during booking or under \"Manage My Flight.\"\n\nAt Airport: Higher fees apply for additional or overweight baggage checked at the airport counter.\n\nSkyPoints 24 Members: Elite tier members may enjoy additional free allowance—check your SkyPoints 24 tier benefits.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I arrange to travel with special baggage like sporting equipment?",
+      "expected_file_id": "e2b192cc-e9fb-4b5b-993a-295b6e149d4f",
+      "expected_chunk_ids": [
+        "5e4be86d0f87eab6f8a47f1fdbeb5a9d1689b9df4636497e0f677e713a922c2e",
+        "26f6beb4f97a7e5185bedacd5d77bb21aa5129c201f10134672728478b18a2bc",
+        "1345a43532e3ec86b29bebceec468b61779e6d931fa535ac6328988f0e9cf155"
+      ],
+      "reference_answer": "Special Baggage: Sporting equipment and musical instruments accepted as part of checked baggage allowance; items exceeding size/weight limits may attract charges.\n\nContact customer service for special arrangements or detailed advice.",
+      "expect_miss": false
+    },
+    {
+      "question": "Is a personal item allowed in addition to the cabin baggage on CloudWay 24?",
+      "expected_file_id": "e2b192cc-e9fb-4b5b-993a-295b6e149d4f",
+      "expected_chunk_ids": [
+        "26f6beb4f97a7e5185bedacd5d77bb21aa5129c201f10134672728478b18a2bc"
+      ],
+      "reference_answer": "In addition: 1 small personal item (laptop bag/handbag) per passenger is permitted.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I report a delayed bag with CloudWay 24?",
+      "expected_file_id": "cefd6794-003a-4107-8d97-61c882bf6c19",
+      "expected_chunk_ids": [
+        "34eea3196c42644b15abb81e5267bc304df10e211ffb8b8f9e571b0343518cd0",
+        "867e18b77e2ca2e882da745641de6bc3fdced22804bd8dfb95ae835dcfb51948",
+        "b26cbc9420ea6101039ba5a873d112502602e138595c659ae7f73b508b891725"
+      ],
+      "reference_answer": "Upon arrival, proceed to the CloudWay 24 Baggage Services Desk in the arrivals area before exiting the airport. Provide your baggage claim tag and boarding pass, and fill out the Property Irregularity Report (PIR) with the baggage staff.",
+      "expect_miss": false
+    },
+    {
+      "question": "What support does CloudWay 24 offer while I wait for my delayed baggage?",
+      "expected_file_id": "cefd6794-003a-4107-8d97-61c882bf6c19",
+      "expected_chunk_ids": [
+        "867e18b77e2ca2e882da745641de6bc3fdced22804bd8dfb95ae835dcfb51948"
+      ],
+      "reference_answer": "Eligible passengers may receive an amenity kit with basic toiletries. Reimbursement may be provided (subject to policy and ticket class) for essential items purchased due to delayed baggage. Save all receipts.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24's baggage tracking process differ from other airlines?",
+      "expected_file_id": "cefd6794-003a-4107-8d97-61c882bf6c19",
+      "expected_chunk_ids": [
+        "34eea3196c42644b15abb81e5267bc304df10e211ffb8b8f9e571b0343518cd0",
+        "3b2dd6a66a0d69b81016ecdb4f765d3e113409948ecb4320f0a2323b471f44c2",
+        "12b7a5c58d2ff5cea7f81e11d805130dad30f3464b75e036b5697bfdccc08a76",
+        "b26cbc9420ea6101039ba5a873d112502602e138595c659ae7f73b508b891725"
+      ],
+      "reference_answer": "You can track your baggage using the tracking reference number given on your Property Irregularity Report (PIR). Visit CloudWay24.com/baggage-tracking or track via the CloudWay24 app. Other airlines may have varying procedures.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it important to keep baggage tags and boarding passes with CloudWay 24?",
+      "expected_file_id": "cefd6794-003a-4107-8d97-61c882bf6c19",
+      "expected_chunk_ids": [
+        "12b7a5c58d2ff5cea7f81e11d805130dad30f3464b75e036b5697bfdccc08a76"
+      ],
+      "reference_answer": "Keeping your baggage tags and boarding passes ensures you can report any issues with your luggage accurately and facilitates the tracking and retrieval process in case of delays.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I complete a web check-in for CloudWay 24?",
+      "expected_file_id": "b7ac1903-c9b0-4ade-bebc-bcfff6ac6124",
+      "expected_chunk_ids": [
+        "7e3850bf50d8ae95f5552adb0a43980782886445915906e15f2580e22b18fdc3",
+        "4f314ba96f8bd8989d586467e680565895d46e2f4fbb6071026b6be5ac828e40",
+        "ed90dbb301345ee048ec406f90ea67c3eb49c2a26a3ccc4fe1737c31c2522710",
+        "128f99cc08ae4051d5aed354ca470501c8bbe0eb2f9f49892a7f4c99506fb12b",
+        "011615022602486b6de095fa70afb2898b4c89a5db4cfdab26aca6dbe9437761"
+      ],
+      "reference_answer": "Web check-in with CloudWay 24 allows you to confirm your travel online before arriving at the airport. \n- Access the web check-in via CloudWay24.com or the mobile app. \n- Navigate to \"Manage My Flight → Web Check-In.\"\n- Enter your Booking Reference and last name or registered mobile/email.\n- Select the passenger(s) to check-in, choose or upgrade your seat, and confirm.\n- Add optional extras like meal preferences or frequent flyer details.\n- Confirm your check-in and download or email your boarding pass.",
+      "expect_miss": false
+    },
+    {
+      "question": "When can I begin and finish web check-in for my CloudWay 24 flight?",
+      "expected_file_id": "b7ac1903-c9b0-4ade-bebc-bcfff6ac6124",
+      "expected_chunk_ids": [
+        "4f314ba96f8bd8989d586467e680565895d46e2f4fbb6071026b6be5ac828e40",
+        "7e3850bf50d8ae95f5552adb0a43980782886445915906e15f2580e22b18fdc3",
+        "128f99cc08ae4051d5aed354ca470501c8bbe0eb2f9f49892a7f4c99506fb12b"
+      ],
+      "reference_answer": "Web check-in opens 48 hours before your scheduled departure and closes 2 hours before the flight.",
+      "expect_miss": false
+    },
+    {
+      "question": "Can I web check-in for CloudWay 24 if I need special assistance?",
+      "expected_file_id": "b7ac1903-c9b0-4ade-bebc-bcfff6ac6124",
+      "expected_chunk_ids": [
+        "ed90dbb301345ee048ec406f90ea67c3eb49c2a26a3ccc4fe1737c31c2522710"
+      ],
+      "reference_answer": "Web check-in may not be available for passengers needing special assistance, such as those requiring medical support or minors traveling alone.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it beneficial to use web check-in for CloudWay 24?",
+      "expected_file_id": "b7ac1903-c9b0-4ade-bebc-bcfff6ac6124",
+      "expected_chunk_ids": [
+        "4f314ba96f8bd8989d586467e680565895d46e2f4fbb6071026b6be5ac828e40",
+        "7e3850bf50d8ae95f5552adb0a43980782886445915906e15f2580e22b18fdc3",
+        "ed90dbb301345ee048ec406f90ea67c3eb49c2a26a3ccc4fe1737c31c2522710",
+        "128f99cc08ae4051d5aed354ca470501c8bbe0eb2f9f49892a7f4c99506fb12b"
+      ],
+      "reference_answer": "Web check-in for CloudWay 24 allows you to select or modify your seat, download your boarding pass, and add frequent flyer details. It saves time and helps you avoid airport queues by allowing you to complete check-in from home.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does web check-in with CloudWay 24 differ from traditional airport check-in?",
+      "expected_file_id": "b7ac1903-c9b0-4ade-bebc-bcfff6ac6124",
+      "expected_chunk_ids": [
+        "7e3850bf50d8ae95f5552adb0a43980782886445915906e15f2580e22b18fdc3",
+        "4f314ba96f8bd8989d586467e680565895d46e2f4fbb6071026b6be5ac828e40",
+        "ed90dbb301345ee048ec406f90ea67c3eb49c2a26a3ccc4fe1737c31c2522710",
+        "128f99cc08ae4051d5aed354ca470501c8bbe0eb2f9f49892a7f4c99506fb12b"
+      ],
+      "reference_answer": "Web check-in with CloudWay 24 allows you to complete most of the check-in process online, such as selecting a seat and downloading a boarding pass, thus saving time. Traditional airport check-in requires you to perform these tasks at the airport, which may result in long queues and extended waiting times.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudLux lounge access differ from CloudElite?",
+      "expected_file_id": "81147ae1-da1d-4b00-b9a6-9fa350a738f3",
+      "expected_chunk_ids": [
+        "c8171c2c3943764daf78322cf018e372f1642bf97aac1acded3b9adba90c996e",
+        "c5cb80c652165f00694821c67e7759ce5606d5e93ace3cdf09c420794a2dc03d",
+        "7acfadb2d05b2ad8192904c068c974a14232dd0774a2fce263ccceb7cdf5d6e1",
+        "90d77076aa0c7b488d2e23cf55aedbee8d721ccc5f015015e4d5cf47a21afc86"
+      ],
+      "reference_answer": "CloudLux (First Class) offers complimentary access with a guest, private suites, à la carte dining, premium beverages, spa facilities, and private meeting rooms. CloudElite (Business Class) provides complimentary access without a guest, buffet dining, a full-service bar, and business center amenities.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I buy access to CloudComfort lounges?",
+      "expected_file_id": "81147ae1-da1d-4b00-b9a6-9fa350a738f3",
+      "expected_chunk_ids": [
+        "7acfadb2d05b2ad8192904c068c974a14232dd0774a2fce263ccceb7cdf5d6e1",
+        "ad29b8de3be4eee60235668214eb1c195468007c89c4a04e5ba0c8c823b3a15c",
+        "4430604045756210939164020cd5a7b301c245ea86379613e55c84c07e997b30",
+        "90d77076aa0c7b488d2e23cf55aedbee8d721ccc5f015015e4d5cf47a21afc86",
+        "c5cb80c652165f00694821c67e7759ce5606d5e93ace3cdf09c420794a2dc03d"
+      ],
+      "reference_answer": "Paid access to CloudComfort lounges is available at select airports, subject to capacity. Passengers must present a valid same-day CloudWay 24 boarding pass for international flights at the entrance. SkyPoints 24 Gold & higher tiers may have complimentary access.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudSaver class include lounge access?",
+      "expected_file_id": "81147ae1-da1d-4b00-b9a6-9fa350a738f3",
+      "expected_chunk_ids": [
+        "4430604045756210939164020cd5a7b301c245ea86379613e55c84c07e997b30",
+        "7acfadb2d05b2ad8192904c068c974a14232dd0774a2fce263ccceb7cdf5d6e1",
+        "c5cb80c652165f00694821c67e7759ce5606d5e93ace3cdf09c420794a2dc03d",
+        "90d77076aa0c7b488d2e23cf55aedbee8d721ccc5f015015e4d5cf47a21afc86",
+        "ad29b8de3be4eee60235668214eb1c195468007c89c4a04e5ba0c8c823b3a15c"
+      ],
+      "reference_answer": "CloudSaver (Economy) does not include lounge access. However, it is available for purchase, and SkyPoints 24 Platinum members receive complimentary access, subject to availability.",
+      "expect_miss": false
+    },
+    {
+      "question": "What facilities are available for CloudLux passengers in lounges?",
+      "expected_file_id": "81147ae1-da1d-4b00-b9a6-9fa350a738f3",
+      "expected_chunk_ids": [
+        "c8171c2c3943764daf78322cf018e372f1642bf97aac1acded3b9adba90c996e",
+        "7acfadb2d05b2ad8192904c068c974a14232dd0774a2fce263ccceb7cdf5d6e1",
+        "c5cb80c652165f00694821c67e7759ce5606d5e93ace3cdf09c420794a2dc03d",
+        "90d77076aa0c7b488d2e23cf55aedbee8d721ccc5f015015e4d5cf47a21afc86"
+      ],
+      "reference_answer": "CloudLux passengers have access to private suites, à la carte gourmet dining, premium beverages and barista service, spa and shower facilities, private meeting rooms, high-speed Wi-Fi, and an entertainment lounge.",
+      "expect_miss": false
+    },
+    {
+      "question": "When should I present my boarding pass for lounge access?",
+      "expected_file_id": "81147ae1-da1d-4b00-b9a6-9fa350a738f3",
+      "expected_chunk_ids": [
+        "ad29b8de3be4eee60235668214eb1c195468007c89c4a04e5ba0c8c823b3a15c",
+        "90d77076aa0c7b488d2e23cf55aedbee8d721ccc5f015015e4d5cf47a21afc86",
+        "4430604045756210939164020cd5a7b301c245ea86379613e55c84c07e997b30"
+      ],
+      "reference_answer": "Passengers must present a valid same-day CloudWay 24 boarding pass for international flights at the entrance to access the lounges.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does the insurance coverage for non-ground staff differ from ground staff at CloudWay 24?",
+      "expected_file_id": "faad852b-af50-4b62-b6b0-b24828427196",
+      "expected_chunk_ids": [
+        "a5cb3ec28f58a5e85851b332d31f0f04f3732abcc2847c5007ed7a59265079f5",
+        "83d59453c09200b8b4d7e025529b6b5faa4f3739353c8ff77c1d2d8ad9403c96",
+        "050d0376627495e77fdc40ac93277d42b4e99bc2711ae3f7394a064cb1541ff3",
+        "fda9e03c94ae767640d1397f0d41d068b1c1292d096168e461e46d49de03c2fa"
+      ],
+      "reference_answer": "CloudWay 24 provides comprehensive group insurance coverage for all employees, ensuring their health, safety, and well-being while on duty and beyond. Insurance benefits are categorized based on employee roles due to the varying risk profiles associated with their responsibilities.\n\nFor non-ground staff (Pilots & Cabin Crew), there is enhanced coverage due to higher occupational risk. This includes higher limits on group life insurance, accidental death & disability, and critical illness cover. A unique feature for pilots is the loss of license benefit, and there is comprehensive global travel insurance.\n\nFor ground staff (Engineering, HR, Administration, Support Services), the coverage reflects relatively lower occupational exposure, with lower insurance limits and no loss of license benefit. Travel insurance is domestic and limited to international work travel.",
+      "expect_miss": false
+    },
+    {
+      "question": "What is included in CloudWay 24's insurance policy for Pilots and Cabin Crew?",
+      "expected_file_id": "faad852b-af50-4b62-b6b0-b24828427196",
+      "expected_chunk_ids": [
+        "fda9e03c94ae767640d1397f0d41d068b1c1292d096168e461e46d49de03c2fa",
+        "a5cb3ec28f58a5e85851b332d31f0f04f3732abcc2847c5007ed7a59265079f5",
+        "dbe37f6f4d56a44a84ba2ae9a5059da3e600251e31f5484b9297e40eb9374a4e"
+      ],
+      "reference_answer": "CloudWay 24 provides enhanced coverage for pilots and cabin crew due to their higher occupational risk. This includes INR 1.5 Crore for group life insurance, INR 2 Crore for accidental death & disability, INR 10 Lakh for medical insurance per annum, and INR 20 Lakh for critical illness cover. Pilots have a loss of license benefit up to INR 1 Crore. The travel insurance is comprehensive and global.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can CloudWay 24 employees file an insurance claim?",
+      "expected_file_id": "faad852b-af50-4b62-b6b0-b24828427196",
+      "expected_chunk_ids": [
+        "4eccde6e0a17a6f63ea1d9efee108f82208d6d630b8680b7fd92cb1c990740eb",
+        "a5cb3ec28f58a5e85851b332d31f0f04f3732abcc2847c5007ed7a59265079f5"
+      ],
+      "reference_answer": "All claims are facilitated by the Corporate HR and Employee Well-being Department in partnership with leading insurance providers. Employees can also access the CloudWay 24 Employee Portal or contact HR at hr@cloudway24.com for latest updates or claims.",
+      "expect_miss": false
+    },
+    {
+      "question": "When is CloudWay 24's insurance policy reviewed and updated?",
+      "expected_file_id": "faad852b-af50-4b62-b6b0-b24828427196",
+      "expected_chunk_ids": [
+        "57019e9111bc80d3a695bed12b6428f25a3e4df0fd20e9210d4a499bcb836f34"
+      ],
+      "reference_answer": "Insurance limits and coverage are reviewed annually as per regulatory standards and operational requirements.",
+      "expect_miss": false
+    },
+    {
+      "question": "What additional benefits does CloudWay 24 offer to employees' families?",
+      "expected_file_id": "faad852b-af50-4b62-b6b0-b24828427196",
+      "expected_chunk_ids": [
+        "57019e9111bc80d3a695bed12b6428f25a3e4df0fd20e9210d4a499bcb836f34"
+      ],
+      "reference_answer": "Medical insurance can be extended to spouse and dependent children at preferential group rates.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I modify my trip dates on CloudWay 24?",
+      "expected_file_id": "e6cc69e0-e886-4af9-97ab-728bc034f591",
+      "expected_chunk_ids": [
+        "527d68ba3b5211aab031dc5e5bc37d042840a4a0dc5bb3b214b13b565efa11ae",
+        "b0f6c79c06bad1a657ffaaa86ffeecec8806318cc8569a7f11b5d8f2bf133353",
+        "a213b33804ede6fd76f16f3814be515df339241ec05e483dc8ad623386f49d87",
+        "6309ecafed9f0342eb4e72242c69c6bc72cb298bf2057eb9ca9dfd8eea47e2d6",
+        "c25e09668995513254f0e518762690a779879773baec44425081128ed908ab79"
+      ],
+      "reference_answer": "CloudWay 24 understands that plans can change. If you need to modify your trip dates after booking your ticket, the process is simple and can be done conveniently through the CloudWay 24 website or mobile app.\n\n### Steps to Modify Your Trip Dates\n1. Log In: Visit [CloudWay24.com](https://CloudWay24.com) or open the CloudWay 24 app. Log in using your email or mobile number and password.\n2. Access \"Manage My Flight\": Navigate to the \"Manage My Flight\" section from the homepage or main menu.\n3. Retrieve Your Booking: Enter your booking reference number (PNR) and last name, or log in to view your bookings. Select the booking you wish to modify.\n4. Select \"Modify Your Booking\": Click on the \"Modify Your Booking\" option. Choose \"Change Trip Dates\" from the available modification options.\n5. Choose New Dates: Select your new preferred departure (and return, if applicable) dates. Review available flights and seat options for your new travel dates.\n6. Review Changes: Compare the current and new flight details. Any fare differences or change fees, according to your ticket rules, will be displayed.\n7. Confirm and Pay: Agree to any additional charges if applicable (fare difference/change fee). Choose your payment option (credit card, debit card, netbanking, or SkyPoints 24 points). Complete the payment.\n8. Receive Confirmation: You will receive a confirmation email and/or SMS with your updated travel itinerary.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the potential fees involved in changing trip dates with CloudWay 24?",
+      "expected_file_id": "e6cc69e0-e886-4af9-97ab-728bc034f591",
+      "expected_chunk_ids": [
+        "a213b33804ede6fd76f16f3814be515df339241ec05e483dc8ad623386f49d87",
+        "c25e09668995513254f0e518762690a779879773baec44425081128ed908ab79"
+      ],
+      "reference_answer": "**Change Fees:** Date changes may be subject to a change fee and/or fare difference depending on your fare type and class of travel.\n\n**Eligibility:** Some ticket types may have restrictions on date changes or may not be changeable.",
+      "expect_miss": false
+    },
+    {
+      "question": "How is the process of modifying trip dates on CloudWay 24 different from other airlines?",
+      "expected_file_id": "e6cc69e0-e886-4af9-97ab-728bc034f591",
+      "expected_chunk_ids": [
+        "527d68ba3b5211aab031dc5e5bc37d042840a4a0dc5bb3b214b13b565efa11ae",
+        "a213b33804ede6fd76f16f3814be515df339241ec05e483dc8ad623386f49d87",
+        "8e64ef9ff538bf505bf6311d5b778f5cb0199122746b47e7feda526ab9cab078",
+        "6309ecafed9f0342eb4e72242c69c6bc72cb298bf2057eb9ca9dfd8eea47e2d6"
+      ],
+      "reference_answer": "CloudWay 24 understands that plans can change. If you need to modify your trip dates after booking your ticket, the process is simple and can be done conveniently through the CloudWay 24 website or mobile app.\n\nFor complex itineraries or group bookings, you may contact **CloudWay 24 Customer Support**.\n\nCloudWay 24 offers multiple payment options for any fare difference or change fees, including credit card, debit card, netbanking, or SkyPoints 24 points.",
+      "expect_miss": false
+    },
+    {
+      "question": "Can trip dates always be changed on CloudWay 24 without restrictions?",
+      "expected_file_id": "e6cc69e0-e886-4af9-97ab-728bc034f591",
+      "expected_chunk_ids": [
+        "a213b33804ede6fd76f16f3814be515df339241ec05e483dc8ad623386f49d87"
+      ],
+      "reference_answer": "**Eligibility:** Some ticket types may have restrictions on date changes or may not be changeable.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a flight with a pet on CloudWay 24?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [
+        "1e20335fdf9a81950e566e08eabe2aa1b13ff811fe7233ab64bfaa266e0e416f",
+        "94810ca60b5dfa72df08bfe169ca60ce85de726db8ced0d1a8e6fd0b44f8d1ad",
+        "ee9891c76d080d16cd53cd53bd47fc78a648fc2e100eaa092296cf6eea85add0",
+        "acb81e88fb006e520cf348fac00202ba50baea7d5ce3c14f837bfc630927c5cc"
+      ],
+      "reference_answer": "To book a flight with a pet on CloudWay 24, you should select \"Travelling with Pets\" during your flight booking and enter your pet's details. After booking, use the \"Manage My Flight\" feature and choose \"Add a Pet\" or contact Customer Care. Pet travel fees can be paid online using Credit Card, Debit Card, Netbanking, or SkyPoints 24 points.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the requirements for pet carriers on CloudWay 24 flights?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [
+        "ef0932f130e1f704b234a3e23e756f7712fd5e9d77fb9f03b4be55c9e795beb2",
+        "a0fffb0ecffb1d7f67e6db1b0381ea25e78fdfb9659fc82f2d893bd84282d525"
+      ],
+      "reference_answer": "For in-cabin travel, carriers must be soft-sided, leak-proof, well-ventilated, and fit under the seat. For checked baggage, carriers should be rigid, have a secure latch, absorbent bedding, and provide enough room for your pet to stand, turn, and lie down comfortably. All carriers must have an identification tag with the pet’s name and contact info.",
+      "expect_miss": false
+    },
+    {
+      "question": "Are pets allowed in CloudWay 24's First Class?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [
+        "1e28c2cdf2b600883f9f4863195a870dd13f515fac1e56c78d3ffee29b44d977",
+        "94810ca60b5dfa72df08bfe169ca60ce85de726db8ced0d1a8e6fd0b44f8d1ad",
+        "ee9891c76d080d16cd53cd53bd47fc78a648fc2e100eaa092296cf6eea85add0"
+      ],
+      "reference_answer": "No, pets are not allowed in CloudLux (First Class) on CloudWay 24 flights due to space limitations.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why might certain pets not be allowed in the hold on CloudWay 24 flights?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [
+        "1e28c2cdf2b600883f9f4863195a870dd13f515fac1e56c78d3ffee29b44d977"
+      ],
+      "reference_answer": "Brachycephalic breeds, which are flat-faced dogs and cats, may not be allowed in the hold for safety reasons. These breeds can have respiratory issues, especially in the confined and pressurized environment of an airplane hold, posing a risk to their health during transport.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do the in-cabin and checked baggage pet travel options differ on CloudWay 24?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [
+        "60aca237fa9792965660bce9cb4bd4590ab1b123522158f5fd7f4f5bdb5c3648",
+        "ef0932f130e1f704b234a3e23e756f7712fd5e9d77fb9f03b4be55c9e795beb2",
+        "a0fffb0ecffb1d7f67e6db1b0381ea25e78fdfb9659fc82f2d893bd84282d525",
+        "94810ca60b5dfa72df08bfe169ca60ce85de726db8ced0d1a8e6fd0b44f8d1ad"
+      ],
+      "reference_answer": "In-cabin pet travel is available on select international routes with durations under 8 hours and allows pets weighing up to 8 kg, including the carrier. The carrier should be soft-sided and fit under a seat. Checked baggage pet travel is available on all direct international flights for pets weighing up to 32 kg, including the carrier, which must be rigid and secure. The fees also differ, with in-cabin costing USD 150 and checked baggage costing USD 250.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I report damaged baggage at the airport with CloudWay 24?",
+      "expected_file_id": "8cb8f45d-8c9c-4459-8280-4ac9f5c75580",
+      "expected_chunk_ids": [
+        "fd62f142304a41764d90c3cce1c679fd494016aff931df4ad2ae0cb288f6580b",
+        "8e75a959f33350fbd94c693f499fd778d1b746637cc85e23a8d906f43b2b0b16",
+        "275658d6c2958bb2d2f6a9f92b935de641697b8e7b401939cc918d5862dccc99",
+        "a7ade7e2053ed3c6daa627a56343f80d055d4548fb7e47f5db1888622aaea775",
+        "eb654e257e6479a604f2db17b63403146f2bd83986d8161633383019acb79172"
+      ],
+      "reference_answer": "At the Airport: Report immediately to the CloudWay 24 Baggage Service Desk before leaving the arrival hall. Fill out the Damaged Baggage Claim Form with our representative. Provide your boarding pass, bag tags, and a valid photo ID.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudWay 24 cover minor scratches on luggage?",
+      "expected_file_id": "8cb8f45d-8c9c-4459-8280-4ac9f5c75580",
+      "expected_chunk_ids": [
+        "c5734a6971558d3ed09dba28b793dcc00db218dbde877cd083dc37573e76730a"
+      ],
+      "reference_answer": "Not Covered: Minor scratches, scuffs, or dents consistent with normal handling.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why does CloudWay 24 require reporting of baggage damage within 7 days?",
+      "expected_file_id": "8cb8f45d-8c9c-4459-8280-4ac9f5c75580",
+      "expected_chunk_ids": [
+        "275658d6c2958bb2d2f6a9f92b935de641697b8e7b401939cc918d5862dccc99",
+        "c5734a6971558d3ed09dba28b793dcc00db218dbde877cd083dc37573e76730a",
+        "fd62f142304a41764d90c3cce1c679fd494016aff931df4ad2ae0cb288f6580b"
+      ],
+      "reference_answer": "After Leaving the Airport: If you notice the damage after leaving, report it in writing within 7 days of receiving your baggage. Claims after this period are excluded.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24’s compensation policy differ for damaged baggage?",
+      "expected_file_id": "8cb8f45d-8c9c-4459-8280-4ac9f5c75580",
+      "expected_chunk_ids": [
+        "746aeece54d94c213549b96c584628c62065897540daf03b838f909f66e7bf50",
+        "a7ade7e2053ed3c6daa627a56343f80d055d4548fb7e47f5db1888622aaea775",
+        "8e75a959f33350fbd94c693f499fd778d1b746637cc85e23a8d906f43b2b0b16",
+        "275658d6c2958bb2d2f6a9f92b935de641697b8e7b401939cc918d5862dccc99"
+      ],
+      "reference_answer": "Our Compensation Policy: CloudWay 24 will evaluate the extent and cause of the damage. Offer a repair service, replacement bag, or financial compensation (as per international conventions and airline policy). Compensation may vary depending on the level of damage, bag age, and documentation provided. CloudWay 24’s liability for damaged baggage is limited as per the Montreal Convention and company policy.",
+      "expect_miss": false
+    },
+    {
+      "question": "What steps does CloudWay 24 suggest for managing baggage concerns?",
+      "expected_file_id": "8cb8f45d-8c9c-4459-8280-4ac9f5c75580",
+      "expected_chunk_ids": [
+        "eb654e257e6479a604f2db17b63403146f2bd83986d8161633383019acb79172"
+      ],
+      "reference_answer": "Helpful Tips: Keep your bag tags and receipts until the end of your journey. Inspect your baggage immediately upon collection. Use name labels on your baggage.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24's Mumbai to USA flights compare to its Mumbai to Europe flights in terms of travel time?",
+      "expected_file_id": "ee7eb415-6279-4c2e-90a9-1e492b16ec0f",
+      "expected_chunk_ids": [
+        "0902c4bccbf3c3739ea1554582fb794723024f9d2445842021a14149067b72ca",
+        "ef2be6bbe23bdff6f15531d1420116523563a50544817ec51e4d7b4843e422fe",
+        "4d80eff44f296837458335c1c838720f3a3582b9ecf419333c812f228c32e0c6",
+        "176e22cb0676015c9aa5e53b017acd5c94b726aa0de6d164458d3668f36c548d",
+        "edad1f86bf003ba523c2612409f11a530722c95df33b25622708063335053e7b"
+      ],
+      "reference_answer": "| CW241 | New York (JFK) | 01:10 | 07:30 | Boeing 787-9 | 15h 50m |\n\n| CW241 | London (LHR) | 02:15 | 06:40 | Boeing 787 Dreamliner | 9h 55m |",
+      "expect_miss": false
+    },
+    {
+      "question": "What destinations does CloudWay 24 cover from Mumbai to Africa?",
+      "expected_file_id": "ee7eb415-6279-4c2e-90a9-1e492b16ec0f",
+      "expected_chunk_ids": [
+        "c5fbff25fba063f6d7c1f8f00835cf8db3116d2b1300f3f3548a792e2fbd8611",
+        "b3d2fd80a26d0e7f3ad6dd849f8170f7a96fc365e1d5c165313d62793fc0c0a7",
+        "1b436c8a0c0bbda0cacfea0cad882fea93ec27816703b15c61ad1744a3b018b5",
+        "febcfa09f672fb9eefb81693aad7551b68590f3b978ad1ff037d40717be63762",
+        "aa06d51e26ef408331c60de71e51743eae630c19191a170ed5e82d24fa009fa6"
+      ],
+      "reference_answer": "CloudWay 24 offers premium non-stop and one-stop services between Mumbai and major cities across Africa with state-of-the-art aircraft.\n\n| Johannesburg (JNB) | Nairobi (NBO) | Addis Ababa (ADD) | Cairo (CAI) | Lagos (LOS) | Casablanca (CMN) | Cape Town (CPT) | Accra (ACC) | Dar es Salaam (DAR) |",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a flight with CloudWay 24?",
+      "expected_file_id": "ee7eb415-6279-4c2e-90a9-1e492b16ec0f",
+      "expected_chunk_ids": [
+        "77f54c0302c6dbc3a2e1266ad57e13c958dd209fb257904d0dd7636b3ea717b8",
+        "381ed87bf296e4506afea3fe26a47f19fdb84e7fdd5f17c54f163c3b2b29b827",
+        "707e3e863b7e9f17b5d208163952b0a75afaeb7fb773bab001de2ba940007b4d"
+      ],
+      "reference_answer": "For real-time schedules and booking, visit [CloudWay24.com](https://www.cloudway24.com).\n\nFor the latest updates and bookings, visit [CloudWay24.com](https://cloudway24.com) or use the CloudWay24 app.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why might CloudWay 24 choose to operate non-stop flights to Nairobi?",
+      "expected_file_id": "ee7eb415-6279-4c2e-90a9-1e492b16ec0f",
+      "expected_chunk_ids": [
+        "8dc56add5e5bb5f204b33228ff908e7026fc542bb471b7b46442804fcf010cf8",
+        "f2778f48d7c29d9b79a8c8f2f6503998f957ad306cd3e9d2412a981e57447cd1",
+        "2e4141260d6f851742986d2e5c3983cb421fe53ec565bca088223019cc49df0d",
+        "558d13d5a8635cebcc852fc8d1de75bad4c1caedc0fac69bd081246aed42cfc3",
+        "febcfa09f672fb9eefb81693aad7551b68590f3b978ad1ff037d40717be63762"
+      ],
+      "reference_answer": "CloudWay 24 offers premium non-stop services to Nairobi. The choice of non-stop flights minimizes travel time and maximizes convenience for passengers.\n\n| Nairobi (NBO) | 01:25 | 05:45 | Airbus A350 | Non-stop | 6h 50m |",
+      "expect_miss": false
+    },
+    {
+      "question": "How long is the travel time for a flight from Mumbai to Sydney with CloudWay 24?",
+      "expected_file_id": "ee7eb415-6279-4c2e-90a9-1e492b16ec0f",
+      "expected_chunk_ids": [
+        "7afee73b5e243fa7f75e7ea5dc9fe99e0792ec7ed80238b394669fe24798b481",
+        "8b2dadf33822ffdb932f8e795f3d5b8dee0769612f45111af38e1a117dd02dca",
+        "26d52380a421dd1e8d0f5df5b4761782272cf93bbea26bc480f0e23f7c044313",
+        "f2cc17faf8d7feede93903e55f83e817ef77b0a744dc55a51f9795b741ebb18d",
+        "bfe1da3ea39bce58adf632b8936921da965b984aa536cedf324bacd9d3df23c0"
+      ],
+      "reference_answer": "| Sydney (SYD) | 19:30 | 12:00 (+1) | Airbus A380 | 11h 00m |",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I earn SkyPoints 24 through flight bookings?",
+      "expected_file_id": "738cf0e4-dd1a-44ea-ae41-148983308dc7",
+      "expected_chunk_ids": [
+        "b84c0c5be1ad702b2df71859c9df08fe6cfac0677d104781083715db2471cbac",
+        "efd2d52fddd2c3a04b9c3920ce11eccb46ee06760931a5b48d5f9a399766dd32",
+        "e9bd459fd3de354b84f31c5d190bb46ae60ee449e2b86443d8b74971b95210e0",
+        "87db7ee6709f7e594aa3459b3eacc19ebedcfd08b80cd785c92a67d45f576310",
+        "fe32fe3dcfcea09f008da40d4ed91fec87dbba7979ea9689a23c904e90a98dd4"
+      ],
+      "reference_answer": "Earn SkyPoints 24 every time you fly with CloudWay 24. Points are credited based on distance flown, class of travel, and SkyPoints 24 tier. All cabin classes qualify: CloudLux (First Class) has the highest points accrual, followed by CloudElite (Business Class), CloudComfort (Premium Economy), and CloudSaver (Economy).",
+      "expect_miss": false
+    },
+    {
+      "question": "What is the SkyPoints 24 program?",
+      "expected_file_id": "738cf0e4-dd1a-44ea-ae41-148983308dc7",
+      "expected_chunk_ids": [
+        "efd2d52fddd2c3a04b9c3920ce11eccb46ee06760931a5b48d5f9a399766dd32",
+        "87db7ee6709f7e594aa3459b3eacc19ebedcfd08b80cd785c92a67d45f576310",
+        "fe32fe3dcfcea09f008da40d4ed91fec87dbba7979ea9689a23c904e90a98dd4",
+        "b84c0c5be1ad702b2df71859c9df08fe6cfac0677d104781083715db2471cbac",
+        "e9bd459fd3de354b84f31c5d190bb46ae60ee449e2b86443d8b74971b95210e0"
+      ],
+      "reference_answer": "SkyPoints 24 is CloudWay 24’s exclusive frequent flyer program, designed to reward loyal travelers with points on every journey and offer exclusive benefits.",
+      "expect_miss": false
+    },
+    {
+      "question": "Can I earn SkyPoints 24 through partner airline flights?",
+      "expected_file_id": "738cf0e4-dd1a-44ea-ae41-148983308dc7",
+      "expected_chunk_ids": [
+        "efd2d52fddd2c3a04b9c3920ce11eccb46ee06760931a5b48d5f9a399766dd32",
+        "cc5cedd2499ba8c7d16f1de2ae5eaf3d4dad56b79eb8ab7946247ae5fe7d3c37",
+        "fe32fe3dcfcea09f008da40d4ed91fec87dbba7979ea9689a23c904e90a98dd4",
+        "87db7ee6709f7e594aa3459b3eacc19ebedcfd08b80cd785c92a67d45f576310",
+        "e9bd459fd3de354b84f31c5d190bb46ae60ee449e2b86443d8b74971b95210e0"
+      ],
+      "reference_answer": "Yes, you can earn SkyPoints 24 on partner airline flights by booking with CloudWay 24’s code-share and alliance partners using your SkyPoints 24 membership number.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why should I book directly with CloudWay 24 to maximize my points?",
+      "expected_file_id": "738cf0e4-dd1a-44ea-ae41-148983308dc7",
+      "expected_chunk_ids": [
+        "e9bd459fd3de354b84f31c5d190bb46ae60ee449e2b86443d8b74971b95210e0",
+        "fe32fe3dcfcea09f008da40d4ed91fec87dbba7979ea9689a23c904e90a98dd4",
+        "87db7ee6709f7e594aa3459b3eacc19ebedcfd08b80cd785c92a67d45f576310",
+        "b84c0c5be1ad702b2df71859c9df08fe6cfac0677d104781083715db2471cbac",
+        "cc5cedd2499ba8c7d16f1de2ae5eaf3d4dad56b79eb8ab7946247ae5fe7d3c37"
+      ],
+      "reference_answer": "Book directly via CloudWay24.com or the official app to ensure full points are earned, as it allows you to reserve flights, choose higher cabin classes, and take advantage of promotions for additional point accrual.",
+      "expect_miss": false
+    },
+    {
+      "question": "What is the CloudWay 24 Employee Free Tickets Policy?",
+      "expected_file_id": "81c085a1-5aae-421c-883a-d4415d2d1cdb",
+      "expected_chunk_ids": [
+        "769110d283bab88a7dbd503b649214e321c0b55a574d42445819a0fdbb79f552",
+        "63163fb044286ccc962e27caec709502fed9e514f9e0f745d1c9fc3aa38545c5",
+        "9db33bd3efdae23c73f21f8b84289051a8a5e2ec7800bc280d6ff21996cda2d5",
+        "5f947671fe35e720d90f5b84797cc59a103fdc50477587ea0e94df49c3f4ec57"
+      ],
+      "reference_answer": "All full-time CloudWay 24 employees are eligible for 4 round-trip international tickets per calendar year. These can be used by the employee or together for family travel. Employees may use all 4 round-trip tickets at once for family trips. The eligible routes include any CloudWay 24 operated international route, and the tickets must be used within the calendar year, as unused tickets will not roll-over.",
+      "expect_miss": false
+    },
+    {
+      "question": "How are the travel benefits for pilots and senior members different from regular employees at CloudWay 24?",
+      "expected_file_id": "81c085a1-5aae-421c-883a-d4415d2d1cdb",
+      "expected_chunk_ids": [
+        "ac06f06b5c0639a8a119fa736be26b9722d9613555a14af5a4de4338173f7ebd",
+        "c4dc56eee3d8a7b155f4d3729e135053d4f7f9b224a06d0112ac06d9532e81a0"
+      ],
+      "reference_answer": "Pilots and employees at Senior Management level and above are entitled to a complimentary upgrade to CloudElite (Business Class) on their 4 annual free round-trip tickets. Additional perks include priority check-in and boarding, and lounge access for themselves and accompanying family using free tickets, which are not provided to regular employees.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book my free tickets as a CloudWay 24 employee?",
+      "expected_file_id": "81c085a1-5aae-421c-883a-d4415d2d1cdb",
+      "expected_chunk_ids": [
+        "63163fb044286ccc962e27caec709502fed9e514f9e0f745d1c9fc3aa38545c5",
+        "608513c8bec433636e7100475b9ff521172b6819454307d9ffba831626179695",
+        "769110d283bab88a7dbd503b649214e321c0b55a574d42445819a0fdbb79f552",
+        "5f947671fe35e720d90f5b84797cc59a103fdc50477587ea0e94df49c3f4ec57"
+      ],
+      "reference_answer": "All bookings must be made via the CloudWay 24 Staff Portal. Employees need to log in to the portal to access their staff travel tickets and adhere to terms, including seat availability and blackout dates. Tickets are non-transferable except for immediate family per HR records, and any taxes and surcharges must be borne by the employee.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudWay 24 offer ticket discounts beyond the free round trips?",
+      "expected_file_id": "81c085a1-5aae-421c-883a-d4415d2d1cdb",
+      "expected_chunk_ids": [
+        "c4dc56eee3d8a7b155f4d3729e135053d4f7f9b224a06d0112ac06d9532e81a0",
+        "ac06f06b5c0639a8a119fa736be26b9722d9613555a14af5a4de4338173f7ebd",
+        "5f947671fe35e720d90f5b84797cc59a103fdc50477587ea0e94df49c3f4ec57"
+      ],
+      "reference_answer": "Beyond the 4 free round trips, employees receive a 50% discount on unlimited additional tickets (Economy Class), upgrades to higher cabin classes at special staff rates (subject to availability), and earn SkyPoints 24 loyalty program points on discounted tickets, unless otherwise specified.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I upgrade my seat with CloudWay 24?",
+      "expected_file_id": "fe49fdcd-3281-4a40-b8c0-4f33c4dd104d",
+      "expected_chunk_ids": [
+        "be6c05bbe18c26984db0d6d189da2d080c432f5311918b192ed9434dcc275802",
+        "dc72508691445fc2a473f9c57a233989e6da87855d23f1364e4483a67710d69d",
+        "effbcfc7c5606bd13739f8bb8c74520d68f57cc74ab01efa601f207bf24f0d25",
+        "29b06379417a1dff3c3326105ecc66b6234ba2611001733b334bbb080ccf68a7",
+        "c4fc2e58d0945b7bd3b314d657119ee7344a154fc644c30ffb804a2031e6fa3e"
+      ],
+      "reference_answer": "1. **Visit Us Online or Use Our App**\n - Go to [CloudWay24.com](https://cloudway24.com) or open the *CloudWay24* app.\n - Login to your account.\n\n2. **Access \"Manage My Flight\"**\n - Select the booking you want to upgrade.\n - Click on \"Upgrade Your Seat.\"\n\n3. **Choose Your Preferred Cabin Class**\n - View available seats across higher classes.\n - Review upgrade costs in your preferred currency or pay with your SkyPoints 24 points.\n\n4. **Make Payment**\n - Options: Credit card, Debit card, Netbanking, or SkyPoints 24 points.\n - Confirm your upgrade.\n\n5. **Receive Confirmation**\n - An updated e-ticket will be sent to your email and app.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the reasons for upgrading a seat with CloudWay 24?",
+      "expected_file_id": "fe49fdcd-3281-4a40-b8c0-4f33c4dd104d",
+      "expected_chunk_ids": [
+        "adb7b9df5389198634231b7606604b44ed501b4cb436bdead9923b8c9a7bac34"
+      ],
+      "reference_answer": "- **Enhanced Comfort:** Enjoy wider seats, additional legroom, and premium cabin amenities.\n- **Exclusive Services:** Priority check-in, extra baggage allowance, gourmet meals, and lounge access (varies by cabin).\n- **Personalized Experience:** Dedicated crew and a curated selection of entertainment and dining options.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the different cabin classes available for upgrade at CloudWay 24?",
+      "expected_file_id": "fe49fdcd-3281-4a40-b8c0-4f33c4dd104d",
+      "expected_chunk_ids": [
+        "dc72508691445fc2a473f9c57a233989e6da87855d23f1364e4483a67710d69d"
+      ],
+      "reference_answer": "- **CloudSaver (Economy)** → **CloudComfort (Premium Economy)**\n- **CloudComfort (Premium Economy)** → **CloudElite (Business Class)**\n- **CloudElite (Business Class)** → **CloudLux (First Class)**",
+      "expect_miss": false
+    },
+    {
+      "question": "What additional ways can I explore to upgrade my seat on CloudWay 24?",
+      "expected_file_id": "fe49fdcd-3281-4a40-b8c0-4f33c4dd104d",
+      "expected_chunk_ids": [
+        "effbcfc7c5606bd13739f8bb8c74520d68f57cc74ab01efa601f207bf24f0d25",
+        "29b06379417a1dff3c3326105ecc66b6234ba2611001733b334bbb080ccf68a7",
+        "dc72508691445fc2a473f9c57a233989e6da87855d23f1364e4483a67710d69d",
+        "be6c05bbe18c26984db0d6d189da2d080c432f5311918b192ed9434dcc275802",
+        "c4fc2e58d0945b7bd3b314d657119ee7344a154fc644c30ffb804a2031e6fa3e"
+      ],
+      "reference_answer": "- **Airport Upgrade Desk:** Ask at the CloudWay 24 counter during check-in (subject to availability).\n- **Upgrade Offers:** Look out for special upgrade emails or in-app notifications before your flight.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the options for using SkyPoints 24 for upgrades at CloudWay 24?",
+      "expected_file_id": "fe49fdcd-3281-4a40-b8c0-4f33c4dd104d",
+      "expected_chunk_ids": [
+        "effbcfc7c5606bd13739f8bb8c74520d68f57cc74ab01efa601f207bf24f0d25",
+        "adb7b9df5389198634231b7606604b44ed501b4cb436bdead9923b8c9a7bac34"
+      ],
+      "reference_answer": "- Use your accumulated points for full or partial upgrades.\n- Tier status may offer complimentary or discounted upgrades on select flights (check your benefits).",
+      "expect_miss": false
+    },
+    {
+      "question": "How can Pilots and Cabin Crew submit expense claims at CloudWay 24?",
+      "expected_file_id": "576c86ed-63db-4159-8caa-11b3bada7780",
+      "expected_chunk_ids": [
+        "79fd8e051d273103451d257eace187e4db8ff4d043aab5dd4a1122c9d539653b",
+        "b15e340268e1ab90938f4f805e0b819282edf1894ca5f588cea45c3ea5b0f580",
+        "518e1769b7b88b241713f233f599238990cc9287b6522328a1087e53e54245a1",
+        "aa23621cdeb5573e657da5154ad030ce8d2c8022b28d89c9ce5d26b18f848f6d",
+        "f6cb11010928f6fe2462eaf0f48e4e220f693bd68c180dd3979d3cc589f56638"
+      ],
+      "reference_answer": "## 3. Claim Submission Process\n\n### a) Documentation Required\n- **Original Receipts:** Must state amount, date, item/service, and location.\n- **Expense Claim Form:** Downloadable from CloudWay 24 Staff Portal.\n- **Supervisor Approval:** (If claiming under ‘Other Approved Costs’).\n\n### b) Submission Timeline\n- Submit claims **within 30 days** of completion of the trip/duty.\n\n### c) How to Submit\n1. Log in to CloudWay 24 Staff Portal.\n2. Navigate to: **HR Services > Expense Claims**.\n3. Fill in all required details, upload scanned receipts.\n4. Add any required remarks/supervisory approvals.\n5. Submit for Processing.",
+      "expect_miss": false
+    },
+    {
+      "question": "Are personal entertainment expenses reimbursable under CloudWay 24 policy?",
+      "expected_file_id": "576c86ed-63db-4159-8caa-11b3bada7780",
+      "expected_chunk_ids": [
+        "9bee03b7388e2842fe8b5f561598548991b9ace37cb35aabceb961500681156b"
+      ],
+      "reference_answer": "> _Personal entertainment, alcohol (unless required for official functions), souvenirs, or gifts are **NOT reimbursable**._",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the eligible expenses for CloudWay 24 Pilots and Cabin Crew?",
+      "expected_file_id": "576c86ed-63db-4159-8caa-11b3bada7780",
+      "expected_chunk_ids": [
+        "f6cb11010928f6fe2462eaf0f48e4e220f693bd68c180dd3979d3cc589f56638",
+        "518e1769b7b88b241713f233f599238990cc9287b6522328a1087e53e54245a1",
+        "9bee03b7388e2842fe8b5f561598548991b9ace37cb35aabceb961500681156b",
+        "79fd8e051d273103451d257eace187e4db8ff4d043aab5dd4a1122c9d539653b"
+      ],
+      "reference_answer": "## 1. Eligible Expenses\n\n- **Meals & Refreshments:** When not provided by CloudWay 24 during layovers.\n- **Communication Costs:** Work-related calls/internet when airline-provided options are unavailable.\n- **Uniform Maintenance:** Laundry or pressing services during extended layovers (minimum 2 nights).\n- **Official Miscellaneous Purchases:** Items bought at the explicit request of a supervisor (e.g., minor crew supplies).\n- **Other Approved Costs:** As pre-authorized by Flight Operations or Cabin Services Management.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why is it important for CloudWay 24 staff to get written approval for certain expenses?",
+      "expected_file_id": "576c86ed-63db-4159-8caa-11b3bada7780",
+      "expected_chunk_ids": [
+        "79fd8e051d273103451d257eace187e4db8ff4d043aab5dd4a1122c9d539653b"
+      ],
+      "reference_answer": "_If in doubt, seek written approval from your Line Manager before incurring the expense._\n\nThis ensures compliance with company policy, prevents unnecessary expenditure, and secures reimbursement by verifying that the expense aligns with company-approved costs.",
+      "expect_miss": false
+    },
+    {
+      "question": "What is CloudWay 24's work culture like?",
+      "expected_file_id": "f3073cb8-f5c6-4ea1-9725-bd0e292b912b",
+      "expected_chunk_ids": [
+        "d33280ed2361068ec52e638a0e2017ca635e7f34de7f2c3d059aae856782db2f",
+        "b674505d2f781901ed08085a15dfa0790fe614afcf4da9bee3ca5549818ae0b2"
+      ],
+      "reference_answer": "Our Culture\n- **Inclusive & Diverse:** We celebrate diversity and believe every team member contributes to our collective success.\n- **Customer-Focused:** Delivering memorable experiences is at the heart of our mission.\n- **Innovation-Driven:** Encourage new ideas and provide opportunities to redefine air travel.\n- **Team Spirit:** Strong collaboration between cockpit, cabin crew, ground staff, engineers, and corporate teams.\n\nWork Environment\n- Modern offices at our Mumbai HQ and airport hubs\n- Open communication & transparent leadership\n- A culture of recognition and respect",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I apply for a job at CloudWay 24?",
+      "expected_file_id": "f3073cb8-f5c6-4ea1-9725-bd0e292b912b",
+      "expected_chunk_ids": [
+        "1cf9f0ced6dc3a17b7506a2d378a52aaa593bd5829f68a017e2e10189d4bd63c",
+        "bb1bcb3617d967ac01d020656884d6743a7533a4cf704ce814b9714b80c718e5"
+      ],
+      "reference_answer": "How to Apply\n1. **Visit:** [CloudWay24.com/careers](https://cloudway24.com/careers)\n2. **Sign up** with your email or mobile.\n3. **Browse** open positions, upload your CV, and submit your application.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the benefits of working at CloudWay 24?",
+      "expected_file_id": "f3073cb8-f5c6-4ea1-9725-bd0e292b912b",
+      "expected_chunk_ids": [
+        "b674505d2f781901ed08085a15dfa0790fe614afcf4da9bee3ca5549818ae0b2",
+        "5846d769d08083fc3a4ef35f5735adb146196e32cd09a90f5436ca0c2a89b8ca"
+      ],
+      "reference_answer": "Employee Benefits\n- **Competitive Compensation** \n- **Medical & Wellness Programs** \n- **Travel Benefits (for you & family)** \n- **SkyPoints 24 membership perks** \n- **Learning & Development Programs** \n- **Performance Bonuses & Rewards** \n- **Flexible Schedules & Remote Work Opportunities (selected roles)** \n- **Employee Assistance Programs**",
+      "expect_miss": false
+    },
+    {
+      "question": "Is CloudWay 24 based in India?",
+      "expected_file_id": "f3073cb8-f5c6-4ea1-9725-bd0e292b912b",
+      "expected_chunk_ids": [
+        "bb1bcb3617d967ac01d020656884d6743a7533a4cf704ce814b9714b80c718e5",
+        "a33ef2c47370f54d74be1d37ed39b205639007fda58afe87c356dfaeeb5b6d96",
+        "71417a5990dbe479aa3d8395082e7861134c999f495ec309c2bcce4b132475e2",
+        "a8e9a81f50aada11d8a5798cbb57a00c421387f08153439089544d31f3619fe7",
+        "1cf9f0ced6dc3a17b7506a2d378a52aaa593bd5829f68a017e2e10189d4bd63c"
+      ],
+      "reference_answer": "Welcome to **CloudWay 24 Careers**—where your journey takes off! Join one of India’s fastest-growing international airlines and help us redefine the skies with innovation, dedication, and world-class service.\n\nWork Environment\n- Modern offices at our Mumbai HQ and airport hubs",
+      "expect_miss": false
+    },
+    {
+      "question": "Why is global exposure emphasized at CloudWay 24?",
+      "expected_file_id": "f3073cb8-f5c6-4ea1-9725-bd0e292b912b",
+      "expected_chunk_ids": [
+        "a8e9a81f50aada11d8a5798cbb57a00c421387f08153439089544d31f3619fe7",
+        "1cf9f0ced6dc3a17b7506a2d378a52aaa593bd5829f68a017e2e10189d4bd63c",
+        "b674505d2f781901ed08085a15dfa0790fe614afcf4da9bee3ca5549818ae0b2"
+      ],
+      "reference_answer": "Global Exposure\nWith operations spanning Asia, Europe, North America, and the Middle East, every role at CloudWay 24 offers global exposure and the chance to be part of something extraordinary.\n\n> “From day one, the SkyPoints 24 program and travel perks made me feel I was part of a global community.” \n> — Arjun N., IT & Innovation Lead",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the highlights of CloudWay 24's student offers?",
+      "expected_file_id": "efda2686-c33a-40e8-97b3-e7413534cf37",
+      "expected_chunk_ids": [
+        "75233c54d986bc7df09791091faedf7487259700320e799de011e4239b3d4528",
+        "bcf55adb3e8ee70ed6e2db3311462367dedb623ea542f78bf1f7f3e802b6ee69",
+        "75ebc0d58dbd40445d29cf76b4b8095f0134946496ffff523d57b54d3a6e96fc",
+        "fd36650ab05a74b4ba0cdf138a2d14b70d942eac809758678501c886df7cd90d",
+        "8d38e429a0148701255094924fc3146dcf8d9f4cc7448d22019aa18e7d214ba7"
+      ],
+      "reference_answer": "CloudWay 24 recognizes the unique travel needs of students pursuing education or attending academic events across the globe. Our exclusive **Student Offers** provide valuable benefits and flexibility, making international journeys more affordable and comfortable!\n\nEnjoy special fares with up to 10% off on CloudSaver (Economy) and CloudComfort (Premium Economy) fares for students aged 18–30. Travel worry-free with 1 additional checked bag (up to 23kg) on all international routes, and enjoy a one-time free date change in case your plans change. Students can also skip the queue with dedicated check-in counters and earn 500 bonus SkyPoints 24 for their first student booking.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can a student book an offer with CloudWay 24?",
+      "expected_file_id": "efda2686-c33a-40e8-97b3-e7413534cf37",
+      "expected_chunk_ids": [
+        "8d38e429a0148701255094924fc3146dcf8d9f4cc7448d22019aa18e7d214ba7",
+        "d28e77d803e4714a918d5c2137c52cfdbbdfe0a384e3c95f4a15f23ab52f7b80",
+        "75ebc0d58dbd40445d29cf76b4b8095f0134946496ffff523d57b54d3a6e96fc",
+        "75233c54d986bc7df09791091faedf7487259700320e799de011e4239b3d4528",
+        "bcf55adb3e8ee70ed6e2db3311462367dedb623ea542f78bf1f7f3e802b6ee69"
+      ],
+      "reference_answer": "Register on [CloudWay24.com](https://CloudWay24.com) or the CloudWay24 App with email or mobile verification. Select “Student Fare” when booking, and choose your route, travel dates, and cabin class. At checkout, upload a valid student ID/admission letter for verification, then pay securely using a credit card, debit card, netbanking, or SkyPoints 24 points.",
+      "expect_miss": false
+    },
+    {
+      "question": "Do students need a valid student ID to avail CloudWay 24 offers?",
+      "expected_file_id": "efda2686-c33a-40e8-97b3-e7413534cf37",
+      "expected_chunk_ids": [
+        "8d38e429a0148701255094924fc3146dcf8d9f4cc7448d22019aa18e7d214ba7"
+      ],
+      "reference_answer": "Students must possess a valid student ID or university admission/offer letter to avail themselves of the offers. They also need to be between the ages of 18–30 and booking outbound or inbound international flights from India.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24 support students differently than regular travelers?",
+      "expected_file_id": "efda2686-c33a-40e8-97b3-e7413534cf37",
+      "expected_chunk_ids": [
+        "bcf55adb3e8ee70ed6e2db3311462367dedb623ea542f78bf1f7f3e802b6ee69",
+        "fd36650ab05a74b4ba0cdf138a2d14b70d942eac809758678501c886df7cd90d",
+        "75233c54d986bc7df09791091faedf7487259700320e799de011e4239b3d4528",
+        "d28e77d803e4714a918d5c2137c52cfdbbdfe0a384e3c95f4a15f23ab52f7b80"
+      ],
+      "reference_answer": "Students enjoy special fares with up to 10% off, one additional checked bag on international routes, and a one-time free date change. They have access to priority check-in counters and earn bonus SkyPoints 24 on their first booking. Regular travelers do not have these specific benefits tailored for students.",
+      "expect_miss": false
+    },
+    {
+      "question": "What is the seating configuration of CloudWay 24's Boeing 787 Dreamliner?",
+      "expected_file_id": "49456661-36ae-491c-9be5-d719486882b6",
+      "expected_chunk_ids": [
+        "0c0524f265396fbc0dc39cc97064fb539cd9f85e224f58e52a07119512558677",
+        "d45fb080ec4f0cdb2ee6c9bb1865b05bb786dd138ad4efba49aded24aee31ad7",
+        "1951269e8d234c8c32b363c9a19ed7379dccbf97cf0bd6acbb8b144f57f634dd",
+        "00d8616b6fc6cc672120acc9014aa04337c1b5f7c79bfec4e490116104f15fb6",
+        "084fed80b8abdcd815664fe49d12fe1f6fad251daa852027cd72dc5150d40d1f"
+      ],
+      "reference_answer": "CloudWay 24 operates a modern fleet of Boeing 787 Dreamliners. Below is an overview of the aircraft’s seating capacity and detailed breakdown of class-wise cabin features as configured for CloudWay 24’s international long-haul service.\n\n| Cabin Class | No. of Seats | Configuration |\n|----------------|:------------:|---------------|\n| CloudLux | 8 | 1-2-1 |\n| CloudElite | 32 | 1-2-1 |\n| CloudComfort | 40 | 2-3-2 |\n| CloudSaver | 210 | 3-3-3 |\n\n**Total Seating Capacity:** 290 seats *(Typical CloudWay 24 configuration)*",
+      "expect_miss": false
+    },
+    {
+      "question": "What amenities are provided in CloudLux class on CloudWay 24?",
+      "expected_file_id": "49456661-36ae-491c-9be5-d719486882b6",
+      "expected_chunk_ids": [
+        "00d8616b6fc6cc672120acc9014aa04337c1b5f7c79bfec4e490116104f15fb6",
+        "71ccbf40dd80043fe1642c26f0a1960a1737c0d3b8b82fe65421897c09a2d306",
+        "d45fb080ec4f0cdb2ee6c9bb1865b05bb786dd138ad4efba49aded24aee31ad7",
+        "084fed80b8abdcd815664fe49d12fe1f6fad251daa852027cd72dc5150d40d1f",
+        "1951269e8d234c8c32b363c9a19ed7379dccbf97cf0bd6acbb8b144f57f634dd"
+      ],
+      "reference_answer": "CloudWay 24 operates a modern fleet of Boeing 787 Dreamliners, renowned for their fuel efficiency, passenger comfort, and advanced technology.\n\n### 1. CloudLux (First Class)\n- **Seating:** 180° lie-flat suites with privacy doors\n- **Amenities:** Personal wardrobe, luxury amenity kit, plush duvet & pillow\n- **Entertainment:** 22-inch HD screen, noise-cancelling headphones\n- **Dining:** Gourmet à la carte dining, exclusive fine wines & spirits\n- **Other:** Priority boarding, chauffeur service (select routes), access to CloudWay 24 First Lounge",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudLux class compare to CloudSaver class in terms of seating and in-flight services?",
+      "expected_file_id": "49456661-36ae-491c-9be5-d719486882b6",
+      "expected_chunk_ids": [
+        "00d8616b6fc6cc672120acc9014aa04337c1b5f7c79bfec4e490116104f15fb6",
+        "d70de5116fdd19617281764e2886a9cafc53c63f67da9a29e6f0b9e9726a9723",
+        "71ccbf40dd80043fe1642c26f0a1960a1737c0d3b8b82fe65421897c09a2d306",
+        "084fed80b8abdcd815664fe49d12fe1f6fad251daa852027cd72dc5150d40d1f",
+        "1951269e8d234c8c32b363c9a19ed7379dccbf97cf0bd6acbb8b144f57f634dd"
+      ],
+      "reference_answer": "### 1. CloudLux (First Class)\n- **Seating:** 180° lie-flat suites with privacy doors\n- **Amenities:** Personal wardrobe, luxury amenity kit, plush duvet & pillow\n- **Entertainment:** 22-inch HD screen, noise-cancelling headphones\n- **Dining:** Gourmet à la carte dining, exclusive fine wines & spirits\n- **Other:** Priority boarding, chauffeur service (select routes), access to CloudWay 24 First Lounge\n\n### 4. CloudSaver (Economy)\n- **Seating:** Ergonomically-designed seats (31–32” pitch)\n- **Amenities:** Standard bedding, basic amenity kit on long-haul\n- **Entertainment:** 10-inch personal screen with on-demand movies, TV, games\n- **Dining:** Complimentary meals & snacks, beverage service",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I book a flight on a CloudWay 24 Boeing 787 Dreamliner?",
+      "expected_file_id": "49456661-36ae-491c-9be5-d719486882b6",
+      "expected_chunk_ids": [
+        "d45fb080ec4f0cdb2ee6c9bb1865b05bb786dd138ad4efba49aded24aee31ad7",
+        "1951269e8d234c8c32b363c9a19ed7379dccbf97cf0bd6acbb8b144f57f634dd"
+      ],
+      "reference_answer": "CloudWay 24 operates a modern fleet of Boeing 787 Dreamliners, renowned for their fuel efficiency, passenger comfort, and advanced technology.\n\n**For more details and to book your CloudWay 24 Dreamliner experience, visit [CloudWay24.com](https://www.CloudWay24.com) or use the CloudWay 24 mobile app.**",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I share feedback or file a complaint regarding my travel experience with CloudWay 24?",
+      "expected_file_id": "8dd0a6cf-5849-43d6-8f3c-ce13aac51b1f",
+      "expected_chunk_ids": [
+        "2a54b16a7d61252f88906d00030ddca85c279ce543e0b2b84f4d99db28922618",
+        "c572ddb375e8ae03b644274e2001fed88512c22fc59650f4dfd51c9483e1144e",
+        "61ae98238aa1933efbf411446564fbb296a5f1f3824c8854ad783e08807ddab4",
+        "3dc5d14562efbd76c936647de26133e2206c79c9ea720fef5ab3b40f2e0370cc",
+        "72a36e219d91acadb4f9fd3e4a44a0140f1b1a510c808e80b18f0016fc950b6f"
+      ],
+      "reference_answer": "At **CloudWay 24**, we are dedicated to providing you with the highest standard of service. Your feedback and complaints are invaluable to us as they help us improve your travel experience. If you have any feedback, suggestions, or concerns regarding your recent journey, please reach out using any of the channels listed below.\n\n### 1. **Online Feedback/Complaint Form**\n\n- Visit: [CloudWay24.com/feedback](https://cloudway24.com/feedback)\n- Fill out the form with details about your journey, feedback, or issue.\n- Provide your booking reference (PNR), flight details, and contact information for prompt assistance.\n\n### 2. **CloudWay 24 Mobile App**\n\n- Open the CloudWay 24 app (available on iOS/Android)\n- Go to: `Support` > `Feedback & Complaints`\n- Complete the guided form and submit your comments or issue.\n\n### 3. **Customer Support Email**\n\n- Email your feedback or complaint to: [support@cloudway24.com](mailto:support@cloudway24.com)\n- Subject line: *Feedback/Complaint – [Booking Reference/Flight Number]*\n- Include details such as your full name, contact information, flight details, description of your experience or issue, and attach supporting documents (if any).\n\n### 4. **Customer Care Helpline**\n\n- Call us at: +91-22-1234-2424\n- Available 24/7 for immediate assistance\n\n### 5. **Airport Customer Service Desks**\n\n- Visit CloudWay 24 service desks at all main international airports (Mumbai, Delhi, Bengaluru).\n- Speak directly to a representative regarding your feedback or complaint.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why is feedback important to CloudWay 24?",
+      "expected_file_id": "8dd0a6cf-5849-43d6-8f3c-ce13aac51b1f",
+      "expected_chunk_ids": [
+        "3dc5d14562efbd76c936647de26133e2206c79c9ea720fef5ab3b40f2e0370cc",
+        "c572ddb375e8ae03b644274e2001fed88512c22fc59650f4dfd51c9483e1144e",
+        "61ae98238aa1933efbf411446564fbb296a5f1f3824c8854ad783e08807ddab4",
+        "2a54b16a7d61252f88906d00030ddca85c279ce543e0b2b84f4d99db28922618",
+        "72a36e219d91acadb4f9fd3e4a44a0140f1b1a510c808e80b18f0016fc950b6f"
+      ],
+      "reference_answer": "At **CloudWay 24**, we are dedicated to providing you with the highest standard of service. Your feedback and complaints are invaluable to us as they help us improve your travel experience.\n\nCloudWay 24 values your input and strives to resolve all issues fairly, transparently, and promptly, ensuring your journey remains seamless. Thank you for helping us improve.",
+      "expect_miss": false
+    },
+    {
+      "question": "What steps do CloudWay 24 take after receiving a feedback or complaint?",
+      "expected_file_id": "8dd0a6cf-5849-43d6-8f3c-ce13aac51b1f",
+      "expected_chunk_ids": [
+        "ff19948ef3c8f298f50491e738b645baaee4527e1942d9baae8443c3a9a28866"
+      ],
+      "reference_answer": "## What Happens Next?\n\n- **Acknowledgement:** You will receive an acknowledgement within 24 hours of submitting your feedback or complaint.\n- **Investigation:** Our customer care team will review and investigate your case thoroughly.\n- **Resolution:** You will receive a response and resolution via email or phone within 7 business days. Complex cases may require additional time.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudWay 24 offer customer support via email?",
+      "expected_file_id": "8dd0a6cf-5849-43d6-8f3c-ce13aac51b1f",
+      "expected_chunk_ids": [
+        "61ae98238aa1933efbf411446564fbb296a5f1f3824c8854ad783e08807ddab4",
+        "2a54b16a7d61252f88906d00030ddca85c279ce543e0b2b84f4d99db28922618",
+        "c572ddb375e8ae03b644274e2001fed88512c22fc59650f4dfd51c9483e1144e",
+        "3dc5d14562efbd76c936647de26133e2206c79c9ea720fef5ab3b40f2e0370cc",
+        "72a36e219d91acadb4f9fd3e4a44a0140f1b1a510c808e80b18f0016fc950b6f"
+      ],
+      "reference_answer": "### 3. **Customer Support Email**\n\n- Email your feedback or complaint to: [support@cloudway24.com](mailto:support@cloudway24.com)\n- Subject line: *Feedback/Complaint – [Booking Reference/Flight Number]*\n- Include details such as your full name, contact information, flight details, description of your experience or issue, and attach supporting documents (if any).",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the fundamental passenger rights at CloudWay 24?",
+      "expected_file_id": "4244bb3c-54ce-4719-8d9a-57110a57286a",
+      "expected_chunk_ids": [
+        "5cf80541e6848a472915c25a4cb115a388356e3fdf3b2b2704ba8846bfbeec79",
+        "426909c55d31c4012fb507fa25f3e6f5eb649c7a34b03dde6c0fc1788d2034a8",
+        "42ecb902aa8a485c8ee1e3a3765df30226fc27d3e788f59388ffa463f1002d11",
+        "78bb0c42cfb84521e667139b5f71880aed97dee16e72523486b10832e98df929",
+        "61256e8060f1cb8fd13373640b114198d9375e1779b4be6cecfe46cf155ab71e"
+      ],
+      "reference_answer": "At CloudWay 24, we are committed to providing a safe, comfortable, and reliable travel experience for all our passengers. We believe in transparency, prompt communication, and protecting the interests of our travelers. Below are your fundamental passenger rights when flying with CloudWay 24.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I request special assistance for mobility needs when traveling with CloudWay 24?",
+      "expected_file_id": "4244bb3c-54ce-4719-8d9a-57110a57286a",
+      "expected_chunk_ids": [
+        "997804d54d4a945676689f05c086b77f736d654d00f5e7fcc2d76f19748c904b"
+      ],
+      "reference_answer": "Passengers with reduced mobility or special requirements can request assistance during booking or up to 48 hours before departure.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why does CloudWay 24 emphasize the right to information for its passengers?",
+      "expected_file_id": "4244bb3c-54ce-4719-8d9a-57110a57286a",
+      "expected_chunk_ids": [
+        "878e4626066db0e86f0ee101bd4eb17f5000e44e96a1d2eb863035a6a3a57578",
+        "c5160cf06e719b634cdd0ca46512cff0c3f5234d071c2839dff05adb92396442",
+        "3faad7aef7b5e99f4f16efe94338353796407522e0cf0f644074db4d2230a4db"
+      ],
+      "reference_answer": "You are entitled to complete information regarding fares, taxes, surcharges, and any additional fees at the time of booking. You will receive prompt electronic confirmation of your booking and any schedule changes, delays, or cancellations.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24 handle denied boarding compared to other passenger rights?",
+      "expected_file_id": "4244bb3c-54ce-4719-8d9a-57110a57286a",
+      "expected_chunk_ids": [
+        "c5160cf06e719b634cdd0ca46512cff0c3f5234d071c2839dff05adb92396442",
+        "61256e8060f1cb8fd13373640b114198d9375e1779b4be6cecfe46cf155ab71e"
+      ],
+      "reference_answer": "If you are denied boarding involuntarily (e.g., due to overbooking), you will be offered alternate travel options or a full refund, along with compensation as per regulatory norms. This is part of their commitment to the Right to Care & Assistance.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I change my seat with CloudWay 24?",
+      "expected_file_id": "e6c108ad-3f91-475b-bcfe-977f4bc1164c",
+      "expected_chunk_ids": [
+        "01a7935cb4873ebc4a9b6832930ca54310701fd77e2141ae5cf4b05e1c8b1690",
+        "450506b018686fa6babdaf018319583d213fa2582cbb5fe2237cb6577644d898",
+        "9287a32394b590195183ad1b7094bc0319f4e8df82d5291030be34291d0e2618",
+        "ce740e1615eb473855b5ed331db6335ffd0fa72dc2f9312c3e1c391c9b936b6b",
+        "4a2b40dde2dd69d8c4442cb6c0388f0621d79c4b67653954e2a16de1f5677c1c"
+      ],
+      "reference_answer": "CloudWay 24 offers a simple and flexible process for changing your seat to suit your comfort and preference. Whether you want extra legroom, prefer a window or aisle seat, or wish to sit closer to the front, you can manage your seat selection seamlessly through our website or mobile app.\n\n1. Log in to Your Account: Visit [CloudWay24.com](https://cloudway24.com) or open the CloudWay24 App (iOS & Android). Log in using your registered email or mobile number.\n\n2. Navigate to “Manage My Flight”: Select Manage My Flight from the main menu/dashboard. Enter your booking reference (PNR) and last name to access your reservation.\n\n3. Select “Change Your Seat” Option: Find your upcoming journey from the list. Click on Change your seat under your flight details.\n\n4. Choose Your Preferred Seat: View the interactive seat map for your selected flight. Choose your new seat based on availability and cabin class. Note: Some seats may carry an additional charge.\n\n5. Review & Confirm: Confirm your new seat selection and receive instant confirmation and an updated boarding pass.",
+      "expect_miss": false
+    },
+    {
+      "question": "What payment options does CloudWay 24 offer for seat changes?",
+      "expected_file_id": "e6c108ad-3f91-475b-bcfe-977f4bc1164c",
+      "expected_chunk_ids": [
+        "344e828a730651457e45b098c17be4046c80351e2916303bd4a8c17acdb21b0f"
+      ],
+      "reference_answer": "Payment Options: Credit Card, Debit Card, Netbanking, SkyPoints 24 Points (loyalty rewards).",
+      "expect_miss": false
+    },
+    {
+      "question": "Why might a customer prefer to change their seat on CloudWay 24?",
+      "expected_file_id": "e6c108ad-3f91-475b-bcfe-977f4bc1164c",
+      "expected_chunk_ids": [
+        "450506b018686fa6babdaf018319583d213fa2582cbb5fe2237cb6577644d898",
+        "4a2b40dde2dd69d8c4442cb6c0388f0621d79c4b67653954e2a16de1f5677c1c",
+        "057dccdfdf81f279699edf14bc4e0ebbbd5cefe45047e2d27b9af47d7aa0631b",
+        "ce740e1615eb473855b5ed331db6335ffd0fa72dc2f9312c3e1c391c9b936b6b",
+        "344e828a730651457e45b098c17be4046c80351e2916303bd4a8c17acdb21b0f"
+      ],
+      "reference_answer": "CloudWay 24 offers a simple and flexible process for changing your seat to suit your comfort and preference. Customers may desire extra legroom, a preference for window or aisle seats, or a wish to sit closer to the front.\n\nLoyalty members may have complimentary or discounted seat change options depending on SkyPoints 24 tier status.",
+      "expect_miss": false
+    },
+    {
+      "question": "Are seat changes on CloudWay 24 subject to availability?",
+      "expected_file_id": "e6c108ad-3f91-475b-bcfe-977f4bc1164c",
+      "expected_chunk_ids": [
+        "057dccdfdf81f279699edf14bc4e0ebbbd5cefe45047e2d27b9af47d7aa0631b"
+      ],
+      "reference_answer": "Seat changes are subject to availability, as mentioned in the useful information section.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does seat selection differ among cabin classes on CloudWay 24?",
+      "expected_file_id": "e6c108ad-3f91-475b-bcfe-977f4bc1164c",
+      "expected_chunk_ids": [
+        "ce740e1615eb473855b5ed331db6335ffd0fa72dc2f9312c3e1c391c9b936b6b",
+        "4a2b40dde2dd69d8c4442cb6c0388f0621d79c4b67653954e2a16de1f5677c1c",
+        "450506b018686fa6babdaf018319583d213fa2582cbb5fe2237cb6577644d898"
+      ],
+      "reference_answer": "CloudWay 24 offers different cabin classes for seat selection:\n- CloudLux (First Class)\n- CloudElite (Business Class)\n- CloudComfort (Premium Economy)\n- CloudSaver (Economy)\n\nSeats in certain locations, such as extra legroom or preferred locations, may carry an additional charge.",
+      "expect_miss": false
+    },
+    {
+      "question": "What is the Dangerous Goods policy of CloudWay 24?",
+      "expected_file_id": "3c385f8a-8d47-4b2f-ad02-98d3d3984436",
+      "expected_chunk_ids": [
+        "b79617ddc37a607d8f50ad9cc3f31efcdf066e2d48bdb3822a4ed85f213dc070",
+        "830f00212083d5b4f98ed34fb8ba6248cbcc6860b26f080f2ef05b7eae8fdd07",
+        "f4cb6a4440a1ef09a8e03066a6f8edbf041af7ba0ca3c938cb1be80f901b2bb4"
+      ],
+      "reference_answer": "As per international aviation safety regulations and CloudWay 24's commitment to passenger safety, certain items are classified as **Dangerous Goods** and are strictly regulated. Please review the following policy to ensure compliance and avoid inconvenience during travel.\n\nGeneral guidelines include the prohibition of items that risk health, safety, property, or the environment, a declaration requirement at check-in, and special permission for some items with prior approval.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24 handle lithium batteries compared to alcoholic beverages?",
+      "expected_file_id": "3c385f8a-8d47-4b2f-ad02-98d3d3984436",
+      "expected_chunk_ids": [
+        "d8e487de4d7e759e168c1d081c2e6291cfc8eaf068bcc10fed7bc8bb81fd2244",
+        "ed16e5d83dcde33ab12393856a02c5794c3b2249292143aa13ee060243fb931d",
+        "92824e9638f0d30ba494716d52e73086d9a80bf9d4f9263b63202d772beb13e9"
+      ],
+      "reference_answer": "Lithium batteries are allowed with specific restrictions: spares must be carried in hand baggage only, with a maximum of two per passenger, each up to 100Wh.\n\nAlcoholic beverages are allowed up to 5L in check-in with less than 70% ABV, and up to 100ml per bottle in hand baggage during international transit as duty-free, provided they are sealed according to applicable regulations.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I get approval for traveling with medical oxygen cylinders on CloudWay 24?",
+      "expected_file_id": "3c385f8a-8d47-4b2f-ad02-98d3d3984436",
+      "expected_chunk_ids": [
+        "a23b82534e135e5a845fd659752af8ae4bb8d1387af780111c0843dd287c677e",
+        "92824e9638f0d30ba494716d52e73086d9a80bf9d4f9263b63202d772beb13e9"
+      ],
+      "reference_answer": "Small oxygen cylinders for medical needs are allowed with approval in both check-in and hand baggage. They must be medically necessary, and documentation is required for approval.",
+      "expect_miss": false
+    },
+    {
+      "question": "Are explosives and fireworks allowed on CloudWay 24 flights?",
+      "expected_file_id": "3c385f8a-8d47-4b2f-ad02-98d3d3984436",
+      "expected_chunk_ids": [
+        "e16e131e9febce1cb2848f67ee036d8754297167baa25a67f650642e679b6f72",
+        "92824e9638f0d30ba494716d52e73086d9a80bf9d4f9263b63202d772beb13e9",
+        "f4cb6a4440a1ef09a8e03066a6f8edbf041af7ba0ca3c938cb1be80f901b2bb4"
+      ],
+      "reference_answer": "Explosives and fireworks are not allowed in either check-in or hand baggage. This includes items such as fireworks, flares, party poppers, and ammunition.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I book a flight with CloudWay 24?",
+      "expected_file_id": "4c9f3364-745f-4291-a1b5-bb36c2657d71",
+      "expected_chunk_ids": [
+        "3bdc3d5277c46d1fdf3308e10679eb689de9cd24eacad1d5586e92eee1e292a1",
+        "c1268316196e68dcb765226ad0ebda23b50846f0aca717e132b687855b5b7fa5",
+        "60f98ee6267a1368b7403348560cc00093f266d9c5a2d8acba0b68b54e4218cc",
+        "a901ea929cf17d8375d64e7285506e731853b1557808b1fe2b12f11bd6988b2a",
+        "6a6817639256b358a3f2bbeb14b4b0b0895e843b473cef73fa60ed6e8de646a8"
+      ],
+      "reference_answer": "CloudWay 24 offers an easy and seamless booking experience via their website and mobile app (available for iOS and Android). Follow these steps to book your next international journey!\n\n1. Sign Up / Log In: Visit CloudWay24.com or open the CloudWay 24 app. Sign up or log in using your email address or mobile number.\n2. Start Your Booking: Click or tap on \"Plan My Flight\".\n3. Select Your Trip Type: Choose either Round Trip or One Way.\n4. Choose Your Route: Select your Source city and Destination city. Enter preferred departure and (if round-trip) return dates.\n5. Pick Your Cabin Class: Options include CloudLux, CloudElite, CloudComfort, or CloudSaver.\n6. Confirm Flight Options: Browse available flights and select the one that best suits your schedule and preferences.\n7. Enter Passenger Details: Fill in details for all travelers in your booking.\n8. Payment: Choose your payment method such as Credit Card, Debit Card, Netbanking, or SkyPoints 24 loyalty points.\n9. Booking Confirmation: Receive an instant booking confirmation via email and SMS.",
+      "expect_miss": false
+    },
+    {
+      "question": "Tell me about the additional features CloudWay 24 offers.",
+      "expected_file_id": "4c9f3364-745f-4291-a1b5-bb36c2657d71",
+      "expected_chunk_ids": [
+        "60f98ee6267a1368b7403348560cc00093f266d9c5a2d8acba0b68b54e4218cc",
+        "3bdc3d5277c46d1fdf3308e10679eb689de9cd24eacad1d5586e92eee1e292a1"
+      ],
+      "reference_answer": "CloudWay 24 provides several additional features to enhance your travel experience.\n\nManage My Flight: This includes options to cancel or change your booking, choose or change your seat, upgrade your flight, manage chauffeur-drive, book accessible travel, and check-in online.\nFor additional assistance, visit CloudWay24.com or use in-app support for further help.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudLux differ from CloudComfort on CloudWay 24?",
+      "expected_file_id": "4c9f3364-745f-4291-a1b5-bb36c2657d71",
+      "expected_chunk_ids": [
+        "c1268316196e68dcb765226ad0ebda23b50846f0aca717e132b687855b5b7fa5"
+      ],
+      "reference_answer": "CloudWay 24 offers four cabin classes for passengers to choose from.\n\nCloudLux is the First Class option, likely providing the most luxurious experience with premium services, while CloudComfort represents the Premium Economy class, combining comfort with affordability. Differences may include seat quality, service, and amenities.",
+      "expect_miss": false
+    },
+    {
+      "question": "Can you check-in online with CloudWay 24?",
+      "expected_file_id": "4c9f3364-745f-4291-a1b5-bb36c2657d71",
+      "expected_chunk_ids": [
+        "60f98ee6267a1368b7403348560cc00093f266d9c5a2d8acba0b68b54e4218cc",
+        "3bdc3d5277c46d1fdf3308e10679eb689de9cd24eacad1d5586e92eee1e292a1"
+      ],
+      "reference_answer": "CloudWay 24 provides several options for managing your flight, including online check-in.\n\nAdditional features allow you to cancel, change, and manage other aspects of your booking, ensuring flexibility and convenience for passengers.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I request special assistance for my flight with CloudWay 24?",
+      "expected_file_id": "3c57d99f-7f81-4fcb-a1d1-b27e43731630",
+      "expected_chunk_ids": [
+        "e57754bed39e5191f55d4d5e6c2270f19df53b55ee105914bb9db02584578889",
+        "efa1d0bd72ea4c12ebbe375bbbdea135ee6d09b6ba5a1eae287cdad9f846cf66",
+        "b6d46dd85f6f7725fd56156b203308f180d3008c44ecefda089d7fa4516d3049"
+      ],
+      "reference_answer": "You can request special assistance during the booking process on **CloudWay24.com** or the **CloudWay24 mobile app**. Alternatively, you can contact the Customer Service Team via email or phone, or request assistance at the airport check-in counter prior to your flight. For the best experience, please inform CloudWay 24 at least 48 hours before departure.",
+      "expect_miss": false
+    },
+    {
+      "question": "What types of special assistance does CloudWay 24 offer?",
+      "expected_file_id": "3c57d99f-7f81-4fcb-a1d1-b27e43731630",
+      "expected_chunk_ids": [
+        "b6d46dd85f6f7725fd56156b203308f180d3008c44ecefda089d7fa4516d3049",
+        "c7ad3ea4c0c01933092aa03c770b62b0081d45ba0f01991727dc2ee249e42457",
+        "e57754bed39e5191f55d4d5e6c2270f19df53b55ee105914bb9db02584578889",
+        "3eabde3684e450501edb7e0178defa3abec9c3780d238e1c7b9c8df8f00285e2",
+        "efa1d0bd72ea4c12ebbe375bbbdea135ee6d09b6ba5a1eae287cdad9f846cf66"
+      ],
+      "reference_answer": "CloudWay 24 offers various types of special assistance including mobility assistance with wheelchair services and pre-boarding options, escort services for the elderly and unaccompanied minors, assistance for passengers with visual or hearing impairments, medical assistance with oxygen cylinders, and special dietary needs with a selection of special meals.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudWay 24 offer special meals for passengers with dietary needs?",
+      "expected_file_id": "3c57d99f-7f81-4fcb-a1d1-b27e43731630",
+      "expected_chunk_ids": [
+        "8c278a73e46b50b522ed6734a01ae9c29128b5416f61cb4cab2747beaa03b0e1",
+        "e57754bed39e5191f55d4d5e6c2270f19df53b55ee105914bb9db02584578889",
+        "b6d46dd85f6f7725fd56156b203308f180d3008c44ecefda089d7fa4516d3049"
+      ],
+      "reference_answer": "Yes, CloudWay 24 offers a selection of special meals such as vegetarian, low-sodium, diabetic, and gluten-free options. Requests for special meals can be made during booking or up to 24 hours before departure.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the guidelines for traveling with medical equipment on CloudWay 24?",
+      "expected_file_id": "3c57d99f-7f81-4fcb-a1d1-b27e43731630",
+      "expected_chunk_ids": [
+        "e1e6d166c9c71374dff53367e37ea074be165b52064cbd98314329fd34a46546"
+      ],
+      "reference_answer": "Guidelines for traveling with medical equipment on CloudWay 24 include the need for advance notice and possibly the submission of medical documents. In certain cases, a Medical Information Form (MEDIF) may be required from a doctor. Additionally, mobility aids such as wheelchairs and crutches are carried free of charge, subject to space and safety regulations.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24's special assistance service compare to other airlines?",
+      "expected_file_id": "3c57d99f-7f81-4fcb-a1d1-b27e43731630",
+      "expected_chunk_ids": [
+        "b6d46dd85f6f7725fd56156b203308f180d3008c44ecefda089d7fa4516d3049",
+        "e57754bed39e5191f55d4d5e6c2270f19df53b55ee105914bb9db02584578889",
+        "efa1d0bd72ea4c12ebbe375bbbdea135ee6d09b6ba5a1eae287cdad9f846cf66",
+        "c7ad3ea4c0c01933092aa03c770b62b0081d45ba0f01991727dc2ee249e42457"
+      ],
+      "reference_answer": "CloudWay 24 provides a comprehensive range of special assistance services, including mobility assistance, help for the elderly and unaccompanied minors, and assistance for passengers with disabilities. This can be compared to other airlines in terms of the specific services offered, flexibility in booking, and responsiveness of their customer service teams.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I check in for my flight with CloudWay 24?",
+      "expected_file_id": "cb46c4fa-1731-4592-a794-ac8dc56b869f",
+      "expected_chunk_ids": [
+        "4d6966de868c04adfa2d3a347f1fd9901537e35288eacc419c9852a064af1771",
+        "56aefa74305244dcc88b6eed0033eeb4617d76f1172f4487bd34620b4b2d909c",
+        "7d2c1c8d5f4ebadb047db3b89f8192b2680c1ea647c034579a4dc24e82a5d449",
+        "10dfa55e29c65f937e8ab4b2aa91ffb06687aeafcfbe4e262ab94aa3feb6ca54",
+        "c300042fed2041507bd91bcab78c58246aabd1d0626017e60f1d737aa8fd7315"
+      ],
+      "reference_answer": "- **Online Check-In:** Available 48 to 2 hours prior to departure via [CloudWay24.com](https://cloudway24.com) or the CloudWay 24 app (iOS & Android).\n- **Airport Check-In Counters:** Open 3 hours before international departures and close 60 minutes prior to departure.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why does CloudWay 24 emphasize arriving early for check-in?",
+      "expected_file_id": "cb46c4fa-1731-4592-a794-ac8dc56b869f",
+      "expected_chunk_ids": [
+        "4d6966de868c04adfa2d3a347f1fd9901537e35288eacc419c9852a064af1771"
+      ],
+      "reference_answer": "- Allow additional time for security checks during peak hours.\n- Arrive at the airport well in advance, especially for international travel.",
+      "expect_miss": false
+    },
+    {
+      "question": "What is the boarding sequence for CloudWay 24 flights?",
+      "expected_file_id": "cb46c4fa-1731-4592-a794-ac8dc56b869f",
+      "expected_chunk_ids": [
+        "97012163eccbbc6197ce203e5c9d43423a177fb0fcfb6f47fad56914be230c55",
+        "7d2c1c8d5f4ebadb047db3b89f8192b2680c1ea647c034579a4dc24e82a5d449",
+        "10dfa55e29c65f937e8ab4b2aa91ffb06687aeafcfbe4e262ab94aa3feb6ca54"
+      ],
+      "reference_answer": "1. **Pre-Boarding:** Passengers who need special assistance, unaccompanied minors, and families with small children.\n2. **Priority Boarding:** CloudLux, CloudElite, and eligible SkyPoints 24 members.\n3. **Zone Boarding:** Remaining passengers board by zone, as indicated on the boarding pass or by gate staff.\n4. **Final Call:** Last chance to board; listen for announcements.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I ensure my bags comply with CloudWay 24’s baggage policy?",
+      "expected_file_id": "cb46c4fa-1731-4592-a794-ac8dc56b869f",
+      "expected_chunk_ids": [
+        "10dfa55e29c65f937e8ab4b2aa91ffb06687aeafcfbe4e262ab94aa3feb6ca54",
+        "4d6966de868c04adfa2d3a347f1fd9901537e35288eacc419c9852a064af1771",
+        "c300042fed2041507bd91bcab78c58246aabd1d0626017e60f1d737aa8fd7315",
+        "550046be1bd1b94707c8f7500a5d6908e207600dd7b0fd9fbe010cc7f627db47"
+      ],
+      "reference_answer": "- Proceed to the designated baggage drop counter for your class.\n- Ensure all bags abide by CloudWay 24's baggage policy (refer to ticket for details).",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24's Trainee Pilot Programme differ from other pilot training programs?",
+      "expected_file_id": "0b6a6c50-cdc1-417a-9dd3-31ec2033efa4",
+      "expected_chunk_ids": [
+        "2225f338654a795379252f84f11b1c4ee9a7ae534aca7c14c615b0d77be90e1b",
+        "99d62e1924b1f10f636e49f30c5676721df8165074a0e079fc4dc2e9bf0605ef"
+      ],
+      "reference_answer": "CloudWay 24 is committed to nurturing the next generation of world-class aviators through its prestigious Trainee Pilot Programme. Designed for passionate and driven individuals, our programme combines rigorous academic instruction, state-of-the-art simulator training, and hands-on flight experience with our modern fleet of Boeing and Airbus aircraft.\n\nProgramme Highlights include comprehensive training: Ground school, simulator training, in-aircraft experience, fleet exposure on Boeing 787 Dreamliners, Airbus A350, A380s, and a career pathway for successful trainees to join CloudWay 24 as Junior First Officers.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the eligibility criteria for CloudWay 24's Trainee Pilot Programme?",
+      "expected_file_id": "0b6a6c50-cdc1-417a-9dd3-31ec2033efa4",
+      "expected_chunk_ids": [
+        "ad5f38552bb93d6e7e35f5cd3693b8db29639c0f955852e2379a7f32b458f53d"
+      ],
+      "reference_answer": "Nationality: Indian citizens or Overseas Citizens of India (OCI) eligible to work in India.\nAge: 18 – 28 years at the time of application.\nEducational Qualification: Minimum 10+2 with Physics and Mathematics from a recognized board. Graduates (any discipline) preferred.\nMedical Fitness: Must possess (or be able to obtain) DGCA Class 1 Medical Certificate.\nLanguage Proficiency: Proficiency in English (spoken & written). Additional language skills are a plus.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I apply for the CloudWay 24 Trainee Pilot Programme?",
+      "expected_file_id": "0b6a6c50-cdc1-417a-9dd3-31ec2033efa4",
+      "expected_chunk_ids": [
+        "e66d3b463b54f84b68e46e6e6fc289525471dd2eeff430a5c1e7557434276567",
+        "99d62e1924b1f10f636e49f30c5676721df8165074a0e079fc4dc2e9bf0605ef"
+      ],
+      "reference_answer": "Online Application: Fill out the form on CloudWay24.com.\nScreening Test: Aptitude and psychometric assessments.\nPersonal Interview: Panel interview with training and HR teams.\nMedical Examination: DGCA Class 1 Medical.\nFinal Selection: Offer letter and induction into the training academy.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the benefits offered to trainees in the CloudWay 24 Pilot Programme?",
+      "expected_file_id": "0b6a6c50-cdc1-417a-9dd3-31ec2033efa4",
+      "expected_chunk_ids": [
+        "99d62e1924b1f10f636e49f30c5676721df8165074a0e079fc4dc2e9bf0605ef",
+        "2225f338654a795379252f84f11b1c4ee9a7ae534aca7c14c615b0d77be90e1b"
+      ],
+      "reference_answer": "Stipend & Benefits: Competitive stipend during training, medical coverage, and travel benefits. Trainees receive hands-on flight experience with a modern fleet, guided by experienced instructors, and have a pathway to become Junior First Officers at CloudWay 24.",
+      "expect_miss": false
+    },
+    {
+      "question": "What is the accommodation policy for CloudWay 24 crew?",
+      "expected_file_id": "fd063d0a-c1f9-4535-bd26-b1c9c5a972a5",
+      "expected_chunk_ids": [
+        "d3c1fc278dba0f952d9e94a60d9256a419d668ffe4c5a656677092099e33acfb",
+        "36d46570e2c6984a8593760ca4b11a1c7423a91555df8f6ecce003f99e4b1e71",
+        "2b88bca69fbf92a3958d5d45c111c8d5a6bed0ffdc821577334c6b76901d9567",
+        "733ec4d528cdab5c34e1af5cf77695722e98b60e895a7fe39ec3a2795cd31adf"
+      ],
+      "reference_answer": "CloudWay 24 prioritizes the comfort and well-being of its onboard crew, recognizing that adequate rest is critical for safety and excellent passenger service. During layovers and duty periods away from home base, all pilots and cabin crew are provided with quality hotel accommodation as per company standards.\n\nThe policy includes eligibility for all flight deck and operating crew, accommodation in 4-star and 5-star hotels, single occupancy, complimentary ground transportation, and various facilities such as in-room Wi-Fi and buffet breakfast.",
+      "expect_miss": false
+    },
+    {
+      "question": "How is hotel booking managed for CloudWay 24 crew?",
+      "expected_file_id": "fd063d0a-c1f9-4535-bd26-b1c9c5a972a5",
+      "expected_chunk_ids": [
+        "5809f5628b79eca7a9a5ab0af2facd934fe8ad8b20cdc0c9809fb0f2eea7d96f",
+        "d3c1fc278dba0f952d9e94a60d9256a419d668ffe4c5a656677092099e33acfb"
+      ],
+      "reference_answer": "Rostered crew bookings are made in advance by the Crew Scheduling Department. Hotel details are relayed in the daily roster and via the CloudWay 24 Crew App.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why does CloudWay 24 prefer chain hotels for crew accommodation?",
+      "expected_file_id": "fd063d0a-c1f9-4535-bd26-b1c9c5a972a5",
+      "expected_chunk_ids": [
+        "d3c1fc278dba0f952d9e94a60d9256a419d668ffe4c5a656677092099e33acfb"
+      ],
+      "reference_answer": "CloudWay 24 prefers chain hotels to ensure consistency and safety for their crew. Chain hotels are known for their service standards which align with comfort and security requirements.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudWay 24 offer complimentary transportation for crew transfers?",
+      "expected_file_id": "fd063d0a-c1f9-4535-bd26-b1c9c5a972a5",
+      "expected_chunk_ids": [
+        "733ec4d528cdab5c34e1af5cf77695722e98b60e895a7fe39ec3a2795cd31adf",
+        "d3c1fc278dba0f952d9e94a60d9256a419d668ffe4c5a656677092099e33acfb"
+      ],
+      "reference_answer": "Yes, CloudWay 24 provides complimentary ground transportation between the airport and hotel for their crew members.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does the dining experience differ between CloudLux and CloudElite classes?",
+      "expected_file_id": "c8024892-a445-4233-bf59-2a208e2fdcd6",
+      "expected_chunk_ids": [
+        "a1ab2f5b6bdf2257c46c15d4425452d03acd6379f7aaf16e3848fedaf43cefd6",
+        "d5018e708404400a065941e1bda8c73dd41bbd237065ccf6c44ff2863d087778",
+        "18becf2c9689fb3b1b09b8684345d36b0653f742dd816c324a27ec6602f0198c",
+        "82c695b0a092ec59ca97c66a1dd747aff0f4c37cca0db9b48c1e504eb2901b05",
+        "b36c60574346ec8806b71aeb10c7780ad35820c75952f9d77b256fc5cfb466d2"
+      ],
+      "reference_answer": "CloudLux guests enjoy a fully customizable, haute-cuisine experience with seasonal tasting menus. Highlights include multi-course gourmet dining, curated international wine and champagne, and personalized service with options from a wide range of world cuisines.\n\nIn CloudElite, business travelers enjoy restaurant-style dining with multiple appetizers, mains, and dessert options. The menu reflects refined international cuisine with vegetarian and health-focused selections and a choice of wine, beer, and other beverages.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the special features of CloudComfort's dining menu?",
+      "expected_file_id": "c8024892-a445-4233-bf59-2a208e2fdcd6",
+      "expected_chunk_ids": [
+        "fe39bcf0534a10d3707d5808e7835d0a61b6d2cf712e78df03215ad3d474ea3e",
+        "18becf2c9689fb3b1b09b8684345d36b0653f742dd816c324a27ec6602f0198c",
+        "94c52684a6c1d4c99fa2d597c65019f1872aa7ac94212446c8d23b2db6c0d916",
+        "a1ab2f5b6bdf2257c46c15d4425452d03acd6379f7aaf16e3848fedaf43cefd6",
+        "d5018e708404400a065941e1bda8c73dd41bbd237065ccf6c44ff2863d087778"
+      ],
+      "reference_answer": "CloudComfort offers enhanced meal choices and upgraded presentations compared to standard economy, bridging comfort and quality. Highlights include multi-course meals with Western, Asian, and Indian dishes, salads, bread rolls, rotating desserts, and various soft drinks and hot beverages.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why might guests choose CloudLux for their dining preferences?",
+      "expected_file_id": "c8024892-a445-4233-bf59-2a208e2fdcd6",
+      "expected_chunk_ids": [
+        "a1ab2f5b6bdf2257c46c15d4425452d03acd6379f7aaf16e3848fedaf43cefd6",
+        "82c695b0a092ec59ca97c66a1dd747aff0f4c37cca0db9b48c1e504eb2901b05",
+        "d5018e708404400a065941e1bda8c73dd41bbd237065ccf6c44ff2863d087778",
+        "18becf2c9689fb3b1b09b8684345d36b0653f742dd816c324a27ec6602f0198c",
+        "b36c60574346ec8806b71aeb10c7780ad35820c75952f9d77b256fc5cfb466d2"
+      ],
+      "reference_answer": "CloudLux offers a fully customizable, haute-cuisine experience with personalized service. Guests have access to multi-course gourmet dining, high-end ingredients like caviar and Wagyu, and exclusive beverage pairings. This class appeals to those seeking exclusivity and a premium culinary journey.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can a passenger request a special meal on CloudWay 24?",
+      "expected_file_id": "c8024892-a445-4233-bf59-2a208e2fdcd6",
+      "expected_chunk_ids": [
+        "f69bd94e1bace627facf626eed951c1a7c17c4f368e14986f52d14b9106bcda6",
+        "94c52684a6c1d4c99fa2d597c65019f1872aa7ac94212446c8d23b2db6c0d916"
+      ],
+      "reference_answer": "A wide range of special meal requests (Vegan, Jain, Gluten-Free, Kosher, Child-friendly, Diabetic-friendly, and more) is available to pre-order when booking or through \"Manage My Flight.\" Menus are refreshed quarterly, reflecting the flight route and destination.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudWay 24 offer vegetarian options across all classes?",
+      "expected_file_id": "c8024892-a445-4233-bf59-2a208e2fdcd6",
+      "expected_chunk_ids": [
+        "f69bd94e1bace627facf626eed951c1a7c17c4f368e14986f52d14b9106bcda6",
+        "94c52684a6c1d4c99fa2d597c65019f1872aa7ac94212446c8d23b2db6c0d916",
+        "fe39bcf0534a10d3707d5808e7835d0a61b6d2cf712e78df03215ad3d474ea3e"
+      ],
+      "reference_answer": "Yes, CloudWay 24 provides vegetarian options in all classes. In CloudElite and CloudComfort, vegetarian and health-focused selections are always available. CloudSaver offers meat, vegetarian, and regional options in its balanced meals.",
+      "expect_miss": false
+    },
+    {
+      "question": "What is the CloudWay 24 cab policy for staff?",
+      "expected_file_id": "62641273-0fe0-4d30-bc21-4310214f9c56",
+      "expected_chunk_ids": [
+        "7f39a7cc305ce1b89f1b686b89a6ad3c80e039e8a236e2d35c711337d99febda",
+        "9f32c0cf4cfda2b9266369c3c66529d74f0d20d9939f4ab025009febe0582c55",
+        "24694c3a27dab99b7d8074bb29bb408204d9a43db0c383ac9f24ead072a16360"
+      ],
+      "reference_answer": "At CloudWay 24, the safety, punctuality, and well-being of staff are top priorities. This cab policy outlines the official guidelines for ground transportation arrangements for Pilots and Cabin Crew members to and from designated airports and accommodations.",
+      "expect_miss": false
+    },
+    {
+      "question": "Who is eligible for cab services under CloudWay 24's policy?",
+      "expected_file_id": "62641273-0fe0-4d30-bc21-4310214f9c56",
+      "expected_chunk_ids": [
+        "74812cc509c55eec31cb91158a02f7855b996a4fd8eac9576da444940268d51a",
+        "7f39a7cc305ce1b89f1b686b89a6ad3c80e039e8a236e2d35c711337d99febda",
+        "24694c3a27dab99b7d8074bb29bb408204d9a43db0c383ac9f24ead072a16360"
+      ],
+      "reference_answer": "- Pilots: All full-time and contract cockpit crew operating CloudWay 24 flights.\n- Cabin Crew: All active CloudLux, CloudElite, CloudComfort, and CloudSaver in-flight crew members rostered on duty.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can CloudWay 24 staff book a cab if automatic scheduling fails?",
+      "expected_file_id": "62641273-0fe0-4d30-bc21-4310214f9c56",
+      "expected_chunk_ids": [
+        "e732f8cfa29c9a2f6352fef87a902ae120ed1ad6a421901cad9607af7f01fcc5"
+      ],
+      "reference_answer": "If auto-scheduling fails, crew may book a cab using the approved CloudWay 24 Staff App or by contacting Crew Logistics at least 6 hours prior to pick-up.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the differences in cab types for pilots and cabin crew in CloudWay 24?",
+      "expected_file_id": "62641273-0fe0-4d30-bc21-4310214f9c56",
+      "expected_chunk_ids": [
+        "24694c3a27dab99b7d8074bb29bb408204d9a43db0c383ac9f24ead072a16360"
+      ],
+      "reference_answer": "- Premium sedans are provided for pilots.\n- Comfort sedans or MPVs are provided for cabin crew, with sharing for a maximum of 3 crew per cab as per roster compatibility.",
+      "expect_miss": false
+    },
+    {
+      "question": "What safety measures are included in CloudWay 24's cab policy?",
+      "expected_file_id": "62641273-0fe0-4d30-bc21-4310214f9c56",
+      "expected_chunk_ids": [
+        "24694c3a27dab99b7d8074bb29bb408204d9a43db0c383ac9f24ead072a16360",
+        "7f39a7cc305ce1b89f1b686b89a6ad3c80e039e8a236e2d35c711337d99febda"
+      ],
+      "reference_answer": "- 24/7 availability of cabs for day and night shifts.\n- GPS tracking enabled in all cabs.\n- Only authorized personnel allowed in staff cabs.\n- Crew must wear airline ID while in transit.",
+      "expect_miss": false
+    },
+    {
+      "question": "What is the purpose of CloudWay 24 Co-brand Credit Cards?",
+      "expected_file_id": "a4678fbf-e1e9-4649-89ef-366386be3bb2",
+      "expected_chunk_ids": [
+        "a4a38cef616cd8f92452a6964b6c33ad6b8efafd976c0c803411f8e9d345730a",
+        "56f6a99abf16a3e1a0d15ce2b75d3c9f4b5d6e7547a60fde9a6b56d779788a8a",
+        "17f740ab41989080dde27bebb7ddada947ed9a15e7617b47e16e3a762b51c5da",
+        "21a51b642934a54cde74bb8fd5ff7d754f611855bf159f8c38bf7c53d968ce6d"
+      ],
+      "reference_answer": "Introducing CloudWay 24 Co-brand Credit Cards\n\nUnlock the best way to travel and reward yourself with SkyPoints! Our exclusive co-brand credit cards, in partnership with leading banks, allow you to accelerate your SkyPoints earnings every time you spend.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why should customers use CloudWay 24 Co-brand Credit Cards for flights?",
+      "expected_file_id": "a4678fbf-e1e9-4649-89ef-366386be3bb2",
+      "expected_chunk_ids": [
+        "56f6a99abf16a3e1a0d15ce2b75d3c9f4b5d6e7547a60fde9a6b56d779788a8a",
+        "17f740ab41989080dde27bebb7ddada947ed9a15e7617b47e16e3a762b51c5da",
+        "a4a38cef616cd8f92452a6964b6c33ad6b8efafd976c0c803411f8e9d345730a",
+        "21a51b642934a54cde74bb8fd5ff7d754f611855bf159f8c38bf7c53d968ce6d"
+      ],
+      "reference_answer": "Earn 10 times the SkyPoints when you book CloudWay 24 flights using your co-brand credit card on [CloudWay24.com](https://CloudWay24.com) or our official app.\n\nAlways use your CloudWay 24 co-brand card for booking flights directly with CloudWay 24 to maximize SkyPoints!",
+      "expect_miss": false
+    },
+    {
+      "question": "How can someone apply for a CloudWay 24 Co-brand Credit Card?",
+      "expected_file_id": "a4678fbf-e1e9-4649-89ef-366386be3bb2",
+      "expected_chunk_ids": [
+        "a4a38cef616cd8f92452a6964b6c33ad6b8efafd976c0c803411f8e9d345730a",
+        "17f740ab41989080dde27bebb7ddada947ed9a15e7617b47e16e3a762b51c5da",
+        "56f6a99abf16a3e1a0d15ce2b75d3c9f4b5d6e7547a60fde9a6b56d779788a8a"
+      ],
+      "reference_answer": "Visit [CloudWay24.com](https://CloudWay24.com) or your preferred bank website.\n\nChoose the \"CloudWay 24 Co-brand Credit Card.\"\n\nFill in the application form and provide necessary documents.\n\nStart earning SkyPoints as soon as your card is activated!",
+      "expect_miss": false
+    },
+    {
+      "question": "How do SkyPoints earning rates differ between CloudWay 24 flights and other purchases?",
+      "expected_file_id": "a4678fbf-e1e9-4649-89ef-366386be3bb2",
+      "expected_chunk_ids": [
+        "56f6a99abf16a3e1a0d15ce2b75d3c9f4b5d6e7547a60fde9a6b56d779788a8a",
+        "17f740ab41989080dde27bebb7ddada947ed9a15e7617b47e16e3a762b51c5da",
+        "a4a38cef616cd8f92452a6964b6c33ad6b8efafd976c0c803411f8e9d345730a",
+        "21a51b642934a54cde74bb8fd5ff7d754f611855bf159f8c38bf7c53d968ce6d"
+      ],
+      "reference_answer": "Earn 10 times the SkyPoints when you book CloudWay 24 flights using your co-brand credit card on [CloudWay24.com](https://CloudWay24.com) or our official app.\n\nEarn 4% back in SkyPoints on spending for other airlines and hotel bookings, worldwide.\n\nEarn 2% back in SkyPoints on all other spends—retail, dining, shopping, utilities, and more.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I book a seat for a child under 2 years on CloudWay 24?",
+      "expected_file_id": "045ceeb4-4173-4a3f-86bb-3fae54836063",
+      "expected_chunk_ids": [
+        "26ed8ea6042705226428d3d7600b2d9b733b9174fc4bf7213ed457b577046454",
+        "af75cb69474736ca96048ca6e602aa986c1c5bc6726c1be20df3d48403fd59b1"
+      ],
+      "reference_answer": "Booking for Children\n- Children under 2 years: Can travel as infants on lap or with a booked seat (additional charges may apply).",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24 support families compared to other airlines?",
+      "expected_file_id": "045ceeb4-4173-4a3f-86bb-3fae54836063",
+      "expected_chunk_ids": [
+        "8131732b24c79b1ab2bd53aec9d66d258bf0c12b669af2d028eedc453c69f469",
+        "1b72e62c362e14cb05458a4912a6de2957d5f26e2032a78e47c2f6f81e3a0079"
+      ],
+      "reference_answer": "At the Airport\n- Priority Check-In: Dedicated family counters at Mumbai, Delhi, and Bengaluru hubs.\n- Family Boarding: Priority and early boarding for families with children.\n- Stroller Assistance: Use your stroller at the airport up to the boarding gate.\nOnboard Comfort\n- In-Flight Entertainment: Kids’ movies, cartoons, and interactive games in all cabins.\n- Amenities: Infant seat belts, baby cots, activity kits, and soft toys for young flyers.\nExtra Services & Support\n- Lounge Access: Complimentary lounge access in CloudLux and CloudElite classes, with play areas at select hubs.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I request special meals for my child on CloudWay 24?",
+      "expected_file_id": "045ceeb4-4173-4a3f-86bb-3fae54836063",
+      "expected_chunk_ids": [
+        "244d0860702f05f58de290918cb5b3a5d23d9590538ba559950c7dc54cf22ec8",
+        "af75cb69474736ca96048ca6e602aa986c1c5bc6726c1be20df3d48403fd59b1"
+      ],
+      "reference_answer": "Child-Friendly Meals\n- Pre-Order: Reserve child meals (vegetarian and non-vegetarian) when booking or via “Manage My Flight.”\n- Special Dietary Needs: Contact our customer care for allergies or specific requirements.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudWay 24 offer any services for unaccompanied minors?",
+      "expected_file_id": "045ceeb4-4173-4a3f-86bb-3fae54836063",
+      "expected_chunk_ids": [
+        "26ed8ea6042705226428d3d7600b2d9b733b9174fc4bf7213ed457b577046454"
+      ],
+      "reference_answer": "Pre-flight Preparation\n- Unaccompanied Minors: Special handling and escort services available for children aged 5–12 flying alone. Request while booking.",
+      "expect_miss": false
+    },
+    {
+      "question": "What amenities does CloudWay 24 provide for families traveling with children?",
+      "expected_file_id": "045ceeb4-4173-4a3f-86bb-3fae54836063",
+      "expected_chunk_ids": [
+        "1b72e62c362e14cb05458a4912a6de2957d5f26e2032a78e47c2f6f81e3a0079",
+        "af75cb69474736ca96048ca6e602aa986c1c5bc6726c1be20df3d48403fd59b1"
+      ],
+      "reference_answer": "Onboard Comfort\n- In-Flight Entertainment: Kids’ movies, cartoons, and interactive games in all cabins.\n- Kid-safe headphones on request.\n- Amenities: Infant seat belts and baby cots (in specific rows).\n- Activity kits and soft toys for young flyers (CloudSaver and above).\n- Facilities: Changing tables in restrooms and warming facilities for milk and baby food.\n---",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the features of the Airbus A350 operated by CloudWay 24?",
+      "expected_file_id": "a16a5649-acb8-4bc6-9993-ae84983552df",
+      "expected_chunk_ids": [
+        "c4f5366c7ee8a817665df199c046de0d74cf5e1e290c6ba03cdff384b2ad3034",
+        "5a0883df9bba4a40cd5a31a0a0adba76e38170e58fe1e72a77f9e3bc7aa15720"
+      ],
+      "reference_answer": "The Airbus A350 is a next-generation, long-haul wide-body aircraft known for its advanced aerodynamics, fuel efficiency, and passenger comfort. Operated by CloudWay 24 on major intercontinental routes, the A350 delivers a premium flying experience across all cabin classes.\n\nCloudWay 24’s Airbus A350 promises a soothing, high-tech environment designed for comfort, productivity, and relaxation – whether you’re flying CloudLux or CloudSaver.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudLux differ from CloudElite class on the Airbus A350?",
+      "expected_file_id": "a16a5649-acb8-4bc6-9993-ae84983552df",
+      "expected_chunk_ids": [
+        "037f48beb2fcfab6cc61227623823e004fcaf4c687bc6727430b740d3bc10b48",
+        "44bc4e3282d465bc67cd098dcbbdc92ea1322878ec6d11f0439312f3b70b6996",
+        "6544e88ee9e8be7857b083dd14559e633283ad8069a9f8ff6ee6c3bda37352ae",
+        "7d25a009b991abe2aa88b5f45d5ad8f1ad4fc15e2d5328b4f48708ff200920e1"
+      ],
+      "reference_answer": "CloudLux (First Class) offers 8 fully enclosed private suites with lie-flat beds, a 21” HD touchscreen entertainment system, gourmet on-demand dining, and dedicated lounge access.\n\nCloudElite (Business Class) features 42 seats with lie-flat beds, 18” personal HD screens, multi-course meals, and priority check-in & boarding.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I access the First Class lounge on CloudWay 24’s A350?",
+      "expected_file_id": "a16a5649-acb8-4bc6-9993-ae84983552df",
+      "expected_chunk_ids": [
+        "44bc4e3282d465bc67cd098dcbbdc92ea1322878ec6d11f0439312f3b70b6996"
+      ],
+      "reference_answer": "CloudLux (First Class) includes dedicated First Class lounge access as part of the cabin features, ensuring personalized service and an exclusive environment for passengers.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why might passengers prefer CloudComfort over CloudSaver on the Airbus A350?",
+      "expected_file_id": "a16a5649-acb8-4bc6-9993-ae84983552df",
+      "expected_chunk_ids": [
+        "6544e88ee9e8be7857b083dd14559e633283ad8069a9f8ff6ee6c3bda37352ae",
+        "7d25a009b991abe2aa88b5f45d5ad8f1ad4fc15e2d5328b4f48708ff200920e1",
+        "037f48beb2fcfab6cc61227623823e004fcaf4c687bc6727430b740d3bc10b48",
+        "44bc4e3282d465bc67cd098dcbbdc92ea1322878ec6d11f0439312f3b70b6996"
+      ],
+      "reference_answer": "CloudComfort (Premium Economy) offers wider seats with extra legroom, enhanced recline and footrests, a 13” personal HD screen, welcome drinks, and upgraded meal options.\n\nCloudSaver (Economy Class) provides ergonomically designed seats with a 32” seat pitch and complimentary meals and beverages, but without the enhanced features of CloudComfort.",
+      "expect_miss": false
+    },
+    {
+      "question": "When was the Airbus A350 introduced into CloudWay 24’s fleet?",
+      "expected_file_id": "a16a5649-acb8-4bc6-9993-ae84983552df",
+      "expected_chunk_ids": [
+        "c4f5366c7ee8a817665df199c046de0d74cf5e1e290c6ba03cdff384b2ad3034"
+      ],
+      "reference_answer": "The markdown does not specify the exact year the Airbus A350 was introduced into CloudWay 24’s fleet.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do visa requirements for the Schengen Zone differ from those for the UK?",
+      "expected_file_id": "0931fdce-f051-4daa-b2d9-691f6733e442",
+      "expected_chunk_ids": [
+        "994a5992cb17cff692d3c62ada2c02c4612d83be8d5d6339e5cf782c00b2242e",
+        "a59807fa8692ff03e1d1fd7c070e297ec727bcee45e6fd65adf6580970843a54",
+        "8f11b274f34b51c06a88c854db75ebf6404d1fde86f2999aec9c7693af42cb10"
+      ],
+      "reference_answer": "Most Western Europe countries are under the Schengen Zone, requiring a Schengen Visa. The United Kingdom has a separate visa policy requiring a UK Visa.",
+      "expect_miss": false
+    },
+    {
+      "question": "How can I check my specific visa and passport requirements with CloudWay 24?",
+      "expected_file_id": "0931fdce-f051-4daa-b2d9-691f6733e442",
+      "expected_chunk_ids": [
+        "f3691ce1ab8b89be19373a2c005e63ef4178c5342287dee308b2971021edc1cf",
+        "7e434e406431c37a025b09d0ef485b40138a6b8d2b32ee26cee311367282ac95"
+      ],
+      "reference_answer": "1. Visit **CloudWay24.com** or use the CloudWay24 App.\n2. Go to \"Plan My Flight\" – select your **route** and **dates**.\n3. Click on \"Visa & Passport Info\" on the booking page.\n4. Review requirements for your nationality, transit rules, and special advisories.",
+      "expect_miss": false
+    },
+    {
+      "question": "Is a visa required for Indian citizens traveling to Turkey for tourism?",
+      "expected_file_id": "0931fdce-f051-4daa-b2d9-691f6733e442",
+      "expected_chunk_ids": [
+        "03121b0604d0139c85ee47fab56caf81d946e9866e4aa8430b62cff3be6a0e3d"
+      ],
+      "reference_answer": "Indian citizens need a visa to travel to Turkey for tourism. They can obtain an e-Visa or a sticker visa.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the general passport validity requirements for travel to European countries from India?",
+      "expected_file_id": "0931fdce-f051-4daa-b2d9-691f6733e442",
+      "expected_chunk_ids": [
+        "16432e21b5c0e414b889d45cba008b70b988240c5ff6a23f84c84b9df42c65a9",
+        "a59807fa8692ff03e1d1fd7c070e297ec727bcee45e6fd65adf6580970843a54",
+        "cea4989bfdcdbb66de7374349f8b399ef6a9a30b2bff6d6f27f450279165447b"
+      ],
+      "reference_answer": "For travel to European countries from India, the passport must have a minimum validity of 6 months from the date of arrival, and at least 2 blank pages are recommended for visa/stamping.",
+      "expect_miss": false
+    },
+    {
+      "question": "How does CloudWay 24’s special baggage policy differ for CloudLux and CloudSaver passengers?",
+      "expected_file_id": "a05b6802-ecae-470c-8283-3d861b3f5e66",
+      "expected_chunk_ids": [
+        "27afe7c57fc9c0fd2e5d226e843af39ad010c65f2431f836c1ba7058e39081e6",
+        "ecc989412a117e662a11dda8c5e2573cad1741d08137e4c384be2add1d709b22",
+        "d431c5c224744c3c7274db76eb49aebd8f5fc9100b5faf5cfc2024e097742e92",
+        "a12c46220bca431d0d7f734e1eef071a4b10eabfd54b2dee69c0802cfcdbe0cf",
+        "861915c740beace01fc569c73ce21aeb4b7ebddab64e61c52415ebdd24aca0be"
+      ],
+      "reference_answer": "CloudWay 24 offers different special baggage allowances based on the travel class. In CloudLux (First Class), 2 special items are included for free, whereas in CloudSaver (Economy), no free special baggage inclusion is provided, and all items incur standard excess baggage fees.",
+      "expect_miss": false
+    },
+    {
+      "question": "How do I notify CloudWay 24 about carrying a hunting rifle?",
+      "expected_file_id": "a05b6802-ecae-470c-8283-3d861b3f5e66",
+      "expected_chunk_ids": [
+        "861915c740beace01fc569c73ce21aeb4b7ebddab64e61c52415ebdd24aca0be"
+      ],
+      "reference_answer": "Advance notification is mandatory for firearms and includes valid firearm licenses and documentation. Submit requests via “Manage My Flight” or contact CloudWay 24 Customer Service at least 72 hours before departure.",
+      "expect_miss": false
+    },
+    {
+      "question": "Does CloudWay 24 allow musical instruments as cabin baggage?",
+      "expected_file_id": "a05b6802-ecae-470c-8283-3d861b3f5e66",
+      "expected_chunk_ids": [
+        "7ee625421cfd15484fc1198693af457fe3ee01f2a0843584bfdd65e056a67689",
+        "947706e56a46bcf4070248b19907111600c99a695a5aa47be4712226dd8596b1"
+      ],
+      "reference_answer": "Yes, small musical instruments (up to 115 cm/45 in and 7kg) are allowed as cabin baggage, subject to space and safety conditions.",
+      "expect_miss": false
+    },
+    {
+      "question": "What might be the reasons for advance notice requirements for oversized sports equipment?",
+      "expected_file_id": "a05b6802-ecae-470c-8283-3d861b3f5e66",
+      "expected_chunk_ids": [
+        "01ead49420669893ebfa9b80bdf8a9ef72710786b4c6a79dea60201506a97a28"
+      ],
+      "reference_answer": "Oversized sports equipment requires advance notice to ensure proper packing and handling of fragile items and to arrange for necessary space and safety measures. This facilitates efficient management and reduces the risk of damage.",
+      "expect_miss": false
+    },
+    {
+      "question": "What are the packing guidelines for rifles and ammunition on CloudWay 24?",
+      "expected_file_id": "a05b6802-ecae-470c-8283-3d861b3f5e66",
+      "expected_chunk_ids": [
+        "3f7056975d4b4215c658f107b3488d55eaad4101de3858fb1fa920877cb39769",
+        "7ee625421cfd15484fc1198693af457fe3ee01f2a0843584bfdd65e056a67689"
+      ],
+      "reference_answer": "Rifles must be unloaded, dismantled if possible, and packed in rigid locked cases. Ammunition is limited to 5 kg per passenger, packed separately from firearms, in manufacturer’s packaging, adhering to local and international regulations.",
+      "expect_miss": false
+    },
+    {
+      "question": "Why was ZX Bank recognized for its digital initiatives in 2023?",
+      "expected_file_id": "576c86ed-63db-4159-8caa-11b3bada7780",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Is cruise control available in all variants of the Aventro Edge Sedan?",
+      "expected_file_id": "8cb8f45d-8c9c-4459-8280-4ac9f5c75580",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How does the Aventro Edge Sedan Electric variant compare to the Petrol variant?",
+      "expected_file_id": "8cb8f45d-8c9c-4459-8280-4ac9f5c75580",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What are the key features of the Aventro Edge Sedan?",
+      "expected_file_id": "2d860e5d-ff2b-46a3-b152-3f2dc2913787",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What are Velvera's future sustainability goals for 2025–2030?",
+      "expected_file_id": "4c9f3364-745f-4291-a1b5-bb36c2657d71",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How can I participate in Velvera’s Trade-In & Recycling Program?",
+      "expected_file_id": "faad852b-af50-4b62-b6b0-b24828427196",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "When did ZX Bank receive recognition for SME banking in Sri Lanka?",
+      "expected_file_id": "cefd6794-003a-4107-8d97-61c882bf6c19",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Why is Velvera committed to sourcing conflict-free materials?",
+      "expected_file_id": "4c9f3364-745f-4291-a1b5-bb36c2657d71",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Is ZX Bank involved in green financing initiatives?",
+      "expected_file_id": "fd063d0a-c1f9-4535-bd26-b1c9c5a972a5",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How does PHIL 101 differ from PHIL 120 in content?",
+      "expected_file_id": "75e2961f-f59a-4ffd-9afb-e1251091e7f3",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What is the focus of the philosophy department at Cendara University?",
+      "expected_file_id": "a4678fbf-e1e9-4649-89ef-366386be3bb2",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What engine options are available for the Aventro Edge Sedan?",
+      "expected_file_id": "8cb8f45d-8c9c-4459-8280-4ac9f5c75580",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How can I enroll in PHIL 201: Ancient Greek Philosophy?",
+      "expected_file_id": "8cb8f45d-8c9c-4459-8280-4ac9f5c75580",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "When does Cendara University hold its Annual Career Connect event?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Why does the Aventro Edge ZX Model include a 360-degree camera and ADAS Level 2?",
+      "expected_file_id": "2d860e5d-ff2b-46a3-b152-3f2dc2913787",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Is there a course on Existentialism offered in this catalog?",
+      "expected_file_id": "cb46c4fa-1731-4592-a794-ac8dc56b869f",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How does ZX Bank's 2023 recognition in Bangladesh differ from that in South Asia?",
+      "expected_file_id": "3c57d99f-7f81-4fcb-a1d1-b27e43731630",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What are Velvera's sustainability initiatives?",
+      "expected_file_id": "e6c108ad-3f91-475b-bcfe-977f4bc1164c",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What are the customizability options available for Velvera's Corporate Booking Plan?",
+      "expected_file_id": "3c385f8a-8d47-4b2f-ad02-98d3d3984436",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How can students connect with alumni mentors at Cendara University?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How many branches does ZX Bank have in Central Bangalore?",
+      "expected_file_id": "2d860e5d-ff2b-46a3-b152-3f2dc2913787",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Why might a student choose to take PHIL 325: Ethics of Technology?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Does ZX Bank offer loans specifically for women entrepreneurs?",
+      "expected_file_id": "cefd6794-003a-4107-8d97-61c882bf6c19",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How do Velvera's Green Certifications compare to industry standards?",
+      "expected_file_id": "4c9f3364-745f-4291-a1b5-bb36c2657d71",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What awards did ZX Bank Ltd. win in 2023?",
+      "expected_file_id": "3c57d99f-7f81-4fcb-a1d1-b27e43731630",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What special features does Velvera One offer?",
+      "expected_file_id": "e6cc69e0-e886-4af9-97ab-728bc034f591",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How do I initiate a corporate booking with Velvera?",
+      "expected_file_id": "3c385f8a-8d47-4b2f-ad02-98d3d3984436",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How long does the Aventro car selling process take?",
+      "expected_file_id": "fd063d0a-c1f9-4535-bd26-b1c9c5a972a5",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Why is digital banking important for ZX Bank's Business Loan customers?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Does Adaptive Cruise Control require continuous driver attention?",
+      "expected_file_id": "738cf0e4-dd1a-44ea-ae41-148983308dc7",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How do ZX Bank's Business Loans cater to different customer segments?",
+      "expected_file_id": "b7ac1903-c9b0-4ade-bebc-bcfff6ac6124",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What is Adaptive Cruise Control (ACC)?",
+      "expected_file_id": "81c085a1-5aae-421c-883a-d4415d2d1cdb",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What details are required to book a test drive with Aventro Motors via email?",
+      "expected_file_id": "a4678fbf-e1e9-4649-89ef-366386be3bb2",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How can I apply for a business loan at ZX Bank?",
+      "expected_file_id": "3275cd41-7f33-4f24-bd4a-f40af31a9f2c",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "When did ZX Bank Ltd. establish its branch in Colombo, Western Province?",
+      "expected_file_id": "2d860e5d-ff2b-46a3-b152-3f2dc2913787",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What are the advantages of using Adaptive Cruise Control?",
+      "expected_file_id": "576c86ed-63db-4159-8caa-11b3bada7780",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "Does Aventro provide roadside assistance in India?",
+      "expected_file_id": "a4678fbf-e1e9-4649-89ef-366386be3bb2",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "How does Adaptive Cruise Control differ from Traditional Cruise Control?",
+      "expected_file_id": "738cf0e4-dd1a-44ea-ae41-148983308dc7",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "What resources does Cendara University offer to its alumni?",
+      "expected_file_id": "e4b412c9-b461-4cab-a5bb-2ef566df5e6b",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    },
+    {
+      "question": "“What community and cultural programs are available for international students at Cendara University?”",
+      "expected_file_id": "2d860e5d-ff2b-46a3-b152-3f2dc2913787",
+      "expected_chunk_ids": [],
+      "reference_answer": "",
+      "expect_miss": true
+    }
+  ]
+}

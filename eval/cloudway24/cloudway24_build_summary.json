@@ -1,0 +1,68 @@
+{
+  "generated_at": "2026-10-03T14:57:10+00:00",
+  "enterprise": "Cloudway 24",
+  "source_csv": "E:\\Project\\RAG-Multi-Corpus\\datasets\\Dataset categories - queries_01122025.csv",
+  "knowledge_base_id": "9108e914-0294-4d92-99f9-01ae195ef284",
+  "params": {
+    "threshold": 0.7,
+    "floor": 0.6,
+    "review_threshold": 0.8,
+    "max_chunks_per_case": 5,
+    "negatives": 40,
+    "negative_max_sim": 0.55
+  },
+  "counts": {
+    "kb_files": 37,
+    "index_chunks": 374,
+    "queries_in_corpus": 164,
+    "positive_cases": 164,
+    "negative_cases": 40,
+    "total_cases": 204,
+    "excluded_cases": 0,
+    "cases_needing_review": 35,
+    "cases_without_chunk_label": 0
+  },
+  "label_quality": {
+    "cases_with_chunk_ids": 164,
+    "chunk_label_coverage": 1.0,
+    "sim_max_min": 0.6336,
+    "sim_max_median": 0.8775,
+    "cases_below_review_threshold": 34,
+    "avg_labeled_chunks": 2.89
+  },
+  "query_type_distribution": {
+    "Comparative": 30,
+    "Procedural": 38,
+    "Open-Ended": 13,
+    "Descriptive": 31,
+    "Analytical": 23,
+    "Boolean": 23,
+    "Temporal": 6
+  },
+  "negative_query_types": {
+    "Analytical": 6,
+    "Boolean": 6,
+    "Comparative": 6,
+    "Descriptive": 6,
+    "Open-Ended": 6,
+    "Procedural": 5,
+    "Temporal": 5
+  },
+  "negative_max_similarity_range": [
+    0.212,
+    0.365
+  ],
+  "duplicate_questions": 0,
+  "warnings": [
+    "row 1221: filename 'Fine-Dining Menus.md' matched by folded",
+    "row 1222: filename 'Fine-Dining Menus.md' matched by folded",
+    "row 1223: filename 'Fine-Dining Menus.md' matched by folded",
+    "row 1224: filename 'Fine-Dining Menus.md' matched by folded",
+    "row 1225: filename 'Fine-Dining Menus.md' matched by folded"
+  ],
+  "outputs": {
+    "golden_set": "cloudway24_golden_set.json",
+    "qa_review": "cloudway24_qa_review.csv",
+    "excluded": "cloudway24_excluded.csv"
+  }
+}
