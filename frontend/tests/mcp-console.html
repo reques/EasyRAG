@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP console fixture</title>
+<div id="app" style="height:100vh;width:100%"></div>
+<script type="module">
+import { createApp } from 'vue'
+import McpView from '../src/views/McpView.vue'
+import api from '../src/api/index.js'
+import '../src/style.css'
+// Isolated UI fixture: every MCP request stays in memory, no backend required.
+// Open with ?dialog=create or ?dialog=edit to also render the form dialog.
+const definitions = [
+  {
+    server_id: 'filesystem', name: 'filesystem', description: '只读文件访问，供 Agent 读取 volumes 目录下的原始资料。',
+    transport: 'stdio', stdio_command: ['npx', '-y', '@modelcontextprotocol/server-filesystem', './volumes'],
+    capabilities: ['fs.read'], allowed_tools: ['read_file', 'list_directory', 'directory_tree', 'get_file_info'],
+    enabled: true, timeout_s: 60, url: null,
+  },
+  {
+    server_id: 'postgres-query', name: '数据库只读查询', description: '查询知识库元数据、会话统计与用户信息，后端已限制为只读事务。',
+    transport: 'stdio', stdio_command: ['npx', '-y', '@modelcontextprotocol/server-postgres', 'postgresql://easyrag@localhost:5432/easyrag'],
+    capabilities: ['db.read'], allowed_tools: ['query'], enabled: true, timeout_s: 30, url: null,
+    source: 'modelscope:@modelcontextprotocol/server-postgres',
+    env: { POSTGRES_CONNECTION_STRING: 'postgresql://easyrag@localhost:5432/easyrag' },
+  },
+  {
+    server_id: 'system-health', name: '依赖健康检查', description: '检查 Postgres / Redis / Milvus / Neo4j 连通性，用于故障自诊断。',
+    transport: 'stdio', stdio_command: ['python', '-m', 'app.tools.mcp.health_server'],
+    capabilities: ['ops.monitor'], allowed_tools: ['*'], enabled: false, timeout_s: 30, url: null,
+  },
+  {
+    server_id: 'remote-crm', name: '企业 CRM 插件', description: '通过公司内网 MCP 网关查询客户档案与合同状态。',
+    transport: 'sse', url: 'https://mcp.internal.corp/sse', stdio_command: null,
+    capabilities: ['crm.read'], allowed_tools: ['*'], enabled: true, timeout_s: 30,
+  },
+]
+const now = Math.floor(Date.now() / 1000)
+const live = [
+  {
+    server_id: 'filesystem', name: 'filesystem', transport: 'stdio', enabled: true, running: true, status: 'connected',
+    error: null, started_at: now - 5400, allowed_tools: definitions[0].allowed_tools,
+    tools: ['read_file', 'list_directory', 'directory_tree', 'get_file_info'].map(name => ({ name, namespaced_name: `filesystem__${name}`, enabled: true })),
+  },
+  {
+    server_id: 'postgres-query', name: '数据库只读查询', transport: 'stdio', enabled: true, running: true, status: 'connected',
+    error: null, started_at: now - 45, allowed_tools: ['query'],
+    tools: [{ name: 'query', namespaced_name: 'postgres-query__query', enabled: true }],
+  },
+  {
+    server_id: 'system-health', name: '依赖健康检查', transport: 'stdio', enabled: false, running: false, status: 'disconnected',
+    error: null, started_at: null, allowed_tools: ['*'], tools: [],
+  },
+  {
+    server_id: 'remote-crm', name: '企业 CRM 插件', transport: 'sse', enabled: true, running: false, status: 'error',
+    error: '连接 https://mcp.internal.corp/sse 失败：HTTP 502 Bad Gateway', started_at: null, allowed_tools: ['*'], tools: [],
+  },
+]
+const toolInfo = [
+  { namespaced_name: 'filesystem__read_file', raw_name: 'read_file', server_id: 'filesystem', description: '读取指定路径的完整文件内容。' },
+  { namespaced_name: 'filesystem__list_directory', raw_name: 'list_directory', server_id: 'filesystem', description: '列出目录下的文件与子目录。' },
+  { namespaced_name: 'filesystem__directory_tree', raw_name: 'directory_tree', server_id: 'filesystem', description: '返回目录的递归树结构。' },
+  { namespaced_name: 'filesystem__get_file_info', raw_name: 'get_file_info', server_id: 'filesystem', description: '获取文件大小、修改时间等元数据。' },
+  { namespaced_name: 'postgres-query__query', raw_name: 'query', server_id: 'postgres-query', description: '执行只读 SQL 查询并返回结果行。' },
+]
+// MCP 广场 fixture：形态对齐 ModelScope 线上返回（npx+Key / uvx / 远程 URL / 需部署）。
+const catalogItems = [
+  { id: '@amap/amap-maps', name: '高德地图', description: '高德地图 MCP，覆盖地理编码、路径规划、周边搜索等 LBS 能力。', categories: ['location-services'], tags: [], logo_url: '', view_count: 429669, author: 'amap' },
+  { id: '@modelcontextprotocol/fetch', name: 'Fetch网页内容抓取', description: '抓取网页并把 HTML 转换成 markdown，便于模型消费。', categories: ['browser-automation'], tags: [], logo_url: '', view_count: 622474, author: 'modelcontextprotocol' },
+  { id: '@supabase-community/supabase-mcp', name: 'Supabase', description: '在 Supabase 项目上执行数据库与边缘函数操作。', categories: ['databases'], tags: [], logo_url: '', view_count: 18444, author: 'supabase-community' },
+  { id: 'ths/thsfazhi-law', name: '法智法律助手', description: '法律法规检索与条文引用（仅提供托管部署）。', categories: ['legal'], tags: ['法律'], logo_url: '', view_count: 554, author: 'ths' },
+]
+const catalogPlans = {
+  '@amap/amap-maps': {
+    catalog_id: '@amap/amap-maps', name: '高德地图', author: 'amap', description: '高德地图 MCP，覆盖地理编码、路径规划、周边搜索等 LBS 能力。',
+    source_url: 'https://www.npmjs.com/package/@amap/amap-maps-mcp-server', logo_url: '',
+    kind: 'stdio', transport: 'stdio', stdio_command: ['npx', '-y', '@amap/amap-maps-mcp-server'],
+    url: null, env_schema: ['AMAP_MAPS_API_KEY'], env_defaults: {},
+    runtime: { binary: 'npx', trusted: true, available: true, hint: '需要 Node.js 与 npx（镜像已内置），首次运行会从 npm registry 拉取包。' },
+    server_id_suggestion: 'amap-amap-maps',
+  },
+  '@modelcontextprotocol/fetch': {
+    catalog_id: '@modelcontextprotocol/fetch', name: 'Fetch网页内容抓取', author: 'modelcontextprotocol', description: '抓取网页并把 HTML 转换成 markdown。',
+    source_url: 'https://github.com/modelcontextprotocol/servers', logo_url: '',
+    kind: 'stdio', transport: 'stdio', stdio_command: ['uvx', 'mcp-server-fetch'],
+    url: null, env_schema: [], env_defaults: {},
+    runtime: { binary: 'uvx', trusted: true, available: false, hint: '需要 uv/uvx（uv tool run）。镜像未内置时请先安装 uv（pip install uv）。' },
+    server_id_suggestion: 'modelcontextprotocol-fetch',
+  },
+  'ths/thsfazhi-law': {
+    catalog_id: 'ths/thsfazhi-law', name: '法智法律助手', author: 'ths', description: '法律法规检索与条文引用（仅提供托管部署）。',
+    source_url: '', logo_url: '',
+    kind: 'deploy_required', transport: null, stdio_command: null, url: null,
+    env_schema: [], env_defaults: {}, runtime: null, server_id_suggestion: 'ths-thsfazhi-law',
+  },
+}
+api.get = async (path, params) => {
+  const params0 = new URLSearchParams(location.search)
+  if (params0.has('empty')) return path === '/mcp/servers' ? { servers: [], definitions: [] } : []
+  if (path === '/mcp/servers') return { servers: live, definitions }
+  if (path === '/mcp/tools') return toolInfo
+  if (path === '/mcp/catalog') {
+    const search = String(params?.search || '').toLowerCase()
+    const items = catalogItems.filter(item =>
+      !search || item.id.toLowerCase().includes(search) || item.name.toLowerCase().includes(search))
+    return { items, total: items.length, page: 1, page_size: 12 }
+  }
+  if (path.startsWith('/mcp/catalog/')) {
+    const id = decodeURIComponent(path.slice('/mcp/catalog/'.length))
+    const plan = catalogPlans[id]
+    if (!plan) throw Object.assign(new Error('not found'), { response: { data: { detail: '广场未返回该服务' } } })
+    return { plan, readme: '# 说明\n\n本地 fixture 数据。', already_installed: id === '@supabase-community/supabase-mcp' }
+  }
+  return {}
+}
+api.post = async () => ({ success: true })
+api.put = async () => ({ success: true })
+api.delete = async () => ({ success: true })
+
+const params = new URLSearchParams(location.search)
+const app = createApp(McpView)
+app.mount('#app')
+if (params.has('tools')) {
+  // 展开第 N 张卡片的工具抽屉，用于回归工具清单与白名单标记。
+  const index = Number(params.get('tools')) || 0
+  setTimeout(() => {
+    const toggles = [...document.querySelectorAll('.mcp-tools-toggle')]
+    toggles[index]?.click()
+  }, 400)
+}
+if (params.has('catalog')) {
+  // 打开 MCP 广场；?pick=<id> 继续点选某个服务以渲染安装表单。
+  const pick = params.get('pick')
+  setTimeout(() => {
+    const button = [...document.querySelectorAll('button')].find(node => node.textContent.includes('MCP 广场'))
+    button?.click()
+    if (!pick) return
+    setTimeout(() => {
+      const item = [...document.querySelectorAll('.mcp-catalog-item')]
+        .find(node => node.querySelector('code')?.textContent.trim() === pick)
+      item?.click()
+    }, 500)
+  }, 300)
+}
+
+if (params.has('dialog')) {
+  // 通过公开的按钮触发，避免直接改组件内部状态。
+  const label = params.get('dialog') === 'edit' ? '编辑配置' : '添加服务'
+  setTimeout(() => {
+    const button = [...document.querySelectorAll('button')].find(node => node.title === label || node.textContent.includes(label))
+    button?.click()
+    document.body.dataset.dialogOpened = String(Boolean(button))
+    if (params.get('scroll') === 'bottom' || params.get('scroll') === 'middle') {
+      setTimeout(() => {
+        const body = document.querySelector('.mcp-dialog-body')
+        if (body) body.scrollTop = params.get('scroll') === 'bottom' ? body.scrollHeight : body.scrollHeight * 0.62
+      }, 200)
+    }
+  }, 300)
+}
+</script>
+</html>
