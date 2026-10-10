@@ -28,13 +28,35 @@
         </div>
 
         <template v-for="(msg, i) in messages" :key="msg.uid">
+          <!-- /compact 结果卡片：上下文已压缩，后续轮次用摘要替代这段历史 -->
+          <div v-if="msg && msg.role === 'compact'" class="context-compact-row">
+            <div class="context-compact-card">
+              <div class="context-compact-head">
+                <Minimize2 :size="14" />
+                <strong>上下文已压缩</strong>
+                <span class="context-compact-stats">
+                  折叠 {{ msg.stats?.newlyFolded }} 条 ·
+                  保留最近 {{ msg.stats?.kept }} 条 ·
+                  约 {{ msg.stats?.tokensBefore }} → {{ msg.stats?.tokensAfter }} tokens
+                </span>                <button
+                  type="button"
+                  class="context-compact-toggle"
+                  @click="msg.expanded = !msg.expanded"
+                >{{ msg.expanded ? '收起摘要' : '查看摘要' }}</button>
+              </div>
+              <p v-if="!msg.stats?.complete" class="context-compact-note">
+                历史更长时再执行一次 <code>/compact</code> 可继续压缩。
+              </p>
+              <pre v-if="msg.expanded" class="context-compact-body">{{ msg.content }}</pre>
+            </div>
+          </div>
           <!-- 渲染防护：① 非法条目（无 role 的幽灵/数组空洞）不渲染；
                ② content 为空且无 error/stopped 的 assistant 消息一律不渲染，
                唯一例外是正在流式输出的本轮占位（sending 且为最后一条）——
                没有这条防护时空占位会以「进度条+模型标签、正文空白」的形态
                残留在列表里（历史脏数据/切换竞态都可能产生）。 -->
           <div
-            v-if="msg && (msg.role === 'user' || msg.role === 'assistant') && !(msg.role === 'assistant' && !msg.content && !msg.error && !msg.stopped && !(sending && i === messages.length - 1))"
+            v-else-if="msg && (msg.role === 'user' || msg.role === 'assistant') && !(msg.role === 'assistant' && !msg.content && !msg.error && !msg.stopped && !(sending && i === messages.length - 1))"
             :class="['message', msg.role, { 'msg-enter': msg.enter }]"
           >
           <!-- 用户消息时间: 显示在气泡外上方, 左对齐时间标签, 不放进气泡里 -->
@@ -159,6 +181,21 @@
           </button>
         </div>
         <div v-if="imageError" class="image-attach-error">{{ imageError }}</div>
+        <div v-if="compactError" class="image-attach-error">{{ compactError }}</div>
+        <div v-if="showCompactHint" class="compact-hint-row">
+          <Minimize2 :size="12" />
+          <span>
+            可压缩 <strong>{{ contextState.compactable }}</strong> 条历史（更早部分已由自动摘要折叠）：
+            输入 <code>/compact</code> 或点右侧按钮。
+          </span>
+          <button type="button" class="compact-hint-run" :disabled="compacting" @click="runCompact()">
+            {{ compacting ? '压缩中…' : '立即压缩' }}
+          </button>
+        </div>
+        <div v-else-if="compacting" class="compact-hint-row">
+          <LoaderCircle :size="12" class="spin" />
+          <span>正在压缩上下文窗口…</span>
+        </div>
         <textarea
           v-model="input"
           @keydown.enter.exact.prevent="send"
@@ -725,6 +762,8 @@ import {
   ListTree,
   ListChecks,
   Loader2,
+  LoaderCircle,
+  Minimize2,
   Pencil,
   Pin,
   Plus,
@@ -1653,6 +1692,8 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
           }
         })
       } catch { /* 旧记录或已清理的 trace 保持原进度视图 */ }
+      // 上下文窗口状态（可压缩量）来自后端，不用前端消息条数猜
+      void refreshContextState(newId)
       try {
         const runData = await api.get(`/chat/conversations/${newId}/runs`)
         const latestRun = runData.runs?.find(run => run.id === latestAssistant.value?.meta?.runId)
@@ -1674,6 +1715,16 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
 
 async function send(options = {}) {
   const resumeCheckpoint = options?.resume === true
+  // 斜杠命令：/compact [保留轮数] 压缩上下文窗口（不产生对话轮次、不走流式）
+  const compactCommand = input.value.trim().match(/^\/compact(?:\s+(\d{1,2}))?$/i)
+  if (!resumeCheckpoint && compactCommand) {
+    const keepTurns = compactCommand[1] ? Number(compactCommand[1]) : null
+    input.value = ''
+    resetInputHeight()
+    await runCompact(keepTurns)
+    return
+  }
+  compactError.value = ''
   const lastMessage = messages.value[messages.value.length - 1]
   const resumeUser = resumeCheckpoint
     ? (lastMessage?.role === 'user' ? lastMessage : messages.value[messages.value.length - 2])
@@ -1971,6 +2022,8 @@ async function send(options = {}) {
     }
     // 刷新侧边栏列表
     await chatStore.refreshAfterSend(conversationId.value)
+    // 本轮结束后自动摘要可能已折叠历史 → 同步可压缩量（提示条的显示依据）
+    void refreshContextState()
   } catch (e) {
     const m = messages.value[msgIndex]
     // 停止生成：AbortError 属正常终止（后端不保存本轮），非错误
@@ -2027,6 +2080,88 @@ async function send(options = {}) {
 function stopGeneration() {
   if (currentAbort) currentAbort.abort()
 }
+
+// ── /compact：压缩上下文窗口 ──────────────────────────────────────────────
+// 把保留窗口之外的历史折叠进会话摘要（后端 conversations.summary +
+// last_summarized_message_id 水位），之后每一轮只注入「摘要 + 最近若干轮」。
+const compacting = ref(false)
+const compactError = ref('')
+// 后端给的真实状态：可压缩条数、已折叠条数、保留窗口。
+// 不能用前端 messages.length 猜——自动摘要可能早已把更早的历史折叠完，
+// 那种情况下"历史很长"但可压缩量是 0（会显示成自相矛盾的提示）。
+const contextState = ref({ compactable: 0, folded_messages: 0, message_count: 0, kept_window: 20 })
+
+async function refreshContextState(forConversation = conversationId.value) {
+  if (!forConversation) {
+    contextState.value = { compactable: 0, folded_messages: 0, message_count: 0, kept_window: 20 }
+    return
+  }
+  try {
+    const res = await api.get(`/chat/conversations/${forConversation}/context`)
+    if (forConversation !== conversationId.value) return // 已切走，丢弃过期响应
+    contextState.value = {
+      compactable: res.compactable || 0,
+      folded_messages: res.folded_messages || 0,
+      message_count: res.message_count || 0,
+      kept_window: res.kept_window || 20,
+      has_summary: !!res.has_summary,
+    }
+  } catch { /* 状态拿不到就不提示，不打扰用户 */ }
+}
+
+async function runCompact(keepTurns = null) {
+  if (compacting.value) return
+  if (sending.value) {
+    compactError.value = '正在生成回复，请等本轮结束后再压缩上下文。'
+    return
+  }
+  if (!conversationId.value) {
+    compactError.value = '当前还没有对话内容，先聊几轮再压缩上下文。'
+    return
+  }
+  compacting.value = true
+  compactError.value = ''
+  try {
+    const query = keepTurns ? `?keep_turns=${keepTurns}` : ''
+    const res = await api.post(`/chat/conversations/${conversationId.value}/compact${query}`)
+    const ts = Date.now()
+    if (res.compacted) {
+      messages.value.push({
+        role: 'compact',
+        content: res.summary || '',
+        stats: {
+          newlyFolded: res.newly_folded || 0,
+          folded: res.folded_messages || 0,
+          kept: res.kept_messages || 0,
+          complete: res.complete !== false,
+          tokensBefore: res.tokens_before || 0,
+          tokensAfter: res.tokens_after || 0,
+          keepTurns: res.keep_turns,
+        },
+        time: formatTime(new Date(ts).toISOString()),
+        ts,
+        uid: nextMsgUid(),
+        enter: true,
+      })
+      scrollBottom()
+    } else {
+      // 后端给的是事实描述（例如"自动摘要已覆盖更早历史"），原样呈现
+      compactError.value = res.message || '当前无需压缩上下文。'
+    }
+    await refreshContextState()
+    await chatStore.refreshAfterSend(conversationId.value)
+  } catch (e) {
+    compactError.value = e?.response?.data?.detail || e?.message || '压缩上下文失败'
+  } finally {
+    compacting.value = false
+    nextTick(() => inputEl.value?.focus())
+  }
+}
+
+// 只有后端确认"有可折叠的历史"时才提示，避免出现"历史较长却无需压缩"的矛盾
+const showCompactHint = computed(
+  () => contextState.value.compactable > 0 && !compacting.value
+)
 
 onActivated(() => {
   // 从知识库页切回时滚动到底部并恢复焦点

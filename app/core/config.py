@@ -263,6 +263,16 @@ class Settings(BaseSettings):
     # 全局单值——内置与自定义模型共用；若接入的模型窗口不同（如 128K），按实际值改。
     CHAT_CONTEXT_WINDOW: int = 200_000
 
+    # ── 手动压缩上下文窗口（/compact）─────────────────────────────────────
+    # 手动压缩后保留最近 N 轮原文（2N 条消息）。默认比自动摘要的窗口
+    # （RECENT_TURNS_KEPT=10 轮）更紧，这样 /compact 一定有实质效果：
+    # 注入的原文从 ~20 条降到 8 条，远期内容全部由摘要承载。
+    COMPACT_KEEP_TURNS: int = 4
+    # 单批折叠的消息条数（越大越快，但单次 prompt 越长）
+    COMPACT_FOLD_BATCH: int = 40
+    # 一次 /compact 最多调用 LLM 的批次数（超出则提示再跑一次，绝不丢消息）
+    COMPACT_MAX_BATCHES: int = 8
+
     # ── PostgreSQL (阶段 1) ──────────────────────────────────────────────
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432

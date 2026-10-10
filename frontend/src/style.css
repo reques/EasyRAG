@@ -3192,6 +3192,100 @@ select:focus-visible {
   margin-bottom: 6px;
 }
 
+/* ── /compact：上下文压缩提示与结果卡片 ─────────────────────────────── */
+.compact-hint-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--gray-150);
+  border-radius: var(--radius-md);
+  background: var(--gray-25);
+  color: var(--gray-600);
+  font-size: 12px;
+}
+.compact-hint-row svg { flex: 0 0 auto; color: var(--main-600); }
+.compact-hint-row code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--gray-100);
+  color: var(--gray-800);
+}
+.compact-hint-run {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  background: var(--gray-0);
+  color: var(--gray-700);
+  font-size: 12px;
+}
+.compact-hint-run:hover:not(:disabled) { background: var(--gray-50); color: var(--gray-900); }
+.compact-hint-run:disabled { opacity: .5; cursor: not-allowed; }
+
+.context-compact-row {
+  display: flex;
+  justify-content: center;
+  margin: 14px 0;
+}
+.context-compact-card {
+  width: 100%;
+  max-width: var(--col);
+  border: 1px solid var(--gray-150);
+  border-left: 3px solid var(--main-500);
+  border-radius: var(--radius-lg);
+  background: var(--gray-25);
+  padding: 10px 13px;
+}
+.context-compact-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--gray-800);
+  font-size: 12px;
+}
+.context-compact-head svg { color: var(--main-600); flex: 0 0 auto; }
+.context-compact-head strong { font-weight: 600; }
+.context-compact-stats { color: var(--gray-500); }
+.context-compact-toggle {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--main-700);
+  font-size: 12px;
+  text-decoration: underline;
+}
+.context-compact-note {
+  margin-top: 6px;
+  color: var(--color-warning-900);
+  font-size: 11px;
+}
+.context-compact-note code {
+  font-family: var(--font-mono);
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--gray-100);
+}
+.context-compact-body {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--gray-700);
+  background: var(--gray-0);
+  border: 1px solid var(--gray-100);
+  border-radius: var(--radius-md);
+  padding: 9px 11px;
+}
+
 /* 消息内图片（用户上传） */
 .message-image {
   margin-top: 6px;
