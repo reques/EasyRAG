@@ -30,7 +30,9 @@ _TYPE_MAP: Dict[str, Any] = {
     "bool": bool,
     "boolean": bool,
     "list": list,
+    "array": list,
     "dict": dict,
+    "object": dict,
     "any": Any,
 }
 
@@ -52,9 +54,8 @@ def _args_model(tool: ToolDefinition) -> type[BaseModel]:
                 Optional[py_type],
                 Field(default=None, description=desc or arg_name),
             )
-    if not fields:
-        # Pydantic 不允许下划线开头的字段名，改用 noop
-        fields["noop"] = (Optional[str], Field(default=None, description="无参数"))
+    # 无参数工具：留空即可。曾经塞一个 noop 占位字段，模型会照着调用并把它
+    # 一起发给 MCP 服务端，严格 schema 直接判定参数非法。
     return create_model(f"{tool.name}Args", **fields)
 
 
