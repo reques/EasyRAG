@@ -27,6 +27,8 @@ from app.skills.runtime import SkillRuntimeContext, resolve_dependency_closure
 from backend.services.chat_service import (
     create_conversation,
     add_message,
+    count_conversation_messages,
+    count_folded_messages,
     get_compressed_history,
     get_conversation_history,
     list_user_conversations,
@@ -1701,6 +1703,104 @@ async def summarize_conversation(
         conv.title = title
         await session.commit()
         return {"conversation_id": conversation_id, "title": title}
+
+
+@router.get("/conversations/{conversation_id}/context")
+async def get_context_state(
+    conversation_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """当前上下文窗口状态：摘要 + 折叠水位，供 UI 展示"哪些历史已被压缩"。"""
+    async with get_session() as session:
+        conv = await get_conversation(session, uuid.UUID(conversation_id))
+        if not conv or conv.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        from app.core.config import get_settings
+        from app.memory.manager import RECENT_TURNS_KEPT
+
+        message_count = await count_conversation_messages(
+            session, uuid.UUID(conversation_id)
+        )
+        folded = await count_folded_messages(
+            session, uuid.UUID(conversation_id),
+            getattr(conv, "last_summarized_message_id", None),
+        )
+        cfg = get_settings()
+        return {
+            "conversation_id": conversation_id,
+            "has_summary": bool(conv.summary),
+            "summary": conv.summary or "",
+            "message_count": message_count,
+            "folded_messages": folded,
+            "kept_window": RECENT_TURNS_KEPT * 2,
+            "compactable": max(0, message_count - cfg.COMPACT_KEEP_TURNS * 2 - folded),
+        }
+
+
+@router.post("/conversations/{conversation_id}/compact")
+async def compact_conversation_endpoint(
+    conversation_id: str,
+    keep_turns: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """压缩上下文窗口（``/compact``）：把保留窗口之外的历史折叠进会话摘要。
+
+    之后每一轮对话只注入「摘要 + 最近若干轮原文」，长对话不再线性膨胀。
+    ``keep_turns`` 可显式指定"保留最近 N 轮原文"（越小压得越狠，1..50）。
+    """
+    from app.core.config import get_settings
+    from app.memory.manager import compact_conversation, RECENT_TURNS_KEPT
+
+    # 显式入参校验（避免为 Query 约束额外引入依赖）
+    if keep_turns is not None:
+        keep_turns = max(1, min(int(keep_turns), 50))
+
+    async with get_session() as session:
+        conv = await get_conversation(session, uuid.UUID(conversation_id))
+        if not conv or conv.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        try:
+            result = await compact_conversation(
+                session, uuid.UUID(conversation_id), keep_turns=keep_turns
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        await session.commit()
+
+        settings = get_settings()
+        effective_keep = int(keep_turns or settings.COMPACT_KEEP_TURNS)
+        window = effective_keep * 2
+        result["keep_turns"] = effective_keep
+        result["keep_window"] = window
+        result["auto_keep_window"] = RECENT_TURNS_KEPT * 2
+
+        if result.get("compacted"):
+            if result.get("complete"):
+                result["message"] = (
+                    f"已折叠 {result.get('newly_folded', 0)} 条历史消息，"
+                    f"后续只注入摘要 + 最近 {window} 条原文。"
+                )
+            else:
+                result["message"] = (
+                    f"已折叠 {result.get('newly_folded', 0)} 条，历史较长——"
+                    f"再执行一次 /compact 可继续压缩。"
+                )
+        elif result.get("message_count", 0) <= window:
+            result["message"] = (
+                f"当前对话共 {result.get('message_count', 0)} 条消息，"
+                f"还没超过保留窗口（{window} 条），无需压缩。"
+            )
+        else:
+            # 诚实说明：不是"对话不够长"，而是自动摘要已覆盖更早的历史
+            tail = max(0, int(result.get("message_count", 0)) - int(result.get("folded_messages", 0)))
+            result["message"] = (
+                f"更早的历史已由摘要折叠（覆盖 {result.get('folded_messages', 0)} 条），"
+                f"当前注入的是「摘要 + 最近 {tail} 条原文」。"
+                f"想进一步收缩可用 /compact {max(1, tail // 4)}（保留更少原文）。"
+            )
+        return result
 
 
 @router.delete("/conversations/{conversation_id}")

@@ -74,6 +74,9 @@ services:
     volumes:
       - ./volumes:/app/volumes
       - ./models:/app/models:ro
+      # MCP 服务配置（含从 MCP 广场安装的服务与来源标记）必须落在宿主机：
+      # 否则只存在于容器可写层，重建镜像/容器时全部丢失。
+      - ./config:/app/config
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
@@ -147,6 +150,11 @@ services:
       retries: 20
       start_period: 20s
 
+  # 一次性初始化容器：确保嵌入模型已存在于 ollama 卷中。
+  # backend 用 `service_completed_successfully` 依赖它，所以它的退出码直接决定
+  # 整个应用能否启动。而 `ollama pull` 即使模型已在本地，也会先去
+  # registry.ollama.ai 校验 manifest —— 国内无代理直连时常 EOF。必须让这条网络
+  # 请求能失败而不拖垮全栈：模型已在本地时直接跳过，需要下载时再重试。
   ollama-pull:
     image: ollama/ollama:latest
     container_name: easyrag-ollama-init
@@ -155,7 +163,29 @@ services:
       - easyrag
     environment:
       OLLAMA_HOST: http://ollama:11434
-    command: ["pull", "${OLLAMA_EMBED_MODEL:-bge-m3:latest}"]
+    entrypoint: ["/bin/sh", "-c"]
+    # 注意：compose 会对 $ 做变量插值，脚本里的 $ 必须写成 $$ 才能落到 shell。
+    command:
+      - |
+        set -u
+        model="$${OLLAMA_EMBED_MODEL:-bge-m3:latest}"
+        base="$${model%%:*}"
+        if ollama list | awk 'NR>1 {print $$1}' | cut -d: -f1 | grep -qx "$$base"; then
+          echo "[ollama-pull] $${base} 已存在于本地，跳过拉取（无需访问 registry.ollama.ai）"
+          exit 0
+        fi
+        i=1
+        while [ "$$i" -le 5 ]; do
+          if ollama pull "$$model"; then
+            echo "[ollama-pull] $${model} 拉取完成"
+            exit 0
+          fi
+          echo "[ollama-pull] 第 $$i 次拉取失败，10 秒后重试" >&2
+          i=$$((i + 1))
+          sleep 10
+        done
+        echo "[ollama-pull] 重试 5 次仍失败，请检查到 registry.ollama.ai 的网络/代理" >&2
+        exit 1
     depends_on:
       ollama:
         condition: service_healthy

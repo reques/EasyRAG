@@ -36,6 +36,10 @@ DEFAULT_SERVERS_FILE = str(Path(__file__).resolve().parents[3] / "config" / "mcp
 # 匹配 ${VAR} 或 ${VAR:-default} 语法
 _ENV_VAR_RE = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}")
 
+# 最近一次 load 时读到的**展开前**原始条目（server_id → dict）。
+# 保存配置时用它把 ${VAR:-default} 占位符原样写回，避免持久化把占位符固化成具体值。
+_RAW_ENTRIES: Dict[str, Dict[str, Any]] = {}
+
 
 def _expand_env_vars(val: Any) -> Any:
     """递归展开数据结构中字符串的 ``${VAR}`` / ``${VAR:-default}`` 环境变量引用。
@@ -126,19 +130,33 @@ def load_mcp_servers(path: Optional[str] = None) -> List[MCPServerConfig]:
 
 
 def load_mcp_server_definitions(path: Optional[str] = None) -> List["MCPServerDefinition"]:
-    """加载配置并返回统一的 Pydantic MCPServerDefinition 模型列表。"""
+    """加载配置并返回统一的 Pydantic MCPServerDefinition 模型列表。
+
+    同时把**展开前**的原始条目缓存到 ``_RAW_ENTRIES``：持久化时要靠它把
+    ``${VAR:-default}`` 占位符原样写回，否则一次安装/编辑就会把整份配置
+    固化成具体值（容器内路径、甚至数据库口令明文）。
+    """
     from app.tools.mcp.models import MCPServerDefinition, MCPTransportType
 
     file_path = path or os.environ.get("MCP_SERVERS_FILE") or DEFAULT_SERVERS_FILE
     try:
-        raw = Path(file_path).read_text(encoding="utf-8")
-        data = json.loads(raw)
-        data = _expand_env_vars(data)
+        raw_text = Path(file_path).read_text(encoding="utf-8")
+        raw_data = json.loads(raw_text)
+        data = _expand_env_vars(raw_data)
     except FileNotFoundError:
         return []
     except json.JSONDecodeError as exc:
         logger.error("MCP servers file %s is invalid JSON: %s", file_path, exc)
         return []
+
+    # 原始（未展开）条目：server_id → 原始 dict，供 save 时保留占位符
+    _RAW_ENTRIES.clear()
+    for item in raw_data.get("servers", []):
+        if not isinstance(item, dict):
+            continue
+        raw_sid = str(item.get("server_id") or item.get("name") or "").strip()
+        if raw_sid:
+            _RAW_ENTRIES[raw_sid] = item
 
     definitions: List[MCPServerDefinition] = []
     for item in data.get("servers", []):
@@ -175,32 +193,77 @@ def load_mcp_server_definitions(path: Optional[str] = None) -> List["MCPServerDe
     return definitions
 
 
+def _raw_preserving(current: Any, raw: Any) -> Any:
+    """若当前值等于「原始值的展开结果」，则回写原始值（保住 ``${VAR}`` 占位符）。
+
+    仅处理字符串与字符列表（命令 / URL / 环境变量值）。值被真正改过时返回当前值，
+    保证编辑、白名单调整等仍会落盘。
+    """
+    if raw is None:
+        return current
+    if isinstance(raw, list):
+        if isinstance(current, list) and [_expand_env_vars(item) for item in raw] == list(current):
+            return raw
+        # command 与 stdio_command 是同一份数据的两个键，允许彼此兜底
+        return current
+    if isinstance(raw, str) and isinstance(current, str):
+        return raw if _expand_env_vars(raw) == current else current
+    return current
+
+
+def _build_entry(s: "MCPServerDefinition") -> Dict[str, Any]:
+    return {
+        "server_id": s.server_id,
+        "name": s.name,
+        "description": s.description,
+        "transport": s.transport.value,
+        "url": s.url,
+        "headers": s.headers,
+        "auth_token": s.auth_token,
+        "command": s.stdio_command,
+        "stdio_command": s.stdio_command,
+        "env": dict(s.env or {}),
+        "cwd": s.cwd,
+        "allowed_tools": s.allowed_tools,
+        "capabilities": s.capabilities,
+        "enabled": s.enabled,
+        "timeout_s": s.timeout_s,
+        "source": s.source or "",
+    }
+
+
 def save_mcp_server_definitions(servers: List["MCPServerDefinition"], path: Optional[str] = None) -> None:
-    """持久化保存 MCPServerDefinition 列表到 JSON 配置文件中。"""
+    """持久化保存 MCPServerDefinition 列表到 JSON 配置文件中。
+
+    对本次进程加载过、且未被修改的字段回写原始文本，从而保留
+    ``${VAR:-default}`` 占位符（否则一次安装就会把容器路径、数据库口令
+    固化成明文写进配置文件）。
+    """
     file_path = path or os.environ.get("MCP_SERVERS_FILE") or DEFAULT_SERVERS_FILE
     target = Path(file_path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
     items = []
     for s in servers:
-        items.append({
-            "server_id": s.server_id,
-            "name": s.name,
-            "description": s.description,
-            "transport": s.transport.value,
-            "url": s.url,
-            "headers": s.headers,
-            "auth_token": s.auth_token,
-            "command": s.stdio_command,
-            "stdio_command": s.stdio_command,
-            "env": dict(s.env or {}),
-            "cwd": s.cwd,
-            "allowed_tools": s.allowed_tools,
-            "capabilities": s.capabilities,
-            "enabled": s.enabled,
-            "timeout_s": s.timeout_s,
-            "source": s.source or "",
-        })
+        entry = _build_entry(s)
+        raw = _RAW_ENTRIES.get(s.server_id)
+        if raw:
+            # command 与 stdio_command 是同一份数据的两个别名：原始文件只写其一也要兜底
+            raw_cmd = raw.get("command")
+            raw_stdio = raw.get("stdio_command")
+            fallback = raw_cmd if raw_cmd is not None else raw_stdio
+            entry["command"] = _raw_preserving(entry["command"], fallback)
+            entry["stdio_command"] = _raw_preserving(
+                entry["stdio_command"], raw_stdio if raw_stdio is not None else raw_cmd
+            )
+            entry["url"] = _raw_preserving(entry["url"], raw.get("url"))
+            raw_env = raw.get("env")
+            if isinstance(raw_env, dict):
+                entry["env"] = {
+                    key: _raw_preserving(value, raw_env.get(key))
+                    for key, value in entry["env"].items()
+                }
+        items.append(entry)
     content = json.dumps({"servers": items}, indent=2, ensure_ascii=False) + "\n"
     target.write_text(content, encoding="utf-8")
     logger.info("Saved %d MCP server definitions to %s", len(items), file_path)

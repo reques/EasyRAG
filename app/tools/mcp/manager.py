@@ -286,7 +286,13 @@ class MCPServerHandle:
         for t in allowed:
             namespaced_name = _mcp_tool_name(cfg.server_id, t.name)
             legacy_name = _legacy_mcp_tool_name(cfg.server_id, t.name)
-            input_schema = getattr(t, "inputSchema", {}) or {}
+            # mcp SDK 的 Tool 字段名是 input_schema（别名为 inputSchema）。
+            # 只读 alias 会永远拿到空 schema → 模型看不到任何参数、只能靠猜，
+            # 严格的服务端（如 12306）随即返回“参数校验错误”。两种命名都兼容。
+            input_schema = getattr(t, "input_schema", None)
+            if input_schema is None:
+                input_schema = getattr(t, "inputSchema", None)
+            input_schema = dict(input_schema or {})
 
             # 记录元数据
             info = MCPToolInfo(
@@ -311,10 +317,21 @@ class MCPServerHandle:
                     arg_name in (input_schema.get("required") or []),
                 )
 
-            # 构造同步调用闭包
-            def make_call_fn(raw_tool_name: str, handle_ref: MCPServerHandle):
+            # 构造同步调用闭包：只把服务端声明的参数转发过去。
+            # 展示用/控制用参数（_action_summary、progress_callback、noop 占位）
+            # 一旦进入 MCP 请求体，严格服务端会以 additionalProperties 校验失败拒绝。
+            declared_args = set(arg_schema)
+
+            def make_call_fn(raw_tool_name: str, handle_ref: MCPServerHandle, declared: set):
                 def fn(**kwargs: Any) -> str:
-                    return handle_ref.call_tool_sync(raw_tool_name, kwargs)
+                    args = {
+                        key: value
+                        for key, value in kwargs.items()
+                        if not key.startswith("_")
+                        and key != "noop"
+                        and (not declared or key in declared)
+                    }
+                    return handle_ref.call_tool_sync(raw_tool_name, args)
                 return fn
 
             meta_dict = _mcp_tool_metadata(
@@ -329,7 +346,7 @@ class MCPServerHandle:
                 ToolDefinition(
                     name=namespaced_name,
                     description=getattr(t, "description", "") or f"MCP tool {t.name}",
-                    fn=make_call_fn(t.name, self),
+                    fn=make_call_fn(t.name, self, declared_args),
                     arg_schema=arg_schema,
                     check_fn=lambda: self.running,
                     timeout_s=0,
@@ -343,7 +360,7 @@ class MCPServerHandle:
                 ToolDefinition(
                     name=legacy_name,
                     description=getattr(t, "description", "") or f"MCP tool {t.name}",
-                    fn=make_call_fn(t.name, self),
+                    fn=make_call_fn(t.name, self, declared_args),
                     arg_schema=arg_schema,
                     check_fn=lambda: self.running,
                     timeout_s=0,

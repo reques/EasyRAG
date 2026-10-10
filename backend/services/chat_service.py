@@ -191,7 +191,7 @@ async def get_conversation_history(
     return out
 
 
-async def _count_conversation_messages(
+async def count_conversation_messages(
     session: AsyncSession, conversation_id: uuid.UUID
 ) -> int:
     from sqlalchemy import func, select
@@ -208,22 +208,71 @@ async def _count_conversation_messages(
 
 
 def decide_history_window(
-    count: int, has_summary: bool, window: int, cap: int
+    count: int, has_summary: bool, window: int, cap: int, folded: int = 0, floor: int = 2
 ) -> dict:
-    """纯逻辑：给定消息总数/是否有摘要，决定上下文窗口策略。
+    """纯逻辑：给定消息总数/摘要覆盖范围，决定上下文窗口策略。
 
     返回 {"mode", "limit", "offset"}：
       - full       全部历史都在窗口内（<= window），原样返回
-      - compressed 有摘要且超窗口 → 摘要 + 最近 window 条（真实尾部）
-      - cap_tail   无摘要且超窗口 → 最近 min(cap, count) 条（显式上限兜底，
+      - compressed 摘要覆盖前 folded 条 → 只注入**未被摘要覆盖的尾部**
+                   （至少 floor 条、最多 cap 条），远期内容由摘要承载
+      - cap_tail   无摘要 / 摘要严重滞后 → 最近 min(cap, count) 条（显式上限兜底，
                     避免"摘要长期失败 + 超长会话"撑爆上下文窗口）
+
+    ``folded`` 是摘要已覆盖的前缀消息条数（last_summarized_message_id 之前的条数）。
+    传了就按「摘要 + 未覆盖尾部」切分：前缀有摘要、尾部有原文，合起来覆盖全部消息，
+    既不丢消息，又让 ``/compact N`` 能真正收窄注入窗口（水位推到 count-N*2 后，
+    注入的原文恰好只剩 N 轮）。``floor`` 保证即使水位推到最新一条也保留最近一轮原文。
     """
     if count <= window:
         return {"mode": "full", "limit": count, "offset": 0}
+
     if has_summary:
-        return {"mode": "compressed", "limit": window, "offset": count - window}
+        if folded > 0:
+            tail = count - folded
+            if tail > cap:
+                # 未折叠尾部过长说明自动摘要没跟上：退回显式上限并告警
+                logger.warning(
+                    "[chat] unfolded tail too long (%d > cap %d) — summary falling behind",
+                    tail, cap,
+                )
+                return {"mode": "cap_tail", "limit": cap, "offset": count - cap}
+            tail = max(tail, min(floor, count))
+            return {"mode": "compressed", "limit": tail, "offset": count - tail}
+        # 水位未知（老数据/尚未推进）：沿用固定保留窗口
+        tail_start = max(0, count - window)
+        limit = count - tail_start
+        if limit > cap:
+            logger.warning(
+                "[chat] summary without watermark on a long conversation "
+                "(count=%d) — capping tail to %d",
+                count, cap,
+            )
+            return {"mode": "cap_tail", "limit": cap, "offset": count - cap}
+        return {"mode": "compressed", "limit": limit, "offset": tail_start}
+
     tail = min(cap, count)
     return {"mode": "cap_tail", "limit": tail, "offset": count - tail}
+
+
+async def count_folded_messages(
+    session: AsyncSession, conversation_id: uuid.UUID, watermark: Optional[int]
+) -> int:
+    """摘要覆盖的前缀条数 = id <= 折叠水位 的消息数（水位为空视为 0）。"""
+    if not watermark:
+        return 0
+    from sqlalchemy import func, select
+
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(Message)
+                .where(Message.conversation_id == conversation_id)
+                .where(Message.id <= watermark)
+            )
+        ).scalar_one()
+    )
 
 
 async def get_compressed_history(
@@ -241,13 +290,18 @@ async def get_compressed_history(
     cfg = get_settings()
     conv_repo = ConversationRepository(session)
     conv = await conv_repo.get_by_id(conversation_id)
-    count = await _count_conversation_messages(session, conversation_id)
+    count = await count_conversation_messages(session, conversation_id)
     window = RECENT_TURNS_KEPT * 2
+    # 摘要的覆盖范围以折叠水位为准：窗口起点不得越过未折叠消息
+    folded = await count_folded_messages(
+        session, conversation_id, getattr(conv, "last_summarized_message_id", None)
+    )
     plan = decide_history_window(
         count,
         bool(conv and conv.summary),
         window,
         cfg.HISTORY_CONTEXT_MAX_MESSAGES,
+        folded=folded,
     )
 
     if plan["mode"] == "compressed":

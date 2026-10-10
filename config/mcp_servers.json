@@ -32,6 +32,21 @@
       "capabilities": ["ops.monitor"],
       "allowed_tools": ["check_postgres", "check_redis", "check_milvus", "check_neo4j"],
       "_comment": "服务健康检查，DeepAgents 模式或调试时手动启用。"
+    },
+    {
+      "server_id": "joooook-12306-mcp",
+      "name": "12306-MCP车票查询工具",
+      "description": "基于 Model Context Protocol (MCP) 的 12306 余票查询服务，从 ModelScope MCP 广场安装。",
+      "transport": "stdio",
+      "enabled": true,
+      "command": ["npx", "-y", "12306-mcp"],
+      "stdio_command": ["npx", "-y", "12306-mcp"],
+      "env": {},
+      "capabilities": ["web.read"],
+      "allowed_tools": ["*"],
+      "timeout_s": 60,
+      "source": "modelscope:@Joooook/12306-mcp",
+      "_comment": "需要 Node ≥ 18.20.8（Headers.getSetCookie），镜像已内置 Node 22。"
     }
   ]
 }

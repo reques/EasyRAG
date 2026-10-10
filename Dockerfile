@@ -42,7 +42,18 @@ RUN python -m pip install --no-cache-dir --default-timeout=1000 --retries=20 uv 
     --index-url "${PIP_INDEX_URL}"
 
 ARG NPM_REGISTRY=https://registry.npmmirror.com
-RUN npm config set registry "${NPM_REGISTRY}" \
+# Node 运行时：Debian bookworm 自带的 nodejs 18.20.4 缺少 Headers.getSetCookie
+# （undici 新 API），12306-mcp 这类 MCP 包会直接报 "get cookie failed"。
+# 这里换成官方 Node 22 静态包，走 npmmirror 镜像（nodejs.org 在部分网络不可达）。
+# 单独成层：不触碰上面的重型 pip 层缓存。
+ARG NODE_VERSION=22.14.0
+ARG NODE_MIRROR=https://npmmirror.com/mirrors/node
+RUN curl -fsSL "${NODE_MIRROR}/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" -o /tmp/node.tar.gz \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
+    && rm -f /tmp/node.tar.gz \
+    && test "$(node --version)" = "v${NODE_VERSION}" \
+    && npm --version \
+    && npm config set registry "${NPM_REGISTRY}" \
     && npm install -g @modelcontextprotocol/server-filesystem @modelcontextprotocol/server-postgres
 
 COPY app ./app
