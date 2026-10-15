@@ -12,29 +12,42 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Use Aliyun Debian mirror（清华 TUNA 会对部分网络/出口 IP 返回 403 Forbidden）
+#
+# 2026-10 精简：去掉 poppler-utils / tesseract-ocr* / libmagic1 / file —— 它们是
+# 已移除的 unstructured 栈的依赖，app/ 与 backend/ 里对 pytesseract、pdf2image、
+# magic 的引用为零（扫描件走 MinerU 容器，本地图片走 RapidOCR-ONNX）。同时去掉
+# apt 的 nodejs/npm：下面会装 Node 22 静态包并覆盖它（Debian 自带 18.20.4 缺
+# Headers.getSetCookie），白装一份 18 没有意义。
+# 保留：libgl1 / libglib2.0-0（opencv 运行时）、fonts-wqy-zenhei
+# （backend/services/artifact_formats.py 导出中文 PDF 时找 wqy-zenhei.ttc）。
 RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' \
         /etc/apt/sources.list.d/debian.sources && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
-        file \
         fonts-wqy-zenhei \
         libgl1 \
         libglib2.0-0 \
-        libmagic1 \
-        nodejs \
-        npm \
-        poppler-utils \
-        tesseract-ocr \
-        tesseract-ocr-chi-sim \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY requirements.txt requirements-ml.txt .
 RUN python -m pip install --upgrade pip --index-url "${PIP_INDEX_URL}" \
     && python -m pip install --default-timeout=1000 --retries=20 \
-        torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
-        --index-url "${PYTORCH_INDEX_URL}" \
-    && python -m pip install -r requirements.txt --index-url "${PIP_INDEX_URL}"
+        -r requirements.txt --index-url "${PIP_INDEX_URL}"
+
+# 可选的本地嵌入 / 本地重排依赖（torch + transformers + sentence-transformers）。
+# 默认不装：docker 部署走 Ollama 嵌入（EMBEDDING_TYPE=ollama）+ MinerU 解析，而
+# 代码里 sentence_transformers 是惰性导入（app/rag/embeddings.py、app/rag/reranker.py），
+# 所以 torch 只在 EMBEDDING_TYPE=local 或本地重排时才需要 —— 之前无条件安装，
+# 等于每次构建白下 1GB+（还容易被 pypi 的 CUDA 版再拉一遍 nvidia 依赖）。
+# 需要时：docker compose build --build-arg INSTALL_ML_DEPS=true backend
+ARG INSTALL_ML_DEPS=false
+RUN if [ "${INSTALL_ML_DEPS}" = "true" ]; then \
+        python -m pip install --default-timeout=1000 --retries=20 \
+            torch==2.6.0 --index-url "${PYTORCH_INDEX_URL}" \
+        && python -m pip install --default-timeout=1000 --retries=20 \
+            -r requirements-ml.txt --index-url "${PIP_INDEX_URL}"; \
+    fi
 
 # uv/uvx：MCP 广场上相当一部分服务以 `uvx <package>` 启动（单独一层，
 # 避免改动上一层的重型依赖缓存）。镜像内提供 uvx 后即可直接安装这类服务。
@@ -61,12 +74,16 @@ COPY backend ./backend
 COPY skills ./skills
 COPY config ./config
 
-RUN mkdir -p /app/volumes/checkpoints /app/volumes/user-skills \
-    /app/volumes/milvus-metadata /app/volumes/chroma /app/volumes/workspace
+# 运行期目录（workspace / checkpoints / user-skills / ...）交由入口脚本在容器
+# 启动时创建：./volumes 是 bind mount，会覆盖镜像里构建期建好的目录，构建期
+# mkdir 在宿主机缺目录时等于没建，MCP 文件系统服务会直接连不上。
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=10 \
     CMD curl --fail --silent http://127.0.0.1:8000/api/v1/health >/dev/null || exit 1
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["uvicorn", "backend.server.main:app", "--host", "0.0.0.0", "--port", "8000"]

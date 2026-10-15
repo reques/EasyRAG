@@ -1,0 +1,4 @@
+# 容器内由 /bin/sh 执行的脚本必须以 LF 入库。
+# 本仓库 core.autocrlf=true，Windows 检出会把行尾转成 CRLF，
+# 那样 COPY 进镜像后 sh 会因 "\r" 直接报错（如 docker-entrypoint.sh）。
+*.sh text eol=lf

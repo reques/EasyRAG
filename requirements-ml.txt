@@ -1,0 +1,29 @@
+# =============================================================================
+# EasyRAG 可选依赖：本地嵌入 / 本地重排
+#
+# 只有下面两种情况需要它：
+#   * EMBEDDING_TYPE=local —— app/rag/embeddings.py 的 LocalEmbedder 用
+#     SentenceTransformer 加载本地模型（默认 ./models/bge-m3）
+#   * 使用本地 cross-encoder 重排 —— app/rag/reranker.py 的 CrossEncoder
+#
+# docker 部署默认走 Ollama 嵌入（EMBEDDING_TYPE=ollama）+ MinerU 解析，
+# 用不到 torch；因此 Dockerfile 默认不安装本文件（省 1GB+ 与数分钟构建时间）。
+#
+# 安装方式：
+#   docker：docker compose build --build-arg INSTALL_ML_DEPS=true backend
+#   本地：  pip install -r requirements-ml.txt
+# =============================================================================
+
+# torch 请优先从 PyTorch 官方/镜像的 CPU 索引安装，避免误装 CUDA 版（多 2GB+）：
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+#   （国内镜像：https://mirrors.aliyun.com/pytorch-wheels/cpu ）
+torch==2.6.0
+transformers>=4.40.0
+sentence-transformers>=3.0.0
+accelerate>=0.20.0
+
+# 以下是原先被 unstructured / pymilvus.model 间接带入、但代码里从未直接 import
+# 的小包；只在装了上面的模型栈时才有意义，一并挪到这里。
+einops==0.8.1
+ftfy==6.3.1
+lazy_loader==0.4

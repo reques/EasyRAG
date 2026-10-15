@@ -35,6 +35,9 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
         PYTORCH_INDEX_URL: ${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        # 默认不装 torch/transformers/sentence-transformers（docker 走 Ollama 嵌入）。
+        # 需要本地嵌入或本地重排时在 .env 里置 INSTALL_ML_DEPS=true 再构建。
+        INSTALL_ML_DEPS: ${INSTALL_ML_DEPS:-false}
     image: easyrag/backend:local
     env_file:
       - path: ./.env
