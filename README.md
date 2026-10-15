@@ -47,8 +47,12 @@ cp .env.template .env
 ### 2. 一键启动
 
 ```bash
-docker compose up --build -d
+docker compose up -d          # 仅在首次构建、或改过依赖/前端源码时加 --build
 ```
+
+> `--build` 会把**每个**带 `build:` 的服务重建一遍（backend、frontend，以及
+> MinerU）。镜像已存在时请直接 `up -d`，否则每次启动都要白等数分钟。
+> 只重建后端：`docker compose up -d --build backend`。
 
 该命令会统一启动：
 
@@ -83,8 +87,21 @@ volume 中，普通的 `docker compose down` 不会删除。
 `DOCKER_MINERU_ENABLED=true`，然后执行：
 
 ```bash
-docker compose --profile mineru up --build -d
+docker compose --profile mineru up -d      # 镜像已构建时；首次再加 --build
 ```
+
+> MinerU 镜像约 14GB（内含 pipeline 模型），构建一次后**不要再用 `--build`**
+> 整体重建。
+>
+> **本地嵌入（可选）**：后端镜像默认**不装** `torch` / `transformers` /
+> `sentence-transformers`——docker 部署走 Ollama 嵌入，代码里 `sentence_transformers`
+> 是惰性导入（`app/rag/embeddings.py`、`app/rag/reranker.py`），装了纯属浪费 1GB+。
+> 需要 `EMBEDDING_TYPE=local` 或本地 cross-encoder 重排时：
+> `docker compose build --build-arg INSTALL_ML_DEPS=true backend`；
+> 本地源码环境则 `pip install -r requirements-ml.txt`。
+>
+> **构建加速**：在 `.env` 中按 `.env.template` 填 `PIP_INDEX_URL` /
+> `PYTORCH_INDEX_URL` / `NPM_REGISTRY` 走国内镜像，可显著缩短首次构建。
 
 端口可通过 `.env` 中的 `FRONTEND_PORT`、`BACKEND_PORT`、
 `POSTGRES_EXPOSE_PORT` 等变量修改。完整选项见 `.env.template`。
