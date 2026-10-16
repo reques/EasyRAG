@@ -1,12 +1,42 @@
-# EasyRAG
-
-> 企业知识库智能问答平台 — 多策略 RAG + Agent 工具调用 + 知识图谱 + 多智能体编排，开箱即用的全栈应用。
+<div align="center">
+  <a href="https://reques.github.io/EasyRAG/">
+    <img src="site/assets/owl-icon.webp" alt="EasyRAG 猫头鹰与文档图标" width="112" height="112">
+  </a>
+  <h1>EasyRAG</h1>
+  <p><strong>让知识，有问必答。</strong></p>
+  <p>你的知识库，多了一位聪明搭档。<br>混合检索 · 知识图谱 · 可追溯问答 · 多智能体深度研究</p>
+  <p>
+    <a href="https://reques.github.io/EasyRAG/">项目主页 ↗</a> ·
+    <a href="#快速开始">快速开始</a> ·
+    <a href="docs/ARCHITECTURE.md">架构文档</a> ·
+    <a href="https://github.com/reques/EasyRAG/issues">反馈与建议</a>
+  </p>
+</div>
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Vue](https://img.shields.io/badge/Vue-3.5-42b883?logo=vue.js&logoColor=white)](https://vuejs.org/)
 [![Milvus](https://img.shields.io/badge/Milvus-vector_DB-00d4aa)](https://milvus.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+
+<a href="https://github.com/reques/EasyRAG/">
+  <img src="site/assets/knowledge-flow.gif" alt="EasyRAG 流程示意：文档导入、知识索引、混合检索、智能回答" width="1000">
+</a>
+
+<p align="center"><sub>原创 3D 吉祥物与知识流转动图；动图为流程示意，非应用录屏。<a href="site/assets/overview-poster.png">查看静态版本</a>。</sub></p>
+
+EasyRAG 是一个面向企业知识库场景的开源全栈平台，将文档解析、多策略 RAG、Agent 工具调用与多智能体协作放进同一个工作空间。
+
+| 能力 | 可以做什么 |
+|------|------------|
+| 混合检索 | 向量与 BM25 多路召回、融合排序、可选重排，为回答找到相关依据 |
+| 知识图谱 | 提取实体与关系，关联分散文档，辅助发现跨文档线索 |
+| 智能体协作 | ReAct 按需调用工具，Deep Research 拆解与委派子任务 |
+| Skills 与 MCP | 配置技能、接入外部工具，扩展智能体能力 |
+| 流式与可追溯 | SSE 流式回答、引用来源、任务进度与产物预览 |
+| 自主部署 | Docker Compose 编排，支持 OpenAI 兼容 API 与本地嵌入方案 |
+
+项目主页源码位于 [`site/`](site/)，访问 [reques.github.io/EasyRAG](https://reques.github.io/EasyRAG/)。发布步骤与品牌素材说明见 [主页维护文档](site/README.md)。
 
 ---
 

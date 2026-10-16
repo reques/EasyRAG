@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1020">
+  <meta name="description" content="EasyRAG 开源知识库与智能体平台：混合检索、知识图谱、可追溯问答与多智能体深度研究。从你的文档，走向有依据的答案。">
+  <meta property="og:title" content="EasyRAG · 让知识，有问必答。">
+  <meta property="og:description" content="你的知识库，多了一位聪明搭档。开源 RAG + Agent 全栈平台。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://reques.github.io/EasyRAG/">
+  <meta property="og:image" content="https://reques.github.io/EasyRAG/assets/overview-poster.png">
+  <title>EasyRAG · 让知识，有问必答。</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="main.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳转到主要内容</a>
+  <header class="header">
+    <div class="container nav-wrap">
+      <a class="brand" href="#" aria-label="EasyRAG 首页"><img src="assets/owl-icon.webp" width="38" height="38" alt=""><span>Easy<span class="brand-light">RAG</span></span><span class="brand-tag">OPEN SOURCE</span></a>
+      <nav class="nav" aria-label="主导航"><a href="#capabilities">探索能力</a><a href="#how-it-works">工作原理</a><a href="#quick-start">快速开始</a></nav>
+      <a class="github-link" href="https://github.com/reques/EasyRAG" aria-label="访问 EasyRAG GitHub 仓库"><svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor" aria-hidden="true"><path d="M12 .8a11.4 11.4 0 0 0-3.6 22.2c.6.1.8-.2.8-.5v-2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.7-1.3-1.7-1.1-.8.1-.8.1-.8 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.6-.3-5.4-1.3-5.4-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.8 5.4-5.4 5.7.4.4.8 1.1.8 2.2v3.1c0 .3.2.6.8.5A11.4 11.4 0 0 0 12 .8Z"/></svg><span>GitHub</span><span aria-hidden="true">↗</span></a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero container" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="status-dot"></span> MEET YOUR KNOWLEDGE COMPANION</div>
+        <h1 id="hero-title">让知识，<br><span>有问必答。</span><span class="heading-spark" aria-hidden="true">✳</span></h1>
+        <p class="hero-lead">你的知识库，多了一位聪明搭档。</p>
+        <p class="hero-description">把散落的文档连接成知识，让检索、推理与工具协作，<br class="desktop-break">一起找到有依据的答案。</p>
+        <div class="hero-actions"><a class="button button-primary" href="#quick-start">开启知识之旅 <span aria-hidden="true">↗</span></a><a class="button button-quiet" href="#playground">看看它怎么做 <span aria-hidden="true">→</span></a></div>
+        <div class="hero-notes"><span><i aria-hidden="true">✓</i> MIT 开源</span><span><i aria-hidden="true">✓</i> 支持私有部署</span><span><i aria-hidden="true">✓</i> 模型自由选择</span></div>
+      </div>
+      <div class="hero-art">
+        <div class="orbital orbital-one" aria-hidden="true"></div><div class="orbital orbital-two" aria-hidden="true"></div>
+        <span class="art-coordinate" aria-hidden="true">KNOWLEDGE, CONNECTED.</span>
+        <div class="floating-label label-top"><span class="mini-symbol" aria-hidden="true">⌕</span><div><small>发现关联</small><strong>把线索，连起来</strong></div><span class="label-dot" aria-hidden="true"></span></div>
+        <picture><source srcset="assets/owl-mascot.webp" type="image/webp"><img class="mascot" src="assets/owl-mascot.png" alt="EasyRAG 的 3D 猫头鹰搭档，拿着发光的文档，胸前连接着知识节点" width="1280" height="1280" fetchpriority="high"></picture>
+        <div class="floating-label label-bottom"><span class="check-disc" aria-hidden="true">✓</span><div><small>每个答案，都有来处</small><strong>找得到 · 看得懂 · 可追溯</strong></div></div>
+        <span class="art-caption"><span aria-hidden="true">✦</span> 一只猫头鹰，一整个知识宇宙。</span>
+      </div>
+    </section>
+
+    <section class="stack-strip" aria-label="核心技术栈"><div class="container"><span class="stack-intro">BUILT WITH GOOD COMPANY</span><div class="stack-items"><span>Vue <small>3</small></span><span>FastAPI</span><span>LangGraph</span><span>Milvus</span><span>PostgreSQL</span><span>Docker</span></div></div></section>
+
+    <section class="section container" id="capabilities" aria-labelledby="capabilities-title">
+      <div class="section-heading"><div><p class="eyebrow">01 / MORE THAN SEARCH</p><h2 id="capabilities-title">从找到信息，<br>到真正解决问题。</h2></div><p class="section-description">文档不该只是被存起来。<br>让你的知识，参与每一次思考。</p></div>
+      <div class="capability-grid">
+        <article class="feature feature-retrieval"><div class="feature-top"><span class="feature-icon" aria-hidden="true">⌕</span><span class="feature-no">01</span></div><h3>懂语义，也懂关键词</h3><p>向量检索与 BM25 多路召回，融合排序与可选重排，从不同角度找到相关内容。</p><div class="retrieval-visual" aria-hidden="true"><span>语义向量 <i></i><i></i><i></i><i></i><i></i></span><span>关键词 <i></i><i></i><i></i><i></i></span><div class="fusion-line"></div><b>相关知识 <em>↗</em></b></div><span class="feature-foot">HYBRID RETRIEVAL</span></article>
+        <article class="feature feature-graph"><div class="feature-top"><span class="feature-icon lavender" aria-hidden="true">♧</span><span class="feature-no">02</span></div><h3>知识之间，还有关系</h3><p>提取实体与关系，构建知识图谱。沿着关联继续探索，让分散的文档互相连接。</p><svg class="graph-visual" viewBox="0 0 300 115" aria-hidden="true"><g stroke="#514b7a" fill="none"><path d="M148 55 56 26M148 55 60 96M148 55 244 19M148 55 249 94M56 26 60 96M244 19 249 94M60 96 249 94"/></g><g fill="#171e34" stroke="#8b81bc"><circle cx="56" cy="26" r="14"/><circle cx="60" cy="96" r="10"/><circle cx="244" cy="19" r="10"/><circle cx="249" cy="94" r="14"/></g><circle cx="148" cy="55" r="24" fill="#302b50" stroke="#baa3ff"/><circle cx="148" cy="55" r="7" fill="#baa3ff"/><g fill="#d1c6ee"><circle cx="56" cy="26" r="4"/><circle cx="249" cy="94" r="4"/></g></svg><span class="feature-foot">KNOWLEDGE GRAPH</span></article>
+        <article class="feature feature-agent"><div class="feature-top"><span class="feature-icon peach" aria-hidden="true">✳</span><span class="feature-no">03</span></div><h3>复杂任务，一起想办法</h3><p>ReAct 按需调用工具，Deep Research 委派子任务。结合 Skills 与 MCP，扩展解决问题的方式。</p><div class="agent-visual" aria-hidden="true"><span>规划任务</span><b>↗</b><span>检索 / 工具</span><b>↘</b><span>协作汇总 <i>✓</i></span></div><span class="feature-foot">AGENTS, SKILLS & MCP</span></article>
+      </div>
+    </section>
+
+    <section class="section container playground-section" id="playground" aria-labelledby="playground-title">
+      <div class="playground-intro"><p class="eyebrow">02 / A LITTLE SHOW & TELL</p><h2 id="playground-title">问得深入，<br>答得有据。</h2><p>从日常知识问答，到多步任务研究。<br>一个工作空间，连接不同的思考方式。</p><div class="demo-tabs" role="tablist" aria-label="能力场景" aria-orientation="vertical"><button id="tab-qa" role="tab" type="button" aria-selected="true" aria-controls="demo-panel" data-scenario="qa"><span>01</span><div><strong>知识库问答</strong><small>带着来源，给出答案</small></div><b aria-hidden="true">↗</b></button><button id="tab-graph" role="tab" type="button" aria-selected="false" aria-controls="demo-panel" tabindex="-1" data-scenario="graph"><span>02</span><div><strong>关联知识探索</strong><small>顺着关系，发现线索</small></div><b aria-hidden="true">↗</b></button><button id="tab-research" role="tab" type="button" aria-selected="false" aria-controls="demo-panel" tabindex="-1" data-scenario="research"><span>03</span><div><strong>深度研究协作</strong><small>拆解任务，协作推进</small></div><b aria-hidden="true">↗</b></button></div><p class="demo-disclaimer">交互内容为能力示意，未连接在线模型。<br>部署 EasyRAG 后可使用完整应用。</p></div>
+      <div class="demo-window" id="demo-panel" role="tabpanel" aria-labelledby="tab-qa" tabindex="0"><div class="window-bar"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>EasyRAG Workspace</span><span class="demo-badge">示意演示</span></div><div class="demo-content"><div class="demo-context"><span class="context-dot"></span><span id="demo-context">知识库 / 团队知识空间</span></div><div class="user-message" id="demo-question">新同事入职，需要准备哪些资料？</div><div class="assistant-message"><img src="assets/owl-icon.webp" width="34" height="34" alt="EasyRAG"><div class="assistant-body"><span class="assistant-name">EasyRAG <small>你的知识搭档</small></span><ol class="trace" id="demo-trace"><li>检索入职流程与团队文档</li><li>融合相关片段，整理办理清单</li></ol><div id="demo-answer"><p>可以先准备这三类资料：</p><ul><li><strong>身份与人事材料</strong>：按入职指南提交所需信息。</li><li><strong>账号与开发环境</strong>：申请权限，完成环境配置。</li><li><strong>团队与项目文档</strong>：阅读协作规范和项目说明。</li></ul><p>具体要求请以团队当前的入职文档为准。</p></div><div class="source-tags" id="demo-sources"><span>↗ 入职指南.md</span><span>↗ 团队协作手册.pdf</span></div></div></div><div class="demo-input" aria-hidden="true"><span>继续探索你的知识…</span><span>↑</span></div></div></div>
+    </section>
+
+    <section class="section workflow-section" id="how-it-works" aria-labelledby="workflow-title"><div class="container"><div class="section-heading"><div><p class="eyebrow">03 / FROM FILES TO FINDINGS</p><h2 id="workflow-title">好答案，从你的文档出发。</h2></div><button class="motion-toggle" type="button" id="motion-toggle" aria-pressed="false" hidden>暂停动效 <span aria-hidden="true">Ⅱ</span></button></div><div class="workflow-media"><picture id="workflow-picture"><source media="(prefers-reduced-motion: reduce)" srcset="assets/overview-poster.png"><img id="workflow-image" src="assets/knowledge-flow.gif" width="1000" height="430" alt="EasyRAG 流程示意：导入文档，解析分块与索引，通过混合检索和图谱寻找依据，由智能体整理并输出带引用的答案" loading="lazy"></picture><span class="media-caption">CONCEPT ANIMATION / 流程示意，非应用录屏</span></div><div class="process-steps"><article><span>01 / INGEST</span><h3>把文档交给它</h3><p>上传文档，本地解析或可选 MinerU 服务提取内容，分块后建立索引。</p></article><article><span>02 / CONNECT</span><h3>让线索连起来</h3><p>向量、关键词与图谱检索寻找相关证据，为回答准备上下文。</p></article><article><span>03 / REASON</span><h3>带着依据去思考</h3><p>智能体按需调用工具、协同研究，通过流式对话呈现回答与来源。</p></article></div></div></section>
+
+    <section class="section container architecture" aria-labelledby="architecture-title"><div><p class="eyebrow">04 / OPEN BY DESIGN</p><h2 id="architecture-title">从界面到模型，<br>每一层都由你掌控。</h2><p>Vue 交互界面、FastAPI 异步后端与 LangGraph 智能体内核。<br>支持 OpenAI 兼容 API，按需选择模型与工具，部署在自己的环境。</p><a class="text-link" href="https://github.com/reques/EasyRAG/blob/main/docs/ARCHITECTURE.md">打开架构文档 <span aria-hidden="true">↗</span></a></div><div class="architecture-map" aria-label="架构：Vue 前端连接 FastAPI 后端，再连接 RAG、Agent 与存储服务"><div class="arch-row"><span>INTERFACE</span><strong>Vue 3 <i>+</i> FastAPI</strong><small>对话 · 知识库 · 图谱 · 评估</small></div><div class="arch-connector" aria-hidden="true">↓</div><div class="arch-modules"><div><b>RAG Engine</b><small>BM25 / Vector / Graph</small></div><div><b>Agent Runtime</b><small>LangGraph / DeepAgents</small></div></div><div class="arch-connector" aria-hidden="true">↓</div><div class="arch-storage"><span>Milvus</span><span>PostgreSQL</span><span>Redis</span><span>RustFS</span></div><div class="arch-foundation">YOUR INFRASTRUCTURE. YOUR KNOWLEDGE.</div></div></section>
+
+    <section class="section container quick-start" id="quick-start" aria-labelledby="start-title"><div class="start-copy"><p class="eyebrow">05 / MAKE IT YOURS</p><h2 id="start-title">下一站，<br>你的知识空间。</h2><p>准备 Docker 和一个可用的对话模型 API Key，<br>从一次本地部署开始。</p><a class="text-link" href="https://github.com/reques/EasyRAG#快速开始">阅读完整部署指南 <span aria-hidden="true">↗</span></a><div class="start-mascot" aria-hidden="true"><img src="assets/owl-icon.webp" width="60" height="60" alt="" loading="lazy"><span>你的下一位搭档，<br>已经准备好了。<span class="cyan"> ✦</span></span></div></div><div class="terminal"><div class="terminal-bar"><span><span class="status-dot"></span> terminal</span><button class="copy-button" data-copy="setup-code" type="button">复制命令</button></div><pre><code id="setup-code"><span class="code-comment"># 01 获取项目</span>
+git clone https://github.com/reques/EasyRAG.git
+cd EasyRAG
+
+<span class="code-comment"># 02 创建配置文件</span>
+cp .env.template .env
+
+<span class="code-comment"># 03 在 .env 填写模型 API Key 后启动</span>
+docker compose up -d</code></pre><div class="terminal-note"><span aria-hidden="true">↳</span> 服务就绪后访问 <code>http://localhost:5173</code></div><p class="terminal-footnote">首次启动需下载镜像与嵌入模型。Windows PowerShell 使用 <code>Copy-Item .env.template .env</code> 创建配置。</p></div></section>
+
+    <section class="closing container"><span class="closing-star" aria-hidden="true">✳</span><p>把知识留给自己，<br>把可能性交给开源。</p><a class="button button-primary" href="https://github.com/reques/EasyRAG">在 GitHub 一起构建 <span aria-hidden="true">↗</span></a></section>
+  </main>
+  <footer class="container footer"><a class="brand" href="#"><img src="assets/owl-icon.webp" alt="" width="30" height="30"><span>Easy<span class="brand-light">RAG</span></span></a><p>Built for curious minds. <span>以知识为起点。</span></p><div><a href="https://github.com/reques/EasyRAG/blob/main/LICENSE">MIT License</a><a href="https://github.com/reques/EasyRAG/issues">反馈与建议 ↗</a></div></footer>
+  <div class="copy-status sr-only" role="status" aria-live="polite"></div>
+</body>
+</html>
