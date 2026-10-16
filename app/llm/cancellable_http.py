@@ -17,6 +17,9 @@ import httpx
 from app.agents.cancellation import AgentRunCancelled, current_cancel_event
 
 POLL_SECONDS = 0.02
+# Keep LangChain's previous transport negotiation. Compatible gateways may send
+# unlabelled zstd SSE when optional local codecs cause httpx to advertise zstd.
+_MODEL_HEADERS = {"Accept-Encoding": "gzip, deflate"}
 _loop = None
 _loop_lock = Lock()
 
@@ -152,8 +155,8 @@ class CancellableAsyncHTTPTransport(httpx.AsyncBaseTransport):
 def sync_model_http_client(*, trust_env=False):
     # Proxy selection belongs to the inner client, otherwise httpx environment
     # mounts would bypass our transport and silently remove cancellation support.
-    return httpx.Client(transport=CancellableHTTPTransport(trust_env=trust_env), trust_env=False)
+    return httpx.Client(transport=CancellableHTTPTransport(trust_env=trust_env), trust_env=False, headers=_MODEL_HEADERS)
 
 
 def async_model_http_client(*, trust_env=False):
-    return httpx.AsyncClient(transport=CancellableAsyncHTTPTransport(trust_env=trust_env), trust_env=False)
+    return httpx.AsyncClient(transport=CancellableAsyncHTTPTransport(trust_env=trust_env), trust_env=False, headers=_MODEL_HEADERS)
