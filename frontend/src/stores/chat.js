@@ -9,6 +9,7 @@ export const useChatStore = defineStore('chat', () => {
   const conversations = ref([])
   const activeConversationId = ref(localStorage.getItem(STORAGE_KEY) || null)
   const loading = ref(false)
+  const newConversationVersion = ref(0)
 
   async function loadConversations() {
     loading.value = true
@@ -34,6 +35,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function startNewConversation() {
+    newConversationVersion.value++
     activeConversationId.value = null
     localStorage.removeItem(STORAGE_KEY)
   }
@@ -53,6 +55,7 @@ export const useChatStore = defineStore('chat', () => {
     conversations,
     activeConversationId,
     loading,
+    newConversationVersion,
     loadConversations,
     selectConversation,
     startNewConversation,

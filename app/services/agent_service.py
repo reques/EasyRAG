@@ -576,6 +576,8 @@ class AgentService:
                     config=run_config,
                     stream_mode=["values", "messages"],
                 ):
+                    from app.agents.cancellation import check_run_cancelled
+                    check_run_cancelled()
                     if isinstance(stream_item, tuple) and len(stream_item) == 2:
                         mode, payload = stream_item
                     else:

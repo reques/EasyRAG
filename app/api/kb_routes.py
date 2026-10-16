@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
@@ -28,7 +28,9 @@ from app.rag.parsers import (
 logger = get_logger(__name__)
 cfg = get_settings()
 
-router = APIRouter(prefix="/kb", tags=["knowledge-base"])
+from backend.server.utils.auth_middleware import get_admin_user
+
+router = APIRouter(prefix="/kb", tags=["knowledge-base"], dependencies=[Depends(get_admin_user)])
 
 # ---------------------------------------------------------------------------
 # Request / Response schemas

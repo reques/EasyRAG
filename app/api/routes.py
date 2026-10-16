@@ -1,7 +1,8 @@
 """FastAPI route definitions."""
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from backend.server.utils.auth_middleware import get_admin_user
 from pydantic import BaseModel, Field
 from app.core.config import get_settings
 from app.core.logger import get_logger
@@ -66,7 +67,7 @@ def health_check():
     )
 
 
-@router.post("/chat", response_model=ChatResponse, tags=["agent"])
+@router.post("/chat", response_model=ChatResponse, tags=["agent"], dependencies=[Depends(get_admin_user)])
 def chat(request: ChatRequest):
     """Run the full agent workflow.
 
@@ -86,7 +87,7 @@ def chat(request: ChatRequest):
                             detail=str(exc))
 
 
-@router.post("/ingest", response_model=IngestResponse, tags=["rag"])
+@router.post("/ingest", response_model=IngestResponse, tags=["rag"], dependencies=[Depends(get_admin_user)])
 def ingest(request: IngestRequest):
     """Index text chunks into the vector store."""
     logger.info("/ingest %d chunks", len(request.texts))
@@ -101,7 +102,7 @@ def ingest(request: IngestRequest):
                             detail=str(exc))
 
 
-@router.get("/tools", tags=["agent"])
+@router.get("/tools", tags=["agent"], dependencies=[Depends(get_admin_user)])
 def list_tools():
     """List registered tools and their schemas."""
     from app.tools.registry import get_tool_registry

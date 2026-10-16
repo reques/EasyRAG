@@ -174,6 +174,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         logger.warning("[lifespan] ingestion worker start skipped: %s", exc)
 
     yield
+    from backend.services.chat_stream_service import shutdown_streams
+    await shutdown_streams()
 
     # 停止文件索引 worker（先停消费再关 Redis；存量任务排空后返回）
     if ingestion_worker_task is not None:

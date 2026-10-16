@@ -308,6 +308,8 @@ def run_dynamic_agent(
                 config=run_config,
                 stream_mode=["values", "messages"],
             ):
+                from app.agents.cancellation import check_run_cancelled
+                check_run_cancelled()
                 # 真实 langgraph：stream_mode 为列表时产出 (mode, payload)；
                 # 测试 fake（旧契约）：直接产出 values chunk。统一适配。
                 if isinstance(stream_item, tuple) and len(stream_item) == 2:

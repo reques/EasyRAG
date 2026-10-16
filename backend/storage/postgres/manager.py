@@ -318,6 +318,7 @@ async def init_db() -> None:
     from backend.storage.postgres.models_skill_config import CustomSkillConfig  # noqa: F401
     from backend.storage.postgres.models_agent_run import Run, Task, AgentRun  # noqa: F401
     from backend.storage.postgres.models_trace import ExecutionTrace, TraceEvent  # noqa: F401
+    from backend.storage.postgres.models_chat_stream import ChatStream, ChatStreamEvent  # noqa: F401
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

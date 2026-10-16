@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,13 +13,19 @@ from backend.repositories.user_repository import UserRepository
 from backend.storage.postgres.models_user import User
 from backend.storage.postgres.manager import get_session
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> User:
     """从 JWT Token 解析当前用户（作为 FastAPI 依赖项使用）。"""
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
         payload = decode_access_token(credentials.credentials)
         user_id = payload.get("sub")
@@ -26,6 +34,10 @@ async def get_current_user(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token payload",
             )
+        try:
+            user_id = uuid.UUID(str(user_id))
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(status_code=401, detail="Invalid token subject")
     except AuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -41,6 +53,13 @@ async def get_current_user(
                 detail="User not found or inactive",
             )
         return user
+
+
+async def get_admin_user(user: User = Depends(get_current_user)) -> User:
+    """Global MCP/legacy collections are admin resources, never user-owned APIs."""
+    if not (user.is_superuser or user.role == "admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator required")
+    return user
 
 
 async def get_optional_user(

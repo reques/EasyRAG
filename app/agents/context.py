@@ -105,6 +105,9 @@ class ChatContext(BaseContext):
     on_artifact: Optional[ArtifactCallback] = None
     """工件回调 fn({kind, stage, title, content})，SSE 实时透传。"""
 
+    cancel_event: Optional[Any] = None
+    """进程内协作取消信号；不进入模型输入、数据库或 checkpoint。"""
+
     @classmethod
     def from_request(
         cls,

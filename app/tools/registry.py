@@ -263,6 +263,8 @@ class ToolRegistry:
             ToolNotFoundError:   Tool not registered.
             ToolExecutionError:  Tool unavailable (check_fn failed) or raised during execution.
         """
+        from app.agents.cancellation import check_run_cancelled
+        check_run_cancelled()
         tool = self.get(name)  # acquires+releases lock internally
         if not _skill_allows(tool):
             raise ToolExecutionError(
@@ -316,6 +318,7 @@ class ToolRegistry:
         last_exc: Optional[BaseException] = None
         with trace_span(f"tool.invoke.{name}", tool=name, attempts=attempts):
             for attempt in range(attempts):
+                check_run_cancelled()
                 try:
                     result = self._execute(tool, kwargs, progress_cb)
                     emit(

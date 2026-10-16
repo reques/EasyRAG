@@ -7,7 +7,8 @@ import time
 import uuid
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,6 +59,8 @@ from backend.services.skill_config_service import (
     write_personal_skill,
 )
 from backend.storage.postgres.models_skill_config import CustomSkillConfig
+from backend.storage.postgres.models_chat_stream import ChatStream
+from backend.services import chat_stream_service as streams
 
 logger = get_logger(__name__)
 cfg = get_settings()
@@ -76,6 +79,7 @@ async def _load_knowledge_scope(
 
 class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096)
+    request_id: Optional[uuid.UUID] = None
     conversation_id: Optional[str] = None  # None = 创建新会话
     model_id: Optional[str] = Field(default=None, max_length=64)
     # 2026-09-04 Skill 重构：语义从"注入这些 Skill 的指令"改为"本次请求可用的
@@ -99,7 +103,7 @@ class ChatResponse(BaseModel):
     model_id: str = ""
     model_name: str = ""
     intent: str = ""
-    steps: list[str] = []
+    steps: list[str | dict[str, Any]] = Field(default_factory=list)
     sources: list[dict] = []
     elapsed_seconds: float = 0.0
     skills: list[dict] = Field(default_factory=list)
@@ -141,6 +145,7 @@ async def _persist_trace_safely(
 
 
 class ResumeCheckpointRequest(BaseModel):
+    request_id: Optional[uuid.UUID] = None
     model_id: Optional[str] = Field(default=None, max_length=64)
     skill_ids: list[str] = Field(default_factory=list, max_length=32)
     deep_research: Optional[bool] = None
@@ -677,237 +682,81 @@ async def send_message(
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """发送消息并获取 Agent 回复（持久化对话历史）。"""
-    start = time.perf_counter()
-
-    async with get_session() as session:
-        selected_model = await _resolve_request_model(
-            req.model_id, current_user.id, session
-        )
-        selected_skills = await _resolve_request_skills(
-            req.skill_ids, current_user.id, session
-        )
-        skill_payload = _selected_skill_payload(selected_skills)
-        # 获取或创建会话
-        conv_id = None
-        is_new = False
-        if req.conversation_id:
-            conv = await get_conversation(session, uuid.UUID(req.conversation_id))
-            if not conv or conv.user_id != current_user.id:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Conversation not found",
+    """Use the same durable execution and cancellation boundary as SSE clients."""
+    response = await send_message_stream(req, current_user)
+    async for frame in response.body_iterator:
+        for line in frame.splitlines():
+            if not line.startswith("data:"):
+                continue
+            event = json.loads(line[5:])
+            if event.get("type") == "done":
+                return ChatResponse(
+                    **{key: value for key, value in event.items() if key in ChatResponse.model_fields and key not in ("answer", "conversation_id")},
+                    conversation_id=response.headers["X-Conversation-Id"], answer=event.get("content", ""),
                 )
-            conv_id = conv.id
-        else:
-            conv = await create_conversation(session, current_user.id)
-            conv_id = conv.id
-            is_new = True
+            if event.get("type") in ("error", "cancelled"):
+                raise HTTPException(409, event.get("detail") or "Execution interrupted")
+    raise HTTPException(409, "Execution ended without a result")
 
-        # 恢复请求复用崩溃前已经落库的用户消息；普通请求创建新消息。
-        if req.resume_checkpoint:
-            user_message = _last_resumable_user_message(conv, req.query)
-        else:
-            user_message = await add_message(
-                session,
-                conv_id,
-                "user",
-                req.query,
-                image=req.image,
-                metadata_json=json.dumps({
-                    "skills": skill_payload,
-                    "model_id": selected_model.id,
-                    "deep_research": req.deep_research,
-                }, ensure_ascii=False),
-            )
-            await session.commit()
-        user_message_id = user_message.id
 
-        # 加载对话历史（情景记忆压缩：有 summary 时 = 摘要+最近N轮，否则完整历史）
-        db_history = await get_compressed_history(session, conv_id)
-        knowledge_base_ids, knowledge_catalog = await _load_knowledge_scope(
-            session, current_user.id
-        )
 
-    # ── 图片裁决（OCR 回退只做一次）────────────────────────────────────────────
-    effective_query = req.query
-    image_for_context: Optional[str] = None
-    if req.image:
-        if selected_model.supports_vision:
-            image_for_context = req.image
-        else:
-            try:
-                from app.ocr.engine import ocr_image_to_text
-                _ocr_text = (await ocr_image_to_text(req.image)).strip()
-                effective_query = (
-                    f"{req.query}\n\n[图片识别内容（OCR）]:\n{_ocr_text}"
-                    if _ocr_text
-                    else f"{req.query}\n\n[图片无法识别为文字，已忽略图片内容]"
-                )
-            except Exception as _ocr_exc:
-                logger.warning("[chat/send] OCR 失败，降级为无图：%s", _ocr_exc)
-                effective_query = f"{req.query}\n\n[图片识别服务不可用，已忽略图片内容]"
-
-    # =====================================================================
-    # 调用 LangGraph Agent，传入 DB 中的对话历史。
-    # AGENT_MODE=multi 作为 deepagents 的兼容别名，由 AgentService 内部路由。
-    # =====================================================================
-    result: dict[str, Any] = {}
-    try:
-        from app.services.agent_service import get_agent_service
-        from app.agents.context import ChatContext
-        from app.agents.request_context import use_request_context
-
-        agent = get_agent_service()
-        # 阶段 2：请求参数收拢为 ChatContext，模型/Skill/KB 授权/trace 由
-        # use_request_context 一次性铺设（门面，见 app/agents/request_context.py）。
-        # skill_definitions 传入已解析的有效集合（含个人 Skill 的 owner 校验
-        # 与依赖闭包），避免门面内按 slug 回查目录时丢失个人 Skill。
-        chat_ctx = ChatContext.from_request(
-            effective_query,
-            thread_id=str(conv_id),
-            user_id=current_user.id,
-            model_id=selected_model.id,
-            skill_ids=[d.slug for d in selected_skills],
-            knowledge_base_ids=knowledge_base_ids,
-            knowledge_catalog=knowledge_catalog,
-            image_data=image_for_context,
-            history=db_history,          # ← 关键：传入 DB 历史
-            input_message_id=str(user_message_id),
-            resume_checkpoint=req.resume_checkpoint,
-            deep_research=req.deep_research,
-        )
-        with use_request_context(chat_ctx, skill_definitions=selected_skills, model_profile=selected_model):
-            result = agent.run(query=effective_query, context=chat_ctx)
-        answer = result.get("final_answer", "")
-    except Exception as exc:
-        logger.error("[chat/send] agent error: %s", exc)
-        answer = f"处理请求时发生错误: {exc}"
-
-    # 委派持久化（best-effort，复用 Run/Task/AgentRun 表）；无委派事件时自动跳过。
-    delegation_run_id = ""
-    if result.get("events"):
-        from backend.services.delegation_service import persist_delegation
-
-        try:
-            delegation_run_id = await persist_delegation(
-                get_session,
-                conversation_id=conv_id,
-                user_id=current_user.id,
-                events=result.get("events"),
-                goal=effective_query,
-                model_id=selected_model.id,
-                source_message_id=user_message_id,
-            ) or ""
-        except Exception as exc:
-            logger.warning("[chat/send] delegation persist failed: %s", exc)
-
-    # 兜底：Agent 返回空答案时，用 LLM 直接生成（跳过检索）
-    if not answer.strip():
-        logger.warning("[chat/send] agent returned empty answer, fallback to direct LLM")
-        try:
-            from app.llm.client import get_llm_client
-            llm = get_llm_client(profile=selected_model)
-            from app.services.knowledge_catalog import format_knowledge_catalog
-
-            fallback_messages = [
-                {
-                    "role": "system",
-                    "content": format_knowledge_catalog(knowledge_catalog),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                    f"请简要回答以下问题（200字以内）：\n\n{req.query}\n\n"
-                    "如果问题涉及法律条款，请引用具体法条编号。"
-                    ),
-                },
-            ]
-            # 直连 LLM 兜底是**非 Agent 路径**（单次调用，无 read_skill 循环），
-            # 因此 eager=True 展开全部有效 Skill 的正文 —— 渐进式披露在这里
-            # 无从发生（见 app/skills/runtime.py 的 render_prompt）。
-            _skill_rt = SkillRuntimeContext.from_definitions(selected_skills)
-            if _skill_rt.active:
-                fallback_messages.insert(0, {
-                    "role": "system",
-                    "content": _skill_rt.render_prompt(eager=True),
-                })
-            fallback_answer = llm.chat_sync(fallback_messages)
-            if fallback_answer and fallback_answer.strip():
-                answer = fallback_answer
-                logger.info("[chat/send] direct LLM fallback succeeded (%d chars)", len(fallback_answer))
-            else:
-                answer = "抱歉，模型暂时无法生成回答，请稍后重试或简化问题。"
-        except Exception as fb_exc:
-            logger.error("[chat/send] direct LLM fallback failed: %s", fb_exc)
-            answer = "抱歉，处理请求时遇到问题，请稍后重试。"
-
-    # 自动设置会话标题（首次对话时用 LLM 生成语义摘要）
-    if is_new and req.query.strip() and answer.strip():
-        title = await generate_conversation_title(req.query, answer)
-        async with get_session() as session:
-            conv = await get_conversation(session, conv_id)
-            if conv:
-                conv.title = title
-                await session.commit()
-
-    elapsed = round(time.perf_counter() - start, 3)
-    trace_id = await _persist_trace_safely(
-        result,
-        conversation_id=conv_id,
-        user_id=current_user.id,
-        source_message_id=user_message_id,
-        mode=result.get("intent") or "dynamic",
-        model_id=selected_model.id,
-        goal=effective_query,
+def _stream_response(run, after=0):
+    return StreamingResponse(
+        streams.read_events(run.id, run.user_id, after),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "X-Chat-Stream-Id": str(run.id), "X-Conversation-Id": str(run.conversation_id)},
     )
 
-    # 保存助手回复
+
+async def _require_idle_conversation(session, conversation_id):
+    from sqlalchemy import select
+    from backend.storage.postgres.models_conversation import Conversation
+
+    while True:
+        # All mutators share admission's conversation lock. Checking status
+        # without it would allow deletion/compaction to race a newly admitted run.
+        locked = (await session.execute(select(Conversation.id).where(
+            Conversation.id == conversation_id
+        ).with_for_update())).scalar_one_or_none()
+        if locked is None:
+            raise HTTPException(404, "Conversation not found")
+        active = (await session.execute(select(ChatStream).where(
+            ChatStream.conversation_id == conversation_id, ChatStream.status.in_(streams.ACTIVE)
+        ))).scalar_one_or_none()
+        if active is None:
+            return
+        await streams.recover_stale(session, active)
+        if active.status in streams.ACTIVE:
+            raise HTTPException(409, {"message": "会话任务仍在执行，请重新连接或先取消。", "stream_id": str(active.id)})
+        # Stale recovery commits its terminal event and releases the lock. Acquire
+        # it again and recheck before mutating the conversation.
+
+
+@router.get("/streams/{stream_id}/events")
+async def stream_events(stream_id: uuid.UUID, after: int = Query(0, ge=0), current_user: User = Depends(get_current_user)):
     async with get_session() as session:
-        meta = json.dumps({
-            "intent": result.get("intent", ""),
-            "run_id": delegation_run_id,
-            "steps": result.get("steps", []),
-            "sources": result.get("sources", []),
-            "model_id": selected_model.id,
-            "model_name": selected_model.name,
-            "skills": skill_payload,
-            "trace_id": trace_id,
-            "token_usage": result.get("token_usage") or {},
-            "context_usage": result.get("context_usage") or {},
-        }, ensure_ascii=False)
-        await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
-        await session.commit()
-    schedule_memory_evaluation(
-        current_user.id,
-        req.query,
-        conv_id,
-        assistant_content=answer,
-        source_message_id=user_message_id,
-        execution={
-            "mode": result.get("intent", ""),
-            "steps": result.get("steps", []),
-            "artifacts": result.get("artifacts", []),
-            "error": result.get("error_message"),
-        },
-    )
+        run = await streams.owned_run(session, stream_id, current_user.id)
+        if after > run.last_sequence:
+            raise HTTPException(400, "Event cursor is ahead of the stream")
+        return _stream_response(run, after)
 
-    return ChatResponse(
-        conversation_id=str(conv_id),
-        answer=answer,
-        run_id=delegation_run_id,
-        model_id=selected_model.id,
-        model_name=selected_model.name,
-        intent=result.get("intent", ""),
-        steps=result.get("steps", []),
-        sources=result.get("sources", []),
-        elapsed_seconds=elapsed,
-        skills=skill_payload,
-        resumed=bool(result.get("resumed")),
-        trace_id=trace_id,
-        token_usage=result.get("token_usage") or {},
-        context_usage=result.get("context_usage") or {},
-    )
+
+@router.post("/streams/{stream_id}/cancel")
+async def cancel_stream(stream_id: uuid.UUID, current_user: User = Depends(get_current_user)):
+    return await streams.request_cancel(stream_id, current_user.id)
+
+
+@router.get("/conversations/{conversation_id}/stream")
+async def conversation_stream(conversation_id: uuid.UUID, current_user: User = Depends(get_current_user)):
+    async with get_session() as session:
+        conv = await get_conversation(session, conversation_id)
+        if not conv or conv.user_id != current_user.id:
+            raise HTTPException(404, "Conversation not found")
+        run = await streams.latest_stream(session, conversation_id, current_user.id)
+        if run:
+            await streams.recover_stale(session, run)
+        return {"stream": streams.view(run) if run else None}
 
 
 @router.post("/stream")
@@ -927,9 +776,20 @@ async def send_message_stream(
     最终答案 + 引用落库与 /chat/send 保持一致。
     """
     import asyncio
-    from fastapi.responses import StreamingResponse
+    from sqlalchemy import select
+    from backend.storage.postgres.models_conversation import Conversation
+
+    stream_id = req.request_id or uuid.uuid4()
+    request_fingerprint = streams.fingerprint(req.model_dump(mode="json"))
 
     async with get_session() as session:
+        existing = await session.get(ChatStream, stream_id)
+        if existing is not None:
+            if existing.user_id != current_user.id:
+                raise HTTPException(404, "Chat execution not found")
+            if existing.fingerprint != request_fingerprint:
+                raise HTTPException(409, "request_id was already used for a different request")
+            return _stream_response(existing)
         selected_model = await _resolve_request_model(
             req.model_id, current_user.id, session
         )
@@ -947,13 +807,29 @@ async def send_message_stream(
                 )
             conv_id = conv.id
             is_new = False
+            await session.execute(select(Conversation.id).where(Conversation.id == conv_id).with_for_update())
+            # A concurrent retry may have waited for the first reservation's
+            # conversation lock after its initial request-ID lookup missed it.
+            existing = await session.get(ChatStream, stream_id)
+            if existing is not None:
+                if existing.user_id != current_user.id:
+                    raise HTTPException(404, "Chat execution not found")
+                if existing.fingerprint != request_fingerprint:
+                    raise HTTPException(409, "request_id was already used for a different request")
+                return _stream_response(existing)
+            await _require_idle_conversation(session, conv_id)
         else:
             conv = await create_conversation(session, current_user.id)
             conv_id = conv.id
             is_new = True
 
         if req.resume_checkpoint:
+            # Completion may have committed while admission waited on the lock.
+            await session.refresh(conv, attribute_names=["messages"])
             user_message = _last_resumable_user_message(conv, req.query)
+            previous = await streams.latest_stream(session, conv_id, current_user.id)
+            if previous and previous.source_message_id == user_message.id and previous.status == "cancelled":
+                raise HTTPException(409, "任务已主动取消，请发送新消息开始新任务。")
         else:
             user_message = await add_message(
                 session,
@@ -967,89 +843,76 @@ async def send_message_stream(
                     "deep_research": req.deep_research,
                 }, ensure_ascii=False),
             )
-            await session.commit()
         user_message_id = user_message.id
+        stream_run = ChatStream(
+            id=stream_id, user_id=current_user.id, conversation_id=conv_id,
+            source_message_id=user_message_id, fingerprint=request_fingerprint,
+            owner_token=uuid.uuid4().hex, status="running", last_sequence=0,
+        )
         db_history = await get_compressed_history(session, conv_id)
         knowledge_base_ids, knowledge_catalog = await _load_knowledge_scope(
             session, current_user.id
         )
 
-    # ── 图片裁决（deep / dynamic 共用）──────────────────────────────────────────
-    # OCR 回退只做一次：所选模型不支持多模态时，把图片转成文字拼进查询；
-    # 多模态模型则保留 image_for_context 直读，query 不变。
-    effective_query = req.query
-    image_for_context: Optional[str] = None
-    if req.image:
-        if selected_model.supports_vision:
-            image_for_context = req.image
-        else:
-            try:
-                from app.ocr.engine import ocr_image_to_text
-                _ocr_text = (await ocr_image_to_text(req.image)).strip()
-                effective_query = (
-                    f"{req.query}\n\n[图片识别内容（OCR）]:\n{_ocr_text}"
-                    if _ocr_text
-                    else f"{req.query}\n\n[图片无法识别为文字，已忽略图片内容]"
-                )
-            except Exception as _ocr_exc:
-                logger.warning("[chat/stream] OCR 失败，降级为无图：%s", _ocr_exc)
-                effective_query = f"{req.query}\n\n[图片识别服务不可用，已忽略图片内容]"
+        session.add(stream_run)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            existing = await session.get(ChatStream, stream_id)
+            if existing is not None and existing.user_id == current_user.id and existing.fingerprint == request_fingerprint:
+                return _stream_response(existing)
+            raise HTTPException(409, "Conversation already has an active execution")
 
-    from app.services.agent_service import AgentService
-
-    # 深度研究开关（按请求选择）→ 强制 DeepAgents；全局 AGENT_MODE=deepagents 同样启用。
-    # AGENT_MODE=multi 作为 deepagents 的兼容别名；auto 仍按请求判断是否多智能体——
-    # 均路由到 DeepAgents（2026-08-26 阶段 5，Orchestrator 已退役）。
-    use_deep = (
-        cfg.AGENT_MODE == "deepagents"
-        or cfg.AGENT_MODE == "multi"
-        or bool(req.deep_research)
-        or (
-            cfg.AGENT_MODE == "auto"
-            and AgentService._should_use_multi(effective_query, db_history)
-        )
-    )
-    # 通过 use_dynamic 新增轻量动态 Agent（auto 普通问题 / AGENT_MODE=dynamic）
-    # 模型每轮自行决定直接回答 / 检索 / 调工具，简单问题不走复杂流程。
-    # （阶段 0，2026-09-02：single 固定管线已退役——use_deep=False 且
-    #   use_dynamic=False 的组合已不可能出现，不再产生 single 分支。）
-    use_dynamic = (
-        not use_deep
-        and cfg.AGENT_MODE != "single"
-        and cfg.AGENT_MODE in ("dynamic", "auto")
-    )
-    if not use_deep and not use_dynamic:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"AGENT_MODE={cfg.AGENT_MODE} 已退役，请使用 auto / dynamic / deepagents",
-        )
-    agent_mode = "deepagents" if use_deep else "dynamic"
-
-    # 阶段 2：请求上下文声明层只建一次（两个分支共享）。query 为模型选型 /
-    # deep_research 裁决后的 effective_query；skill 回查等归属路由层职责，
-    # 这里直接把已解析的有效集合透传给门面，避免丢失个人 Skill 内容。
-    from app.agents.context import ChatContext
-
-    _chat_ctx = ChatContext.from_request(
-        effective_query,
-        thread_id=str(conv_id),
-        user_id=current_user.id,
-        model_id=selected_model.id,
-        skill_ids=[d.slug for d in selected_skills],
-        knowledge_base_ids=knowledge_base_ids,
-        knowledge_catalog=knowledge_catalog,
-        image_data=image_for_context,
-        history=db_history,          # ← 关键：传入 DB 历史
-        input_message_id=str(user_message_id),
-        resume_checkpoint=req.resume_checkpoint,
-        deep_research=use_deep,
-    )
-
-    async def _event_gen_inner():
+    async def _event_gen_inner(execution):
         from app.services.agent_service import get_agent_service
+        from dataclasses import replace
+        from app.agents.events import public_event
 
-        loop = asyncio.get_event_loop()
+        # ── 图片裁决（deep / dynamic 共用）──────────────────────────────────────────
+        # OCR 回退只做一次：所选模型不支持多模态时，把图片转成文字拼进查询；
+        # 多模态模型则保留 image_for_context 直读，query 不变。
+        effective_query = req.query
+        image_for_context: Optional[str] = None
+        if req.image:
+            if selected_model.supports_vision:
+                image_for_context = req.image
+            else:
+                try:
+                    from app.ocr.engine import ocr_image_to_text
+                    _ocr_text = (await ocr_image_to_text(req.image)).strip()
+                    effective_query = (
+                        f"{req.query}\n\n[图片识别内容（OCR）]:\n{_ocr_text}"
+                        if _ocr_text
+                        else f"{req.query}\n\n[图片无法识别为文字，已忽略图片内容]"
+                    )
+                except Exception as _ocr_exc:
+                    logger.warning("[chat/stream] OCR 失败，降级为无图：%s", _ocr_exc)
+                    effective_query = f"{req.query}\n\n[图片识别服务不可用，已忽略图片内容]"
+
+        from app.agents.context import ChatContext
+
+        _chat_ctx = ChatContext.from_request(
+            effective_query,
+            thread_id=str(conv_id),
+            user_id=current_user.id,
+            model_id=selected_model.id,
+            skill_ids=[d.slug for d in selected_skills],
+            knowledge_base_ids=knowledge_base_ids,
+            knowledge_catalog=knowledge_catalog,
+            image_data=image_for_context,
+            history=db_history,          # ← 关键：传入 DB 历史
+            input_message_id=str(user_message_id),
+            resume_checkpoint=req.resume_checkpoint,
+            deep_research=req.deep_research,
+        )
+
+
         agent = get_agent_service()
+        agent_mode = agent.select_agent_mode(effective_query, _chat_ctx)
+        use_deep = agent_mode == "deepagents"
+        stream_context = replace(_chat_ctx, cancel_event=execution.cancel_event, deep_research=use_deep)
+        loop = asyncio.get_running_loop()
 
         def _sse(payload: dict) -> str:
             return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
@@ -1092,7 +955,7 @@ async def send_message_stream(
             # 不属于 _chat_ctx（不能跨线程携带 closure），先挂到线程局部副本。
             from dataclasses import replace
 
-            _deep_ctx = replace(_chat_ctx, on_step=_deep_status)
+            _deep_ctx = replace(stream_context, on_step=_deep_status)
 
             # 统一事件流 → orchestrator 时代 SSE 协议（阶段 5）：委派树/工具时间线
             # 由前端现有任务面板与 AgentActivity 直接消费，无需新组件。
@@ -1150,6 +1013,7 @@ async def send_message_stream(
             # elapsed 计算依赖它），导致 UnboundLocalError（实测 bug）
             deep_start = time.perf_counter()
             deep_future = loop.run_in_executor(None, _run_deep_in_thread)
+            execution.workers.append(deep_future)
             while True:
                 try:
                     ev = await loop.run_in_executor(
@@ -1214,49 +1078,22 @@ async def send_message_stream(
             deep_artifacts: list[dict] = deep_result.get("artifacts") or []
             elapsed = round(time.perf_counter() - deep_start, 3)
 
-            # 落库（与单 Agent 分支一致的 metadata 结构）
-            try:
-                async with get_session() as session:
-                    meta = {
-                        "intent": "deepagents",
-                        "agent_mode": agent_mode,
-                        "steps": step_objs,
-                        "artifacts": deep_artifacts,
-                        "progress_summaries": deep_progress_summaries,
-                        "model_id": selected_model.id,
-                        "model_name": selected_model.name,
-                        "skills": skill_payload,
-                        "trace_id": trace_id,
-                        "token_usage": deep_result.get("token_usage") or {},
-                        "context_usage": deep_result.get("context_usage") or {},
-                    }
-                    await add_message(
-                        session, conv_id, "assistant", answer,
-                        metadata_json=json.dumps(meta, ensure_ascii=False)
-                    )
-                    await session.commit()
-                schedule_memory_evaluation(
-                    current_user.id,
-                    req.query,
-                    conv_id,
-                    assistant_content=answer,
-                    source_message_id=user_message_id,
-                    execution={
-                        "mode": "deepagents",
-                        "steps": step_objs,
-                        "artifacts": deep_artifacts,
-                        "error": deep_result.get("error_message"),
-                    },
-                )
-            except Exception as exc:
-                logger.warning("[chat/stream] deepagents persist failed: %s", exc)
-
-            # 与动态 Agent 路径同理：DeepAgents 的最终回答是整段返回（无逐 token
-            # 流式），补发一个整段 delta，回答才能在 done 前实时出现在对话框。
+            meta = {
+                "intent": "deepagents",
+                "agent_mode": agent_mode,
+                "steps": step_objs,
+                "artifacts": deep_artifacts,
+                "progress_summaries": deep_progress_summaries,
+                "model_id": selected_model.id,
+                "model_name": selected_model.name,
+                "skills": skill_payload,
+                "trace_id": trace_id,
+                "token_usage": deep_result.get("token_usage") or {},
+                "context_usage": deep_result.get("context_usage") or {},
+            }
             if answer:
                 yield _sse({"type": "delta", "content": answer})
-
-            yield _sse({
+            done_payload = {
                 "type": "done",
                 "content": answer,
                 "sources": [],
@@ -1274,7 +1111,13 @@ async def send_message_stream(
                 "trace_id": trace_id,
                 "token_usage": deep_result.get("token_usage") or {},
                 "context_usage": deep_result.get("context_usage") or {},
-            })
+            }
+            await streams.commit_result(execution, answer, meta, done_payload)
+            schedule_memory_evaluation(
+                current_user.id, req.query, conv_id, assistant_content=answer,
+                source_message_id=user_message_id,
+                execution={"mode": "deepagents", "steps": step_objs, "artifacts": deep_artifacts, "error": deep_result.get("error_message")},
+            )
 
             # 新会话标题后台生成
             if is_new and answer:
@@ -1326,7 +1169,7 @@ async def send_message_stream(
         # 内把回调挂到线程局部的副本上，由门面写入传播层。
         from dataclasses import replace
 
-        _dyn_ctx = replace(_chat_ctx, on_step=_dyn_status, on_artifact=_dyn_artifact)
+        _dyn_ctx = replace(stream_context, on_step=_dyn_status, on_artifact=_dyn_artifact)
 
         def _run_dynamic_in_thread():
             from app.agents.request_context import use_request_context
@@ -1345,6 +1188,7 @@ async def send_message_stream(
 
         _dyn_start = time.perf_counter()
         _dyn_future = loop.run_in_executor(None, _run_dynamic_in_thread)
+        execution.workers.append(_dyn_future)
         while True:
             try:
                 ev = await loop.run_in_executor(None, _dyn_status_queue.get, True, 0.1)
@@ -1395,46 +1239,23 @@ async def send_message_stream(
             goal=effective_query,
         )
 
-        # 落库助手回复（含步骤/进度/中间产出）
-        try:
-            async with get_session() as session:
-                meta = json.dumps({
-                    "intent": "dynamic",
-                    "agent_mode": agent_mode,
-                    "sources": dyn_result.get("sources") or [],
-                    "steps": _dyn_collected_steps,
-                    "progress_summaries": _dyn_progress,
-                    "artifacts": _dyn_collected_artifacts,
-                    "model_id": selected_model.id,
-                    "model_name": selected_model.name,
-                    "skills": skill_payload,
-                    "trace_id": trace_id,
-                    "token_usage": dyn_result.get("token_usage") or {},
-                    "context_usage": dyn_result.get("context_usage") or {},
-                }, ensure_ascii=False)
-                await add_message(session, conv_id, "assistant", answer, metadata_json=meta)
-                await session.commit()
-            schedule_memory_evaluation(
-                current_user.id,
-                req.query,
-                conv_id,
-                assistant_content=answer,
-                source_message_id=user_message_id,
-                execution={
-                    "mode": "dynamic",
-                    "steps": _dyn_collected_steps,
-                    "artifacts": _dyn_collected_artifacts,
-                    "error": dyn_result.get("error_message"),
-                },
-            )
-        except Exception as exc:
-            logger.warning("[chat/stream] dynamic persist failed: %s", exc)
-
-        # values-only/异常路径兜底；已经流过正文则由 done 校准，避免整段追加两次。
+        meta = {
+            "intent": "dynamic",
+            "agent_mode": agent_mode,
+            "sources": dyn_result.get("sources") or [],
+            "steps": _dyn_collected_steps,
+            "progress_summaries": _dyn_progress,
+            "artifacts": _dyn_collected_artifacts,
+            "model_id": selected_model.id,
+            "model_name": selected_model.name,
+            "skills": skill_payload,
+            "trace_id": trace_id,
+            "token_usage": dyn_result.get("token_usage") or {},
+            "context_usage": dyn_result.get("context_usage") or {},
+        }
         if answer and not _dyn_events.answer_streamed:
             yield _sse({"type": "delta", "content": answer})
-
-        yield _sse({
+        done_payload = {
             "type": "done",
             "content": answer,
             "sources": dyn_result.get("sources") or [],
@@ -1452,7 +1273,13 @@ async def send_message_stream(
             "trace_id": trace_id,
             "token_usage": dyn_result.get("token_usage") or {},
             "context_usage": dyn_result.get("context_usage") or {},
-        })
+        }
+        await streams.commit_result(execution, answer, meta, done_payload)
+        schedule_memory_evaluation(
+            current_user.id, req.query, conv_id, assistant_content=answer,
+            source_message_id=user_message_id,
+            execution={"mode": "dynamic", "steps": _dyn_collected_steps, "artifacts": _dyn_collected_artifacts, "error": dyn_result.get("error_message")},
+        )
 
         # 新会话标题后台生成
         if is_new and answer:
@@ -1470,68 +1297,8 @@ async def send_message_stream(
             asyncio.get_event_loop().create_task(_gen_title_dynamic())
         return
 
-    async def event_gen():
-        """Ensure an interrupted stream cannot leave a run permanently active,
-        and a terminated turn is NOT persisted to history.
-
-        2026-08-21：用户停止生成 / 客户端断开 → 本轮不入历史：
-        - assistant 消息在生成器内保存，流中断后不会执行（天然不落库）；
-        - 用户消息在开流前已保存（user_message_id），终止时删除；
-        - 若是本轮新建的会话（is_new），整会话删除，避免留下空壳。
-        """
-        completed_normally = False
-        try:
-            async for chunk in _event_gen_inner():
-                yield chunk
-            completed_normally = True
-        finally:
-            if not completed_normally:
-                # 注意：此处处于任务取消状态（CancelledError 处理中），
-                # 直接 await 会立即再次抛出 CancelledError —— 必须用
-                # asyncio.shield 让清理协程在后台独立完成。
-                async def _cleanup_terminated_turn():
-                    try:
-                        async with get_session() as session:
-                            from backend.services.chat_service import (
-                                delete_conversation,
-                                delete_message,
-                            )
-
-                            if is_new:
-                                await delete_conversation(
-                                    session, conv_id, current_user.id
-                                )
-                            else:
-                                await delete_message(session, user_message_id)
-                                await session.commit()
-                        from app.agents.checkpointing import delete_checkpoint_thread
-
-                        delete_checkpoint_thread(str(conv_id))
-                        logger.info(
-                            "[chat/stream] turn terminated, not persisted "
-                            "(conv=%s new=%s)", conv_id, is_new
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "[chat/stream] terminated-turn cleanup failed: %s", exc
-                        )
-
-                cleanup_task = asyncio.create_task(_cleanup_terminated_turn())
-                try:
-                    await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError:
-                    # shield keeps the cleanup coroutine alive on the app loop.
-                    pass
-
-    return StreamingResponse(
-        event_gen(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    streams.start_execution(stream_run, _event_gen_inner)
+    return _stream_response(stream_run)
 
 
 @router.post("/conversations/{conversation_id}/resume")
@@ -1545,6 +1312,11 @@ async def resume_conversation_checkpoint(
         conv = await get_conversation(session, conversation_id)
         if not conv or conv.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        active = await streams.latest_stream(session, conversation_id, current_user.id)
+        if active:
+            await streams.recover_stale(session, active)
+            if active.status in streams.ACTIVE or (req.request_id and active.id == req.request_id):
+                return _stream_response(active)
         messages = list(conv.messages or [])
         last = messages[-1] if messages else None
         if last is None or last.role != "user":
@@ -1565,6 +1337,7 @@ async def resume_conversation_checkpoint(
         ]
     return await send_message_stream(
         ChatRequest(
+            request_id=req.request_id,
             query=query,
             conversation_id=str(conversation_id),
             model_id=req.model_id or saved_request.get("model_id"),
@@ -1765,6 +1538,8 @@ async def compact_conversation_endpoint(
         if not conv or conv.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
+        await _require_idle_conversation(session, conv.id)
+
         try:
             result = await compact_conversation(
                 session, uuid.UUID(conversation_id), keep_turns=keep_turns
@@ -1816,6 +1591,10 @@ async def delete_conversation_endpoint(
     from backend.services.chat_service import delete_conversation
 
     async with get_session() as session:
+        conv = await get_conversation(session, uuid.UUID(conversation_id))
+        if not conv or conv.user_id != current_user.id:
+            raise HTTPException(404, "Conversation not found")
+        await _require_idle_conversation(session, conv.id)
         deleted = await delete_conversation(
             session, uuid.UUID(conversation_id), current_user.id
         )

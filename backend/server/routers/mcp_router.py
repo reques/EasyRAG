@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.core.logger import get_logger
@@ -38,7 +38,9 @@ from app.tools.mcp.models import (
 )
 
 logger = get_logger(__name__)
-router = APIRouter(prefix="/mcp", tags=["mcp"])
+from backend.server.utils.auth_middleware import get_admin_user
+
+router = APIRouter(prefix="/mcp", tags=["mcp"], dependencies=[Depends(get_admin_user)])
 
 # 广场 id 允许的字符集（@publisher/name）；用于挡住路径穿越等畸形输入
 _CATALOG_ID_RE = re.compile(r"^[A-Za-z0-9@/._\-]{1,200}$")

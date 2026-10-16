@@ -90,9 +90,9 @@
                 <WandSparkles :size="11" /> {{ skill.name }}
               </span>
             </div>
-            <!-- 被终止的一轮：提示已停止且未保存（后端已删除该轮记录） -->
+            <!-- 主动取消只停止执行，保留提问与已记录的执行事件。 -->
             <div v-if="msg.stopped" class="message-stopped-note">
-              <Square :size="11" /> 已停止生成 · 本轮对话未保存
+              <Square :size="11" /> 已停止生成 · 提问与执行记录已保留
             </div>
             <div class="message-text" v-html="renderContent(msg.content)"></div>
             <button
@@ -146,6 +146,9 @@
           </div>
         </template>
 
+        <div v-if="sending && connectionState" class="checkpoint-recovery-card" role="status">
+          <RotateCcw :size="16" /><span>{{ connectionState }}</span>
+        </div>
         <div v-if="hasVisibleUnfinishedTurn" class="checkpoint-recovery-card">
           <RotateCcw :size="16" />
           <span>检测到上次未完成的任务</span>
@@ -844,8 +847,12 @@ function useStarter(prompt) {
   input.value = prompt
   nextTick(() => inputEl.value?.focus())
 }
-// 当前轮请求的 AbortController（"停止生成"用；终止的轮次不保存到记录）
+// AbortController only detaches this view; cancellation uses the server endpoint.
 let currentAbort = null
+let currentStreamId = null
+let stopRequested = false
+const connectionState = ref('')
+let conversationLoad = 0
 // 深度研究开关：选中后本轮请求走 DeepAgents 工作流（deep_research=true）
 const deepResearch = ref(false)
 const conversationId = ref(null)
@@ -854,6 +861,7 @@ const hasVisibleUnfinishedTurn = computed(() => (
   && !!conversationId.value
   && messages.value.length > 0
   && messages.value[messages.value.length - 1]?.role === 'user'
+  && !messages.value[messages.value.length - 1]?.cancelled
 ))
 const msgContainer = ref(null)
 const inputEl = ref(null)
@@ -1621,8 +1629,19 @@ function shouldShowTimeSeparator(i) {
 }
 
 // ── 监听会话切换，从 DB 加载历史 ─────────────────────────────────
-watch(() => chatStore.activeConversationId, async (newId, oldId) => {
-  if (newId === oldId) return
+watch(() => [chatStore.activeConversationId, chatStore.newConversationVersion], async ([newId, version], previous = []) => {
+  const [oldId, oldVersion] = previous
+  if (newId === oldId && version === oldVersion) return
+  // The response handshake selects this very conversation in the sidebar.
+  // It must not replace its own live placeholder with a history reload.
+  if (currentAbort && newId === conversationId.value && version === oldVersion) return
+  const load = ++conversationLoad
+  currentAbort?.abort()
+  currentAbort = null
+  currentStreamId = null
+  stopRequested = false
+  sending.value = false
+  connectionState.value = ''
   conversationId.value = newId
   generatedFiles.value = []
   previewArtifact.value = null
@@ -1639,6 +1658,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
   if (newId) {
     try {
       const res = await api.get(`/chat/conversations/${newId}/history`)
+      if (load !== conversationLoad) return
       // 历史消息 meta 中持久化了 sources 和 steps，重载时还原引用块 + 思考过程
       messages.value = (res.messages || []).map(m => ({
         role: m.role,
@@ -1653,6 +1673,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
           modelName: m.meta?.model_name || '',
           runId: m.meta?.run_id || '',
           traceId: m.meta?.trace_id || '',
+          streamId: m.meta?.stream_id || '',
           tokenUsage: m.meta?.token_usage || {},
           contextUsage: m.meta?.context_usage || {},
           skillNames: (m.meta?.skills || []).map(skill => skill.name),
@@ -1681,6 +1702,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
       }))
       try {
         const traceData = await api.get(`/chat/conversations/${newId}/traces`)
+        if (load !== conversationLoad) return
         const traces = new Map((traceData.traces || []).map(trace => [trace.id, trace]))
         messages.value = messages.value.map(message => {
           const trace = traces.get(message.meta?.traceId)
@@ -1696,6 +1718,7 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
       void refreshContextState(newId)
       try {
         const runData = await api.get(`/chat/conversations/${newId}/runs`)
+        if (load !== conversationLoad) return
         const latestRun = runData.runs?.find(run => run.id === latestAssistant.value?.meta?.runId)
         if (latestRun?.tasks?.length) {
           taskPanel.value = {
@@ -1707,6 +1730,23 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
           }
         }
       } catch { /* 旧会话可能没有 Run，保持无面板 */ }
+      if (load !== conversationLoad) return
+      try {
+        const { stream } = await api.get(`/chat/conversations/${newId}/stream`)
+        if (load !== conversationLoad) return
+        if (stream?.status === 'cancelled') {
+          const last = messages.value.at(-1)
+          if (last?.role === 'user') {
+            last.cancelled = true
+            messages.value.push({ role: 'assistant', content: '', stopped: true, stepsLoading: false, uid: nextMsgUid() })
+          }
+        } else if (stream && ['running', 'cancel_requested', 'interrupted'].includes(stream.status)) {
+          void send({ attach: stream })
+        } else if (stream?.status === 'completed' && !messages.value.some(m => m.meta?.streamId === stream.id)) {
+          // Completion can race the history request. Replay its journal once.
+          void send({ attach: stream })
+        }
+      } catch { /* History remains available if execution discovery is unavailable. */ }
       scrollBottom()
     } catch { /* 忽略 */ }
   }
@@ -1714,7 +1754,8 @@ watch(() => chatStore.activeConversationId, async (newId, oldId) => {
 }, { immediate: true })
 
 async function send(options = {}) {
-  const resumeCheckpoint = options?.resume === true
+  const attachedStream = options?.attach || null
+  const resumeCheckpoint = options?.resume === true || !!attachedStream
   // 斜杠命令：/compact [保留轮数] 压缩上下文窗口（不产生对话轮次、不走流式）
   const compactCommand = input.value.trim().match(/^\/compact(?:\s+(\d{1,2}))?$/i)
   if (!resumeCheckpoint && compactCommand) {
@@ -1741,8 +1782,11 @@ async function send(options = {}) {
     resetInputHeight()
   }
   sending.value = true
-  // 停止生成：终止当前对话轮（被终止的一轮后端不保存到记录）
-  currentAbort = new AbortController()
+  const controller = new AbortController()
+  currentAbort = controller
+  currentStreamId = attachedStream?.id || null
+  stopRequested = attachedStream?.status === 'cancel_requested'
+  connectionState.value = stopRequested ? '正在停止任务…' : ''
 
   if (!resumeCheckpoint) {
     const userTs = Date.now()
@@ -1816,7 +1860,7 @@ async function send(options = {}) {
     }
     await api.streamChat(streamUrl, requestBody, (ev) => {
       // 占位消息已不在列表（会话已切换/历史已重载）→ 本轮事件全部丢弃
-      if (!messages.value.some(x => x.uid === asstUid)) return
+      if (currentAbort !== controller || !messages.value.some(x => x.uid === asstUid)) return
       if (ev.type === 'conversation_id') {
         conversationId.value = ev.conversation_id
         const m = messages.value[msgIndex]
@@ -2005,14 +2049,39 @@ async function send(options = {}) {
             meta: { ...(dm.meta || {}), runId: ev.run_id },
           }
         }
+      } else if (ev.type === 'cancelled') {
+        const m = messages.value[msgIndex]
+        messages.value[msgIndex] = { ...m, stopped: true, stepsLoading: false, recoverable: false }
+        taskPanel.value.tasks = interruptTasks(taskPanel.value.tasks, true, '已停止')
+        taskPanel.value.status = 'cancelled'
+        connectionState.value = ''
       } else if (ev.type === 'error') {
         gotError = ev.detail || '生成失败'
         taskPanel.value.tasks = interruptTasks(taskPanel.value.tasks, false, gotError)
         const em = messages.value[msgIndex]
-        messages.value[msgIndex] = { ...em, error: gotError, stepsLoading: false }
+        messages.value[msgIndex] = { ...em, error: gotError, recoverable: !!ev.recoverable, stepsLoading: false }
         if (taskPanel.value.tasks.length) taskPanel.value.status = 'failed'
       }
-    }, { signal: currentAbort.signal })
+    }, {
+      signal: controller.signal,
+      streamId: attachedStream?.id,
+      onStream: ({ streamId, conversationId: id }) => {
+        if (currentAbort !== controller) return
+        currentStreamId = streamId
+        if (id) {
+          conversationId.value = id
+          chatStore.selectConversation(id)
+        }
+        if (stopRequested && streamId) void stopGeneration()
+      },
+      onConnection: state => {
+        if (currentAbort !== controller) return
+        connectionState.value = state === 'reconnecting'
+          ? (stopRequested ? '网络已断开，重连后将提交取消请求…' : '连接已断开，正在重连；任务仍在后台运行…')
+          : (stopRequested ? '正在停止任务…' : '')
+      },
+    })
+    if (currentAbort !== controller) return
 
     if (gotError) {
       const m = messages.value[msgIndex]
@@ -2026,45 +2095,23 @@ async function send(options = {}) {
     void refreshContextState()
   } catch (e) {
     const m = messages.value[msgIndex]
-    // 停止生成：AbortError 属正常终止（后端不保存本轮），非错误
+    if (currentAbort !== controller) return
+    // An aborted reader detached from this view; it says nothing about server cancellation.
     const aborted = e && (e.name === 'AbortError' || /abort/i.test(String(e.message || '')))
     if (m && m.uid === asstUid) {
       taskPanel.value.tasks = interruptTasks(taskPanel.value.tasks, aborted, aborted ? '已停止' : e.message)
       messages.value[msgIndex] = {
         ...m,
         content: aborted ? (m.content || '') : (m.content || `❌ 请求失败: ${e.message}`),
-        stopped: aborted || undefined,
+        stopped: undefined,
         stepsLoading: false,
         error: aborted ? undefined : e.message,
         recoverable: aborted ? undefined : true,
       }
     }
-    // 动态 Agent / 单 Agent 无 delta 时，回答只在 done 一次性下发。
-    // 若流异常中断但后端已落库，主动拉取历史回填气泡。
-    if (!aborted && conversationId.value) {
-      try {
-        const cur = messages.value[msgIndex]
-        const contentNow = cur?.content?.trim()
-        if (!contentNow && !cur?.error) {
-          const res = await api.get(`/chat/conversations/${conversationId.value}/history`)
-          const hist = res.messages || []
-          const lastAsst = [...hist].reverse().find(mm => mm.role === 'assistant' && (mm.content || '').trim())
-          if (lastAsst && (lastAsst.content || '').trim()) {
-            const mm = messages.value[msgIndex]
-            messages.value[msgIndex] = {
-              ...mm,
-              content: lastAsst.content,
-              sources: lastAsst.meta?.sources || mm.sources || [],
-              steps: (mm.steps && mm.steps.length) ? mm.steps : (lastAsst.meta?.steps || []),
-              artifacts: (mm.artifacts && mm.artifacts.length) ? mm.artifacts : (lastAsst.meta?.artifacts || []),
-              progressSummaries: (mm.progressSummaries && mm.progressSummaries.length) ? mm.progressSummaries : (lastAsst.meta?.progress_summaries || []),
-              stepsLoading: false,
-            }
-          }
-        }
-      } catch { /* 回补失败静默 */ }
-    }
   } finally {
+    if (currentAbort !== controller) return
+    connectionState.value = ''
     sending.value = false
     runFinishedAt.value = Date.now()
     if (currentAbort) { currentAbort = null }
@@ -2075,10 +2122,23 @@ async function send(options = {}) {
   }
 }
 
-// 停止生成：终止当前对话轮。后端收到客户端断开后会删除该轮记录
-// （用户消息 + 新建空会话），前端本地消息标记 stopped 表示"已停止"。
-function stopGeneration() {
-  if (currentAbort) currentAbort.abort()
+// Cancel the execution explicitly and keep reading until the server acknowledges it.
+async function stopGeneration() {
+  stopRequested = true
+  connectionState.value = '正在停止任务…'
+  const id = currentStreamId
+  const controller = currentAbort
+  if (!id) return // The response handshake will deliver the durable execution ID.
+  try {
+    await api.post(`/chat/streams/${id}/cancel`)
+  } catch (error) {
+    if (currentAbort !== controller) return
+    connectionState.value = '取消请求尚未送达，连接恢复后会重试…'
+    // The read loop retries separately; a connected but lossy cancel request also retries.
+    window.setTimeout(() => {
+      if (currentAbort === controller && sending.value && stopRequested) void stopGeneration()
+    }, 1500)
+  }
 }
 
 // ── /compact：压缩上下文窗口 ──────────────────────────────────────────────
@@ -2176,6 +2236,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  ++conversationLoad
+  currentAbort?.abort()
+  currentAbort = null
   document.removeEventListener('click', closeModelMenuOnOutsideClick)
   stopTaskPanelResize()
   if (copyFeedbackTimer) window.clearTimeout(copyFeedbackTimer)

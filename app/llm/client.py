@@ -87,6 +87,8 @@ class LLMClient:
     # ── internal helpers ──────────────────────────────────────────────────
 
     def _call_kwargs(self, **extra) -> Dict[str, Any]:
+        from app.agents.cancellation import check_run_cancelled
+        check_run_cancelled()
         kwargs = dict(
             model=self.model,
             max_tokens=self.max_tokens,

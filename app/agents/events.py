@@ -174,6 +174,8 @@ def _parent_for(event_type: str, stage: str, tool: str, event_id: str) -> str | 
 
 def emit(kind: str, stage: str, title: str, content: str = "", **extra: Any) -> Dict[str, Any] | None:
     """Emit one event; no active trace/sink remains a zero-cost no-op."""
+    from app.agents.cancellation import check_run_cancelled
+    check_run_cancelled()
     trace = _current_trace.get()
     sinks = _event_sinks.get()
     log = _event_log.get()
