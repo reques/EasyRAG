@@ -40,3 +40,6 @@ image.png
 tbd.txt
 
 deploy/mineru/test-output/
+
+# Root Python tests stay local; frontend tests remain tracked
+/tests/

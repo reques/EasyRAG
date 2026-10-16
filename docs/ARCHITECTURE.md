@@ -118,7 +118,6 @@ EasyRAG/
 ├── examples/legacy/              # 旧版 FastAPI 与 Gradio 入口
 ├── eval/                         # 评估数据集与可选 Ragas 依赖
 ├── scripts/                      # 迁移/验证脚本（migrate_milvus_kb_id、verify_*.py）
-├── tests/                        # pytest（检索隔离/进度/解析器/skill 配置/MinerU 客户端…）
 ├── docs/                         # 文档（本架构文档、plans/ 设计稿、specs/ 规格、ragas-evaluator）
 ├── docker-compose.yml            # etcd + milvus + rustfs-milvus + postgres + redis + rustfs 编排
 ├── requirements.txt             # 主服务依赖；可选依赖见 eval/requirements-ragas.txt

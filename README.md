@@ -156,6 +156,9 @@ Windows 重启脚本为 `scripts/restart-backend.bat`，使用当前 Python 环�
 `PYTHON_EXECUTABLE` 指定解释器。MCP 默认读取 `config/mcp_servers.json`，
 可通过 `MCP_SERVERS_FILE` 指定其他配置文件。
 
+根目录 `tests/` 仅在本地保留，不随 Git 仓库分发；前端测试、`pytest.ini`、业务
+评估功能、MinerU 部署检查与维护诊断脚本仍保留在仓库中。
+
 | 文档 | 内容 |
 |------|------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 项目结构与逻辑（模块详解、核心设计、API 概览） |
