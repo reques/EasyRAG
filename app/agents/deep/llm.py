@@ -121,6 +121,7 @@ def get_langchain_model(model_name: str | None = None, temperature: float | None
     使用 ``DeepSeekChatOpenAI``（含 reasoning_content 多轮回传适配）。
     """
     cfg = get_settings()
+    from app.llm.cancellable_http import async_model_http_client, sync_model_http_client
     model = DeepSeekChatOpenAI(
         base_url=cfg.LLM_BASE_URL,
         api_key=cfg.LLM_API_KEY or "not-configured",
@@ -129,6 +130,8 @@ def get_langchain_model(model_name: str | None = None, temperature: float | None
         max_tokens=cfg.LLM_MAX_TOKENS,
         timeout=cfg.LLM_TIMEOUT,
         max_retries=cfg.LLM_MAX_RETRIES,
+        http_client=sync_model_http_client(trust_env=True),
+        http_async_client=async_model_http_client(trust_env=True),
     )
     logger.debug(
         "[deepagents] langchain model: %s via %s", model.model_name, cfg.LLM_BASE_URL

@@ -66,7 +66,7 @@ class LLMClient:
         self.temperature = temperature if temperature is not None else cfg.LLM_TEMPERATURE
         self.max_tokens = max_tokens or cfg.LLM_MAX_TOKENS
 
-        import httpx
+        from app.llm.cancellable_http import async_model_http_client, sync_model_http_client
         client_kwargs = dict(
             base_url=base_url or cfg.LLM_BASE_URL,
             # The SDK requires a string during construction. Chat endpoints
@@ -77,11 +77,11 @@ class LLMClient:
         )
         self._sync_client = OpenAI(
             **client_kwargs,
-            http_client=httpx.Client(trust_env=False),
+            http_client=sync_model_http_client(),
         )
         self._async_client = AsyncOpenAI(
             **client_kwargs,
-            http_client=httpx.AsyncClient(trust_env=False),
+            http_client=async_model_http_client(),
         )
 
     # ── internal helpers ──────────────────────────────────────────────────

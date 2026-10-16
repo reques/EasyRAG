@@ -25,3 +25,8 @@ def check_run_cancelled():
     event = _cancel_event.get()
     if event is not None and event.is_set():
         raise AgentRunCancelled()
+
+
+def current_cancel_event() -> Event | None:
+    """Read the run-local signal at an I/O boundary, including child workers."""
+    return _cancel_event.get()
