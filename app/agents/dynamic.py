@@ -1,4 +1,4 @@
-﻿"""轻量动态 Agent：根据情景由 LLM 自行决定「直接回答 / 调用工具 / 检索知识库」。
+"""轻量动态 Agent：根据情景由 LLM 自行决定「直接回答 / 调用工具 / 检索知识库」。
 
 与 DeepAgents（``app/agents/deep``）的区别：
 - 不引入 task/spawn_tasks/revise_plan 等委派机制，只保留项目注册表里的普通工具；
@@ -146,19 +146,16 @@ def run_dynamic_agent(
     on_step: 可选回调 fn(step, detail)，供流式端点实时透出阶段状态。
     on_artifact: 可选回调 fn(dict)，透出工具调用/工具返回等中间产出。
     """
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import HumanMessage
     from langgraph.errors import GraphRecursionError
 
     from app.agents.checkpointing import (
         abandon_checkpoint_run,
-        begin_checkpoint_run,
         checkpoint_run_config,
         checkpoint_turn_message_id,
         prepare_checkpoint_input,
     )
     from app.agents.events import add_token_usage, emit
-    from app.memory.context import assemble_memory_context
-    from app.services.knowledge_catalog import format_knowledge_catalog
     from app.services.knowledge_context import use_authorised_kb_ids
 
     context = context or ChatContext(thread_id=session_id)
@@ -215,34 +212,23 @@ def run_dynamic_agent(
             except Exception:
                 pass
 
-    # ── 组装消息（对齐 prepare_context / _run_deep 的注入链）──────────────
-    # 2026-09-04 Skill 重构：Skill 区块不再在这里手工拼 —— SkillsMiddleware
-    # 每轮按 activated_skills 动态渲染（未激活给摘要行、已激活给正文），
-    # 手工注入会与之重复且拿不到激活状态。
-    memory_context = assemble_memory_context(
-        history,
-        context.user_id,
-        query=query,
-        exclude_trailing_user=True,
+    # ── 组装消息（公共装配收口：知识库目录 → 记忆 → 本轮提问）─────────────
+    # 2026-10：装配链移到 app.agents.run_context，与 _run_deep 共用一处实现
+    # （此前两处各写一遍、靠注释对齐）。Skill 区块仍由 SkillsMiddleware
+    # 每轮按 activated_skills 动态渲染，不在此注入。
+    from app.agents.run_context import (
+        assemble_base_run_context,
+        to_langchain_messages,
     )
-    history = [dict(item) for item in memory_context.history]
-    has_checkpoint = begin_checkpoint_run(session_id, "dynamic")
-    messages: List[Any] = []
-    if knowledge_catalog or has_checkpoint:
-        messages.append(
-            SystemMessage(
-                content=(
-                    format_knowledge_catalog(list(knowledge_catalog))
-                    if knowledge_catalog
-                    else "当前会话没有已授权的知识库。"
-                ),
-                id="context:knowledge-catalog",
-            )
-        )
-    messages.extend(memory_context.as_langchain_messages(
-        include_history=not has_checkpoint,
-        replace_empty_facts=has_checkpoint,
-    ))
+
+    assembled = assemble_base_run_context(
+        query=query,
+        context=context,
+        checkpoint_kind="dynamic",
+    )
+    history = assembled.history
+    messages: List[Any] = to_langchain_messages(assembled.messages)
+
     turn_message_id = checkpoint_turn_message_id(
         session_id, query, history, context.input_message_id
     )

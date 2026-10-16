@@ -1,14 +1,23 @@
-"""Agent service layer - Agent routing (dynamic / deepagents)."""
+"""Agent service layer - Agent routing (dynamic / deepagents).
+
+路由说明（2026-10 收口）：``select_agent_mode`` 是**唯一**的路由决策入口。
+``run()``（非流式）与 ``run_stream()``（流式）都消费它的结论，路由层
+（chat_router）也只消费它 —— 不允许任何调用方自行推导"本次该走哪条路径"，
+否则两个入口会各自长出一套判断并逐渐分叉。
+"""
 from __future__ import annotations
 import json
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from app.agents.context import ChatContext
 from app.core.config import get_settings
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 cfg = get_settings()
+
+#: 本次 Run 的执行路径。``run()`` / ``run_stream()`` / 路由层共用同一裁决结果。
+AgentMode = Literal["dynamic", "deepagents"]
 
 
 _LEGACY_RUN_KEYS = (
@@ -164,6 +173,55 @@ class AgentService:
 
         return False
 
+    def select_agent_mode(
+        self,
+        query: str,
+        context: Optional[ChatContext] = None,
+    ) -> AgentMode:
+        """裁决本次 Run 走哪条 Agent 路径 —— 唯一路由决策点。
+
+        返回 ``"deepagents"`` 或 ``"dynamic"``。``AgentService.run``（非流式）、
+        ``AgentService.run_stream``（流式）与路由层都调用本方法；**任何调用方都
+        不得再自行推导路径**，否则同一次请求在两个入口可能被判定成不同模式。
+
+        规则（顺序即优先级）：
+
+        1. ``AGENT_MODE=deepagents``，或请求显式 ``deep_research`` → deepagents；
+        2. ``AGENT_MODE=multi``（deepagents 的兼容别名，已废弃）→ deepagents；
+        3. ``AGENT_MODE=auto`` 且查询命中复杂特征（``_should_use_multi``）→ deepagents；
+        4. 其余（auto 普通问题 / dynamic）→ dynamic。
+
+        ``AGENT_MODE=single`` 已退役：记一条 warning 后按 dynamic 处理。历史代码
+        的注释写的是"按 auto 处理"，但实际分支只是打印警告、**没有**再走 auto 的
+        复杂判定 —— 本方法按实际行为保留该语义（改动需要单独评估，不混在收口里）。
+        """
+        if cfg.AGENT_MODE == "deepagents" or (context is not None and context.deep_research):
+            return "deepagents"
+
+        if cfg.AGENT_MODE == "multi":
+            logger.warning(
+                "[agent_service] AGENT_MODE=multi 已废弃（deepagents 别名），"
+                "建议改用 AGENT_MODE=deepagents"
+            )
+            return "deepagents"
+
+        # 退役配置容错：只警告，不参与 auto 的复杂判定（与原实现一致）
+        if cfg.AGENT_MODE == "single":
+            logger.warning(
+                "[agent_service] AGENT_MODE=single 已退役（固定管线删除），按 auto 处理；"
+                "请更新配置为 auto / dynamic / deepagents"
+            )
+            return "dynamic"
+
+        history = list(context.history) if context is not None else []
+        if cfg.AGENT_MODE == "auto" and self._should_use_multi(query, history):
+            logger.info(
+                "[agent_service] auto 判定复杂任务，路由至 deepagents（主 Agent 自行拆解/委派）"
+            )
+            return "deepagents"
+
+        return "dynamic"
+
     def run(self, query: str, context: Optional[ChatContext] = None, **legacy) -> Dict[str, Any]:
         """智能路由入口（阶段 2：请求参数收拢为 ChatContext）。
 
@@ -177,29 +235,8 @@ class AgentService:
         session_id = context.thread_id
         logger.info("[agent_service] session=%s query=%r", session_id, query[:80])
 
-        # ── DeepAgents 模式（AGENT_MODE=deepagents）：主 Agent + SubAgent ──
-        if cfg.AGENT_MODE == "deepagents" or context.deep_research:
-            return self._run_deep(query, context=context)
-
-        # ── 多智能体分支：multi / auto 命中均路由到 DeepAgents（统一实现）──
-        # AGENT_MODE=multi 作为 deepagents 的兼容别名保留（2026-08-26 阶段 5，
-        # Orchestrator-Worker 已退役删除）。
-        if cfg.AGENT_MODE == "multi":
-            logger.warning(
-                "[agent_service] AGENT_MODE=multi 已废弃（deepagents 别名），"
-                "建议改用 AGENT_MODE=deepagents"
-            )
-            return self._run_deep(query, context=context)
-        # 阶段 0（2026-09-02）：single 与旧固定管线已删除，配置容错按 auto 处理
-        if cfg.AGENT_MODE == "single":
-            logger.warning(
-                "[agent_service] AGENT_MODE=single 已退役（固定管线删除），按 auto 处理；"
-                "请更新配置为 auto / dynamic / deepagents"
-            )
-        if cfg.AGENT_MODE == "auto" and self._should_use_multi(query, list(context.history)):
-            logger.info(
-                "[agent_service] auto 判定复杂任务，路由至 deepagents（主 Agent 自行拆解/委派）"
-            )
+        # ── 唯一路由决策：run() 与 run_stream() 消费同一结论 ────────────────
+        if self.select_agent_mode(query, context) == "deepagents":
             return self._run_deep(query, context=context)
 
         # ── 轻量动态 Agent（auto 普通问题 / AGENT_MODE=dynamic）──
@@ -209,6 +246,51 @@ class AgentService:
         #  auto/dynamic/deepagents 之外不再有兜底分支。）
         logger.info("[agent_service] 路由至 dynamic agent（动态工具/检索决策）")
         return self._run_dynamic(query, context=context)
+
+    # ── 流式入口（SSE 路由调用；与 run() 消费同一路由裁决）──────────────
+    def run_stream(
+        self,
+        query: str,
+        context: Optional[ChatContext] = None,
+        *,
+        event_sink=None,
+        **legacy,
+    ) -> Dict[str, Any]:
+        """流式入口 —— 路由层**唯一**允许调用的 Agent 执行入口。
+
+        与 ``run()`` 的差别只在流式通道：``run_stream`` 额外接受
+        ``event_sink``（``app.agents.events.use_event_sink`` 的接收端），
+        让路由层把统一事件流桥接成 SSE；``context.on_step`` /
+        ``context.on_artifact`` 仍由调用方按老方式挂在 context 上。
+
+        为什么要这个方法（2026-10）：此前 SSE 路由直接调用 ``agent._run_deep``
+        / ``agent._run_dynamic`` 两个私有方法，因为 "run() 的签名没有给它
+        event_sink"。于是同一条 deep 路径出现两个入口，且**只有 run() 那条**
+        包了 request trace（``events`` / ``trace_id``）—— 流式入口要靠路由层
+        自己补齐委派持久化所需的 events，两条链路的语义已经开始分叉。
+        把流式需要的能力提升为公开契约后，执行期上下文（trace / 授权 /
+        观察者 / 事件 sink）统一在本方法内建立，路由层不再需要知道有哪几条
+        私有路径。
+
+        参数：
+        - ``event_sink``：可选 ``Callable[[dict], None]``，收到统一事件流事件。
+        - ``legacy``：阶段 2 过渡期的散装关键字参数，语义同 ``run()``。
+        """
+        from contextlib import nullcontext
+
+        from app.agents.events import use_event_sink
+
+        mode = self.select_agent_mode(query, context)
+
+        if event_sink is None:
+            sink_scope = nullcontext()
+        else:
+            sink_scope = use_event_sink(event_sink)
+
+        with sink_scope:
+            if mode == "deepagents":
+                return self._run_deep(query, context=context, **legacy)
+            return self._run_dynamic(query, context=context, **legacy)
 
     # ── DeepAgents 模式（AGENT_MODE=deepagents）──────────────────────────
     def _run_dynamic(
@@ -317,15 +399,13 @@ class AgentService:
         from app.agents.context import ChatContext as _Ctx
         from app.agents.checkpointing import (
             abandon_checkpoint_run,
-            begin_checkpoint_run,
             checkpoint_run_config,
             checkpoint_turn_message_id,
             prepare_checkpoint_input,
         )
         from app.agents.deep.agent import get_main_agent
         from app.agents.events import add_token_usage, emit
-        from app.memory.context import assemble_memory_context
-        from app.services.knowledge_catalog import format_knowledge_catalog
+        from app.agents.run_context import assemble_base_run_context
         from app.services.knowledge_context import use_authorised_kb_ids
         from langgraph.errors import GraphRecursionError
 
@@ -336,24 +416,10 @@ class AgentService:
         on_step = context.on_step
         on_artifact = context.on_artifact
         knowledge_base_ids = list(context.knowledge_base_ids)
-        knowledge_catalog = list(context.knowledge_catalog)
-        user_id = context.user_id
 
         start = time.perf_counter()
         steps: List[str] = []
         artifacts: List[Dict[str, Any]] = []
-        history = context.history_list()
-        if not history and self._sessions is not None:
-            history = self._sessions.get_history(session_id)
-        memory_context = assemble_memory_context(
-            history,
-            user_id,
-            query=query,
-            exclude_trailing_user=True,
-        )
-        history = [dict(item) for item in memory_context.history]
-        has_checkpoint = begin_checkpoint_run(session_id, "deep")
-        resumed = False
 
         def _step(step: str, detail: str = ""):
             steps.append(f"{step}: {detail}")
@@ -385,25 +451,26 @@ class AgentService:
         # ── 组装消息（复用 prepare_context 的注入链，保证行为一致）──────
         # 2026-09-04 Skill 重构：Skill 区块由 SkillsMiddleware 按 activated_skills
         # 每轮动态渲染，不在此手工注入（见 app/skills/middleware.py）。
-        messages: List[Dict[str, Any]] = []
-        if knowledge_catalog or has_checkpoint:
-            messages.append({
-                "role": "system",
-                "id": "context:knowledge-catalog",
-                "content": (
-                    format_knowledge_catalog(list(knowledge_catalog))
-                    if knowledge_catalog
-                    else "当前会话没有已授权的知识库。"
-                ),
-            })
-        messages.extend(memory_context.as_dict_messages(
-            include_history=not has_checkpoint,
-            replace_empty_facts=has_checkpoint,
-        ))
-
         # 先向流式客户端报告研究规划，再进入可能较慢的知识库检索，避免
         # 深度研究启动后长时间没有任何高层进度反馈。
         _step("understand", "DeepAgents 主 Agent 开始处理...")
+
+        # ── 公共装配（2026-10 收口）：知识库目录 → 记忆 → 本轮提问 ────────
+        # deep 与 dynamic 此前各写一遍同一段装配、靠注释对齐；现共用
+        # app.agents.run_context。deep 特有部分是下面的知识库前置检索。
+        _session_history = self._sessions.get_history(session_id) if self._sessions is not None else None
+        assembled = assemble_base_run_context(
+            query=query,
+            context=context,
+            checkpoint_kind="deep",
+            session_history=_session_history,
+        )
+        history = assembled.history
+        has_checkpoint = assembled.has_checkpoint
+        resumed = False
+        messages: List[Dict[str, Any]] = assembled.messages
+        # 检索块插入位置：追加在记忆块之后、本轮 user 消息之前。
+        _retrieval_insert_at = len(messages)
 
         # ── 知识库前置检索（2026-08-21, S1：此前 DeepAgents 从不检索知识库，
         #    系统提示却声称"检索结果会作为上下文提供"——知识库问答退化成纯 LLM
@@ -431,7 +498,7 @@ class AgentService:
                 elif _kb_result.raw_docs:
                     _kb_context = format_flat_for_prompt(_kb_result.raw_docs)
                 if _kb_context:
-                    messages.append({
+                    messages.insert(_retrieval_insert_at, {
                         "role": "system",
                         "id": "context:retrieval",
                         "content": (
@@ -452,7 +519,7 @@ class AgentService:
                 else:
                     _step("retrieve_done", "知识库无相关内容")
                     if has_checkpoint:
-                        messages.append({
+                        messages.insert(_retrieval_insert_at, {
                             "role": "system",
                             "id": "context:retrieval",
                             "content": "本轮知识库检索没有找到相关内容。",

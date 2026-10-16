@@ -1070,7 +1070,7 @@ async def send_message_stream(
             # ── DeepAgents 路径：主 Agent + task → SubAgent（同步 + 状态透传）─
             import queue as _q
             from app.agents.progress import ProgressProjector
-            from app.agents.events import public_event, use_event_sink
+            from app.agents.events import public_event
 
             status_queue: "_q.Queue" = _q.Queue()
             deep_progress_summaries: list[dict] = []
@@ -1138,9 +1138,12 @@ async def send_message_stream(
             def _run_deep_in_thread():
                 from app.agents.request_context import use_request_context
 
-                with use_request_context(_deep_ctx, skill_definitions=selected_skills, model_profile=selected_model), \
-                        use_event_sink(_bridge_event):
-                    return agent._run_deep(_deep_ctx.query, context=_deep_ctx)
+                # 公开流式契约：event_sink 由 AgentService.run_stream 统一进入，
+                # 路由层不再触及 _run_deep 这类私有执行路径。
+                with use_request_context(_deep_ctx, skill_definitions=selected_skills, model_profile=selected_model):
+                    return agent.run_stream(
+                        _deep_ctx.query, context=_deep_ctx, event_sink=_bridge_event
+                    )
 
             # 注意：此处不能用 `start` 命名 —— _event_gen_inner 内任何赋值都会
             # 把 start 变成局部变量，遮蔽外层函数的 start（单 Agent 分支的
@@ -1326,7 +1329,6 @@ async def send_message_stream(
         _dyn_ctx = replace(_chat_ctx, on_step=_dyn_status, on_artifact=_dyn_artifact)
 
         def _run_dynamic_in_thread():
-            from app.agents.events import public_event, use_event_sink
             from app.agents.request_context import use_request_context
 
             def _stream_event(event: dict) -> None:
@@ -1335,9 +1337,11 @@ async def send_message_stream(
                     "event": public_event(event),
                 })
 
-            with use_request_context(_dyn_ctx, skill_definitions=selected_skills, model_profile=selected_model), \
-                    use_event_sink(_stream_event):
-                return agent._run_dynamic(_dyn_ctx.query, context=_dyn_ctx)
+            # 与 deep 分支同构：公开流式契约，不再调用私有 _run_dynamic。
+            with use_request_context(_dyn_ctx, skill_definitions=selected_skills, model_profile=selected_model):
+                return agent.run_stream(
+                    _dyn_ctx.query, context=_dyn_ctx, event_sink=_stream_event
+                )
 
         _dyn_start = time.perf_counter()
         _dyn_future = loop.run_in_executor(None, _run_dynamic_in_thread)
