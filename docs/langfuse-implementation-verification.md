@@ -62,4 +62,12 @@ Docker 恢复后，已部署 Langfuse Web/worker 4.63.0、PostgreSQL 17.11、Red
 
 本地 Qwen 在当前 OpenAI 兼容流协议中未返回完整 usage，观测如实标记 unknown；未据此伪造 token 数或计费结果。自定义模型定价需另行配置。
 
-候选验收已通过，接下来按用户要求将本次相关改动同步到 main/home，再更新正式前后端容器并进行重启后检查。部署命令和凭据位置见 [本地部署说明](../deploy/langfuse/README.md)。
+### 分支同步与正式服务更新
+
+候选验收通过后，功能提交 `a53eed0` 已原子推送至 main/home。随后重新创建正式 backend/frontend 与 Langfuse Web/worker，前后端健康检查通过，7 个原有依赖服务继续运行，6 个 Langfuse 服务就绪。候选容器已停止并移除，没有删除其挂载的业务数据或 checkpoint。
+
+正式 backend 进程确认 `initialized`、采样率 1.0、metadata_only。重启后通过真实 API 请求再次验证：新执行的 4 个 observation 已在 Langfuse 收录，其中模型证书连接错误为 ERROR，根节点按已保存的业务结果保持 completed。前端 `/health` 与 Langfuse `/api/public/health` 均返回成功。默认模型网关和原有其他环境配置保持原样。
+
+Langfuse 控制台已在浏览器实际打开完整成功 trace，显示主 Agent、coding-agent、calculator、5 次模型调用和结果提交层级，跳转路径已核验。
+
+本次提交排除了原有 `.gitignore` 修改、根目录 tests、tmp、实际密钥和备份。部署命令、控制台账号及凭据位置见 [本地部署说明](../deploy/langfuse/README.md)。
