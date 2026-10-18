@@ -296,6 +296,8 @@ def run_dynamic_agent(
                 "dynamic",
                 recursion_limit or cfg.AGENT_MAX_ITERATIONS,
             )
+            from app.observability.langchain import with_model_callback
+            run_config = with_model_callback(run_config)
             graph_input, processed_count, resumed = prepare_checkpoint_input(
                 agent,
                 run_config,

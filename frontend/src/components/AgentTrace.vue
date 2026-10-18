@@ -1,5 +1,14 @@
 <template>
-  <section v-if="rows.length || running || error" class="trace-process" aria-label="执行过程" :aria-busy="running">
+  <section v-if="rows.length || running || error || (canObserve && streamId)" class="trace-process" aria-label="执行过程" :aria-busy="running">
+    <div v-if="canObserve && streamId" class="trace-observability">
+      <button type="button" :disabled="observabilityLoading" @click="loadObservability">查看观测</button>
+      <template v-if="observability">
+        <code :title="streamId">{{ streamId }}</code>
+        <a v-if="safeObservabilityUrl" :href="safeObservabilityUrl" target="_blank" rel="noopener noreferrer">在 Langfuse 查看</a>
+        <span>{{ observabilityLabel }}</span>
+      </template>
+      <span v-if="observabilityError" role="status">{{ observabilityError }}</span>
+    </div>
     <div v-if="!rows.length && running" class="trace-preparing" role="status">
       <Loader2 :size="13" class="spin" /> 正在处理
     </div>
@@ -31,7 +40,8 @@
 </template>
 
 <script setup>
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import api from '../api'
 import { Activity, BookOpen, ChevronRight, CircleAlert, FilePenLine, Loader2, Search, Terminal, Wrench } from 'lucide-vue-next'
 import { buildTraceRows, formatTraceValue, traceRowStatus } from '../utils/agent-trace.js'
 
@@ -40,7 +50,34 @@ const props = defineProps({
   running: { type: Boolean, default: false },
   error: { type: String, default: '' },
   stopped: { type: Boolean, default: false },
+  streamId: { type: String, default: '' },
+  canObserve: { type: Boolean, default: false },
 })
+const observability = ref(null)
+const observabilityLoading = ref(false)
+const observabilityError = ref('')
+const safeObservabilityUrl = computed(() => {
+  const value = observability.value?.url
+  try { return ['http:', 'https:'].includes(new URL(value).protocol) ? value : '' } catch { return '' }
+})
+const observabilityLabel = computed(() => ({
+  disabled: '观测未启用', misconfigured: '观测配置不完整', unavailable: '观测暂不可用',
+  historical: '历史执行无观测关联', not_sampled: '本次执行未采样',
+  not_enabled_for_execution: '本次执行时未启用观测', initialized: '已关联，远端接收与索引状态未确认',
+  stopped: '观测已停止',
+})[observability.value?.export_state] || '观测状态未知')
+watch(() => props.streamId, () => { observability.value = null; observabilityError.value = '' })
+async function loadObservability() {
+  const id = props.streamId
+  observabilityLoading.value = true
+  observabilityError.value = ''
+  try {
+    const result = await api.get(`/chat/streams/${encodeURIComponent(id)}/observability`)
+    if (props.streamId === id) observability.value = result
+  } catch {
+    if (props.streamId === id) observabilityError.value = '无法读取此执行的观测信息'
+  } finally { observabilityLoading.value = false }
+}
 const rows = computed(() => buildTraceRows(props.events))
 const expanded = reactive(new Set())
 const status = row => traceRowStatus(row, props)
@@ -83,6 +120,9 @@ function duration(row) {
 
 <style scoped>
 .trace-process { margin: 4px 0 22px; color: var(--gray-600, #666); font-size: 13px; line-height: 1.8; }
+.trace-observability { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 11px; }
+.trace-observability button { color: inherit; background: transparent; border: 1px solid var(--gray-150, #e4e4e4); border-radius: 4px; padding: 2px 7px; cursor: pointer; }
+.trace-observability code { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .trace-flow { margin: 0; padding: 0; list-style: none; }
 .trace-flow > li + li { margin-top: 13px; }
 .trace-commentary-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

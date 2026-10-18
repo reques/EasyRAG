@@ -343,9 +343,10 @@ def run_subagent(
     agent = build_subagent(config, model=model)
     on_step, on_artifact = get_subagent_observers() or (None, None)
     final_state = None
+    from app.observability.langchain import with_model_callback
     for chunk in agent.stream(
         {"messages": [("user", task_description)]},
-        config={"recursion_limit": recursion_limit},
+        config=with_model_callback({"recursion_limit": recursion_limit}),
         stream_mode="values",
     ):
         final_state = chunk

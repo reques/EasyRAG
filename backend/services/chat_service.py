@@ -28,7 +28,8 @@ def _spawn_background(coro) -> bool:
     except RuntimeError:
         logger.warning("[chat] no running event loop, background task skipped")
         return False
-    task = loop.create_task(coro)
+    from app.observability.context import detached_context
+    task = loop.create_task(coro, context=detached_context())
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return True

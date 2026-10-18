@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,8 +14,11 @@ from backend.storage.postgres.manager import Base
 
 class ExecutionTrace(Base):
     __tablename__ = "execution_traces"
+    __table_args__ = (Index("uq_execution_trace_stream", "stream_id", unique=True),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    stream_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    observability_trace_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False, index=True,

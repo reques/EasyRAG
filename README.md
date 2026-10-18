@@ -167,6 +167,8 @@ Windows 重启脚本为 `scripts/restart-backend.bat`，使用当前 Python 环�
 | [docs/plans/](docs/plans/) · [docs/specs/](docs/specs/) | 设计稿与规格说明 |
 | [deploy/mineru/README.md](deploy/mineru/README.md) | MinerU 解析服务部署与运维 |
 | [docs/ragas-evaluator.md](docs/ragas-evaluator.md) | 可选 Ragas 评估部署 |
+| [docs/langfuse-observability.md](docs/langfuse-observability.md) | 可选 Langfuse 执行观测、配置与验证（默认关闭） |
+| [deploy/langfuse/README.md](deploy/langfuse/README.md) | 本地 Langfuse 部署、凭据初始化与真实链路验收 |
 
 ---
 

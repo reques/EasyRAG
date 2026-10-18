@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +29,10 @@ class ChatStream(Base):
     owner_token: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), default="running", index=True)
     last_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    local_trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    observability_trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    observability_sampled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    resumed_from_stream_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

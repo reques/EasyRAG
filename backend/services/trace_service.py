@@ -81,9 +81,7 @@ async def persist_execution_trace(
     summary = summarize_trace(rows)
     async with session_factory() as session:
         existing = await session.get(ExecutionTrace, trace_id)
-        if existing is not None:
-            return trace_id
-        trace = ExecutionTrace(
+        trace = existing or ExecutionTrace(
             id=trace_id,
             conversation_id=conversation_id,
             user_id=user_id,
@@ -99,27 +97,37 @@ async def persist_execution_trace(
             }),
             **summary,
         )
-        session.add(trace)
-        session.add_all([
-            TraceEvent(
-                id=str(event["id"]),
-                trace_id=trace_id,
-                parent_id=event.get("parent_id"),
-                sequence=index,
-                type=str(event.get("type") or "planning"),
-                status=(
-                    "completed"
-                    if event.get("status") == "running"
-                    else str(event.get("status") or "info")
-                ),
-                timestamp=_datetime(event.get("timestamp")),
-                input_json=_json(event.get("input")),
-                output_json=_json(event.get("output")),
-                metadata_json=_json(event.get("metadata") or {}),
-                duration_ms=(event.get("metadata") or {}).get("elapsed_ms"),
-            )
-            for index, event in enumerate(rows, 1)
-        ])
+        if existing is not None:
+            # Admission may have pre-created this trace. Update usage/events,
+            # but keep its durable ChatStream status and actual lifecycle times.
+            trace.mode = mode
+            trace.model_id = model_id
+            metadata = _loads(trace.metadata_json) or {}
+            context_usage = next(((event.get("metadata") or {}).get("context_usage")
+                                  for event in reversed(rows) if (event.get("metadata") or {}).get("context_usage")), {})
+            metadata.update(context_usage=context_usage)
+            trace.metadata_json = _json(metadata)
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                setattr(trace, key, summary[key])
+        else:
+            session.add(trace)
+        saved = {event.id: event for event in (await session.execute(
+            select(TraceEvent).where(TraceEvent.trace_id == trace_id)
+        )).scalars().all()}
+        for index, event in enumerate(rows, 1):
+            record = saved.get(str(event["id"]))
+            if record is None:
+                record = TraceEvent(id=str(event["id"]), trace_id=trace_id, sequence=index)
+                saved[record.id] = record
+                session.add(record)
+            record.parent_id = event.get("parent_id")
+            record.type = str(event.get("type") or "planning")
+            record.status = str(event.get("status") or "info")
+            record.timestamp = _datetime(event.get("timestamp"))
+            record.input_json = _json(event.get("input"))
+            record.output_json = _json(event.get("output"))
+            record.metadata_json = _json(event.get("metadata") or {})
+            record.duration_ms = (event.get("metadata") or {}).get("elapsed_ms")
         await session.commit()
     return trace_id
 

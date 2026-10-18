@@ -68,11 +68,13 @@
                  渲染在答案上方，按实际走的节点（意图/检索/工具/推理/生成）实时流转，
                  不被下一轮覆盖 -->
             <AgentTrace
-              v-if="msg.traceEvents && msg.traceEvents.length"
+              v-if="(msg.traceEvents && msg.traceEvents.length) || (canObserve && msg.meta?.streamId)"
               :events="msg.traceEvents"
               :running="msg.stepsLoading"
               :error="msg.error || ''"
               :stopped="!!msg.stopped"
+              :stream-id="msg.meta?.streamId || ''"
+              :can-observe="canObserve"
             />
             <WorkProgress
               v-else-if="(msg.workItems && msg.workItems.length) || (msg.progressSummaries && msg.progressSummaries.length)"
@@ -780,6 +782,10 @@ import {
 } from 'lucide-vue-next'
 import api from '../api'
 import AgentTrace from '../components/AgentTrace.vue'
+const canObserve = ref(false)
+onMounted(async () => {
+  try { canObserve.value = !!(await api.get('/chat/observability')).can_view } catch { /* No operator access. */ }
+})
 import WorkProgress from '../components/WorkProgress.vue'
 import ArtifactPreview from '../components/ArtifactPreview.vue'
 import { artifactRoute } from '../utils/artifact-preview.js'
@@ -1738,7 +1744,7 @@ watch(() => [chatStore.activeConversationId, chatStore.newConversationVersion], 
           const last = messages.value.at(-1)
           if (last?.role === 'user') {
             last.cancelled = true
-            messages.value.push({ role: 'assistant', content: '', stopped: true, stepsLoading: false, uid: nextMsgUid() })
+            messages.value.push({ role: 'assistant', content: '', stopped: true, stepsLoading: false, uid: nextMsgUid(), meta: { streamId: stream.id } })
           }
         } else if (stream && ['running', 'cancel_requested', 'interrupted'].includes(stream.status)) {
           void send({ attach: stream })
@@ -2014,6 +2020,7 @@ async function send(options = {}) {
             elapsed: ev.elapsed_seconds,
             runId: ev.run_id || m.meta?.runId || '',
             traceId: ev.trace_id || m.meta?.traceId || '',
+            streamId: ev.stream_id || m.meta?.streamId || '',
             tokenUsage: ev.token_usage || m.meta?.tokenUsage || {},
             contextUsage: ev.context_usage || m.meta?.contextUsage || {},
             modelName: ev.model_name || m.meta?.modelName || '',
@@ -2068,6 +2075,8 @@ async function send(options = {}) {
       onStream: ({ streamId, conversationId: id }) => {
         if (currentAbort !== controller) return
         currentStreamId = streamId
+        const message = messages.value[msgIndex]
+        if (message?.uid === asstUid) message.meta = { ...message.meta, streamId }
         if (id) {
           conversationId.value = id
           chatStore.selectConversation(id)

@@ -76,7 +76,7 @@ def use_request_context(
         use_chat_model(model_profile if model_profile is not None else (ctx.model_id or None)),
         use_skill_context(skill_runtime),
         use_authorised_kb_ids(list(ctx.knowledge_base_ids) or None),
-        use_request_trace(session_id=ctx.thread_id),
+        use_request_trace(session_id=ctx.thread_id, trace_id=ctx.local_trace_id, reuse=True),
         use_task_observers(ctx.on_step, ctx.on_artifact),
         use_artifact_owner(ctx.user_id, ctx.thread_id),
         use_sandbox_context(SandboxContext(

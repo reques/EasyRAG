@@ -37,7 +37,11 @@ MCP 管理接口 `/api/v1/mcp/*` 和全局旧接口 `/api/v1/chat`、`/api/v1/in
 
 这次实现继续使用现有 API 执行器，没有引入分布式任务队列。单纯浏览器断网支持自动重连；API 进程丢失后需要显式恢复，checkpoint 的可恢复范围取决于现有配置和持久化存储。恢复第三方写操作仍需工具自身保证幂等。
 
-## 验证记录
+## 可选 Langfuse 关联
+
+启用观测后，每个持久 ChatStream 在准入时固定 trace 关联；断网重连和刷新继续使用原关联，reader 不创建执行 trace。进程中断后的 checkpoint 恢复会创建新执行和新 trace，并关联前次尝试。取消和失败无需最终 assistant 消息也可定位；观测上报不参与取消确认或结果事务。配置和边界见 [Langfuse 执行观测](langfuse-observability.md)。
+
+## 既有验证记录
 
 使用隔离的 PostgreSQL 15 数据库和真实 localhost HTTP 服务验证了 TCP 断开后继续执行、按游标补读、丢失首次响应后的幂等重试、并发准入、主动取消、保存与取消竞态、过期执行权、跨用户访问、真实 JWT、回答保存失败和 checkpoint 恢复。Agent 使用确定性替身，不调用真实付费模型或外部写工具。
 

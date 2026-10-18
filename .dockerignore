@@ -22,3 +22,5 @@ dist
 build
 .venv*
 venv*
+# Local verification artifacts can include synthetic credentials and runtimes.
+tmp/

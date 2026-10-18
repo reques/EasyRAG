@@ -70,9 +70,13 @@ def get_trace_id() -> str:
 
 
 @contextmanager
-def use_request_trace(session_id: str = "", span: str = "main") -> Iterator[RequestTrace]:
+def use_request_trace(session_id: str = "", span: str = "main", *, trace_id: str = "", reuse: bool = False) -> Iterator[RequestTrace]:
     """Create one in-memory trace. Sinks stream events during execution."""
-    trace = TraceInfo(trace_id=new_trace_id(), span=span, session_id=session_id)
+    active = _current_trace.get()
+    if reuse and active is not None and active.session_id == session_id:
+        yield RequestTrace(trace=active, events=_event_log.get() if _event_log.get() is not None else [])
+        return
+    trace = TraceInfo(trace_id=trace_id or new_trace_id(), span=span, session_id=session_id)
     log: List[Dict[str, Any]] = []
     trace_token = _current_trace.set(trace)
     log_token = _event_log.set(log)
@@ -317,6 +321,15 @@ def add_token_usage(
 
 def snapshot_request_context() -> "contextvars.Context":
     return contextvars.copy_context()
+
+
+def clear_trace_context() -> None:
+    """Detach background work from the completed chat's event log and sinks."""
+    for variable, empty in (
+        (_current_trace, None), (_event_log, None), (_event_sinks, ()),
+        (_trace_root, ""), (_open_events, None), (_stream_events, None),
+    ):
+        variable.set(empty)
 
 
 def run_with_request_context(

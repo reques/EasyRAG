@@ -1,4 +1,4 @@
-"""OpenTelemetry 可选集成（2026-08-26，阶段 5）。
+"""Optional business observations and general HTTP OpenTelemetry tracing.
 
 - 安装了 ``opentelemetry-api`` → ``trace_span``/``get_tracer`` 返回真实
   tracer（需自行配置 exporter/TracerProvider 才能导出）；
@@ -60,20 +60,36 @@ def get_tracer() -> Any:
 def trace_span(name: str, **attributes: Any) -> Iterator[Optional[Any]]:
     """开启一个追踪 span；未安装 OpenTelemetry 时为 no-op。
 
-    异常时记录 exception 并以 ERROR 状态结束（随后照常抛出）。
+    Agent observations use the execution-owned parent and privacy policy.
+    General HTTP spans stay with the application's independent OTel provider.
     """
+    from app.observability.context import execution_context, observation_scope
+    if execution_context() is not None:
+        is_agent = name.startswith(("subagent.", "spawn_task."))
+        metadata = dict(attributes)
+        if is_agent:
+            metadata["agentId"] = attributes.get("subagent") or name
+            metadata["taskId"] = attributes.get("task_key")
+            import uuid
+            metadata["agentInvocationId"] = uuid.uuid4().hex
+        with observation_scope(name, kind="agent" if is_agent else "span", metadata=metadata) as span:
+            yield span
+        return
     if not OTEL_AVAILABLE:
         yield None
         return
+    # General HTTP tracing stays on the global provider, outside Langfuse.
+    from opentelemetry import trace as trace_api
     span = get_tracer().start_span(name)
-    for key, value in attributes.items():
-        if value is not None:
-            span.set_attribute(key, value)
     try:
-        yield span
+        for key, value in attributes.items():
+            if value is not None:
+                span.set_attribute(key, value)
+        with trace_api.use_span(span, record_exception=False, set_status_on_exception=False):
+            yield span
     except Exception as exc:
         span.record_exception(exc)
-        span.set_status(_otel_trace.Status(_otel_trace.StatusCode.ERROR, str(exc)[:200]))
+        span.set_status(_otel_trace.Status(_otel_trace.StatusCode.ERROR, type(exc).__name__))
         raise
     finally:
         span.end()

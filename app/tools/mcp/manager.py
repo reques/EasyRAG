@@ -393,6 +393,8 @@ class MCPServerHandle:
     def call_tool_sync(self, raw_tool_name: str, arguments: Dict[str, Any]) -> str:
         """同步派发调用：提交到常驻 loop，内置超时与友好错误拦截。"""
         if not self.running or self.session is None or self.loop is None:
+            from app.observability.context import record_error
+            record_error(reason="mcp_offline")
             return f"[MCP Error] 服务 '{self.server_id}' 未连接或已离线，无法执行 '{raw_tool_name}'"
 
         timeout_s = self.config.timeout_s or 30
@@ -400,6 +402,8 @@ class MCPServerHandle:
         async def _call():
             result = await self.session.call_tool(raw_tool_name, arguments)
             if getattr(result, "isError", False):
+                from app.observability.context import record_error
+                record_error(reason="mcp_is_error")
                 err = _text_content(result) or f"MCP 工具 '{raw_tool_name}' 返回异常"
                 return f"[MCP Tool Error] {err}"
             return _text_content(result) or f"(工具 '{raw_tool_name}' 执行完成但无文本返回)"
@@ -408,9 +412,13 @@ class MCPServerHandle:
         try:
             return fut.result(timeout=timeout_s)
         except asyncio.TimeoutError:
+            from app.observability.context import record_error
+            record_error(status="timed_out", reason="mcp_timeout")
             fut.cancel()
             return f"[MCP Timeout] 工具 '{raw_tool_name}' 在 {timeout_s} 秒后超时，请简化请求或稍后重试。"
         except Exception as exc:
+            from app.observability.context import record_error
+            record_error(exc, reason="mcp_execution_error")
             logger.error("[mcp:%s] invoke %s error: %s", self.server_id, raw_tool_name, exc)
             return f"[MCP Execution Error] 调用失败: {exc}。请检查参数是否符合要求。"
 

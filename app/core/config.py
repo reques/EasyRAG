@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
+    # Optional execution observability. Never send data to an implicit region.
+    LANGFUSE_ENABLED: bool = False
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_BASE_URL: str = ""
+    LANGFUSE_TRACING_ENVIRONMENT: str = "development"
+    LANGFUSE_SAMPLE_RATE: float = Field(default=1.0, ge=0, le=1)
+    EASYRAG_OBSERVABILITY_CONTENT_MODE: Literal["metadata_only", "redacted"] = "metadata_only"
+    EASYRAG_OBSERVABILITY_CONTENT_MAX_CHARS: int = Field(default=2000, ge=0, le=10000)
+    EASYRAG_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS: float = Field(default=3, ge=0, le=10)
+    EASYRAG_OBSERVABILITY_WEB_BASE_URL: str = ""
+    EASYRAG_OBSERVABILITY_PROJECT_ID: str = ""
+
     # ── Server ───────────────────────────────────────────────────────────
     HOST: str = "0.0.0.0"
     PORT: int = 8000

@@ -108,3 +108,4 @@ python-multipart==0.0.18
 
 # ── 工具 ──────────────────────────────────────────────────────────────────────
 httpx==0.28.1
+langfuse==5.0.2             # optional at runtime; isolated execution tracing, Python 3.11+

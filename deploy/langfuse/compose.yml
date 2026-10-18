@@ -1,0 +1,146 @@
+# Adapted from langfuse/langfuse v4.63.0 docker-compose.yml (MIT).
+# Kept separate from EasyRAG's databases and storage. Run via scripts/local_langfuse.py.
+name: easyrag-langfuse
+
+x-common: &common
+  restart: unless-stopped
+  networks: [internal]
+
+services:
+  langfuse-worker:
+    <<: *common
+    image: ${LANGFUSE_IMAGE_REGISTRY:-docker.langfuse.com}/langfuse/langfuse-worker:4.63.0
+    depends_on: &dependencies
+      lf-postgres: {condition: service_healthy}
+      lf-redis: {condition: service_healthy}
+      lf-clickhouse: {condition: service_healthy}
+      lf-minio: {condition: service_healthy}
+    environment: &shared
+      NEXTAUTH_URL: http://localhost:${LANGFUSE_WEB_PORT:-3000}
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Run local_langfuse.py init}@lf-postgres:5432/langfuse
+      SALT: ${SALT:?Run local_langfuse.py init}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Run local_langfuse.py init}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://lf-clickhouse:9000
+      CLICKHOUSE_URL: http://lf-clickhouse:8123
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Run local_langfuse.py init}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?Run local_langfuse.py init}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://lf-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?Run local_langfuse.py init}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://lf-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+      REDIS_HOST: lf-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REDIS_AUTH:?Run local_langfuse.py init}
+      REDIS_TLS_ENABLED: "false"
+  langfuse-web:
+    <<: *common
+    networks: [internal, observability]
+    image: ${LANGFUSE_IMAGE_REGISTRY:-docker.langfuse.com}/langfuse/langfuse:4.63.0
+    depends_on: *dependencies
+    ports: ["127.0.0.1:${LANGFUSE_WEB_PORT:-3000}:3000"]
+    environment:
+      <<: *shared
+      # Docker injects the container ID as HOSTNAME; Next's standalone server
+      # otherwise binds that address instead of loopback/all interfaces.
+      HOSTNAME: 0.0.0.0
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?Run local_langfuse.py init}
+      AUTH_DISABLE_SIGNUP: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:${LANGFUSE_BLOB_PORT:-9190}
+      LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://lf-minio:9000
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID}
+      LANGFUSE_INIT_ORG_NAME: EasyRAG Local
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID}
+      LANGFUSE_INIT_PROJECT_NAME: EasyRAG
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL}
+      LANGFUSE_INIT_USER_NAME: EasyRAG Admin
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/public/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+  lf-postgres:
+    <<: *common
+    image: postgres:17.11
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  lf-redis:
+    <<: *common
+    image: redis:7.4-alpine
+    environment:
+      REDISCLI_AUTH: ${REDIS_AUTH}
+    command: ["redis-server", "--requirepass", "${REDIS_AUTH}", "--maxmemory-policy", "noeviction", "--appendonly", "yes"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  lf-clickhouse:
+    <<: *common
+    image: clickhouse/clickhouse-server:25.12
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  lf-minio:
+    <<: *common
+    image: cgr.dev/chainguard/minio
+    entrypoint: sh
+    command: ["-c", "mkdir -p /data/langfuse && minio server --address ':9000' --console-address ':9001' /data"]
+    environment:
+      MINIO_ROOT_USER: langfuse
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports: ["127.0.0.1:${LANGFUSE_BLOB_PORT:-9190}:9000"]
+    volumes: [minio-data:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+networks:
+  internal:
+  observability:
+    name: easyrag-observability
+
+volumes:
+  postgres-data:
+  redis-data:
+  clickhouse-data:
+  clickhouse-logs:
+  minio-data:

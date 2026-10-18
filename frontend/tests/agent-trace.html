@@ -21,6 +21,7 @@
     const running = ref(true)
     const stopped = ref(false)
     const error = ref('')
+    const canObserve = ref(false)
     const next = () => {
       const previous = events.value.find(e => e.id === 'p1')
       const text = (previous?.output || '') + (previous ? '查知识库' : '先')
@@ -39,8 +40,10 @@
       h('nav', { style: 'display:flex;flex-wrap:wrap;gap:12px;margin-bottom:32px' }, [
         h('button', { onClick: next }, '流式片段'), h('button', { onClick: finish }, '完成'),
         h('button', { onClick: legacy }, '旧记录'), h('button', { onClick: fail }, '失败'), h('button', { onClick: stop }, '停止'),
+        h('button', { onClick: () => { canObserve.value = !canObserve.value } }, '切换管理员观测入口'),
       ]),
-      h(AgentTrace, { events: events.value, running: running.value, stopped: stopped.value, error: error.value }),
+      h(AgentTrace, { events: events.value, running: running.value, stopped: stopped.value, error: error.value,
+        canObserve: canObserve.value, streamId: '00000000-0000-4000-8000-000000000001' }),
       !running.value && !error.value && !stopped.value && events.value.some(e => e.type === 'final_response')
         ? h('section', { class: 'final-answer', style: 'color:var(--gray-900);font-size:14px;line-height:1.9' }, [
           h('p', '已核对合同，付款期限与违约责任如下：'),

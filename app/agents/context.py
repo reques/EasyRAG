@@ -52,6 +52,10 @@ class BaseContext:
     run_id: Optional[str] = None
     """本次委派运行的标识（持久化层回填；Agent 执行期只读）。"""
 
+    execution_id: str = ""
+    local_trace_id: str = ""
+    observability_trace_id: str = ""
+
     model_id: str = ""
     """请求选择的 chat model（Yuxi 把 model 放 Context：执行期只读、不进 State）。"""
 

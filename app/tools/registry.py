@@ -230,6 +230,16 @@ class ToolRegistry:
         return candidates
 
     def invoke(self, name: str, **kwargs: Any) -> str:
+        from app.observability.context import observation_scope
+        with observation_scope(f"tool.{name}", kind="tool", metadata={"tool": name}) as observation:
+            try:
+                return self._invoke(name, **kwargs)
+            except Exception as exc:
+                denied = "not allowed" in str(exc) or "denied by sandbox" in str(exc)
+                observation.error(exc, status="denied" if denied else "error")
+                raise
+
+    def _invoke(self, name: str, **kwargs: Any) -> str:
         """Execute a registered tool by name.
 
         The tool lookup is performed under the registry lock, but the actual
@@ -306,7 +316,7 @@ class ToolRegistry:
                 progress_cb = None
         else:
             progress_cb = None
-        logger.info("Invoking tool '%s' with args: %s", name, kwargs)
+        logger.info("Invoking tool '%s' (argument_count=%d)", name, len(kwargs))
         # 函数内导入：避免模块级循环依赖（事件流/遥测为可选旁路）
         from app.agents.events import emit
         from app.observability.tracing import trace_span
@@ -316,11 +326,20 @@ class ToolRegistry:
 
         attempts = max(1, int(tool.max_retries) + 1)
         last_exc: Optional[BaseException] = None
-        with trace_span(f"tool.invoke.{name}", tool=name, attempts=attempts):
+        from app.observability.context import observation_scope, record_error
+        from contextlib import nullcontext
+        from app.observability.context import execution_context
+        # Keep the pre-existing generic OTel integration when no execution
+        # scope exists, without creating a second Langfuse tool observation.
+        legacy_span = nullcontext() if execution_context() else trace_span(f"tool.invoke.{name}", tool=name, attempts=attempts)
+        with legacy_span:
             for attempt in range(attempts):
                 check_run_cancelled()
                 try:
-                    result = self._execute(tool, kwargs, progress_cb)
+                    with observation_scope("tool.attempt", metadata={"attempt": attempt + 1, "attempts": attempts}) as attempt_span:
+                        result = self._execute(tool, kwargs, progress_cb)
+                    if attempt_span.status in {"error", "timed_out"}:
+                        record_error(status=attempt_span.status, reason="tool_returned_error")
                     emit(
                         "tool", "tool_end", f"{name} 完成", _result_digest(result),
                         tool=name,

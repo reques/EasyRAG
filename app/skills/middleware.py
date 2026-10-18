@@ -75,7 +75,7 @@ def _tool_name(tool: Any) -> str:
     return ""
 
 
-def build_skills_middleware() -> Any:
+def build_skills_middleware(*, platform_tools: Sequence[Any] = ()) -> Any:
     """构造 SkillsMiddleware 实例（挂到 ``create_agent(middleware=[...])``）。
 
     每次调用返回新实例。Agent 构建有进程级缓存（``_main_agent_cache`` 等），
@@ -87,6 +87,10 @@ def build_skills_middleware() -> Any:
 
     state_schema = _skill_aware_state_schema()
     read_skill_tool = build_read_skill_tool()
+    # The Agent factory explicitly supplies its own coordinator instances.
+    # Match objects, not names: a registry/MCP tool named "task" must not gain
+    # an exemption. Child tool invocations still go through ToolRegistry.
+    trusted = tuple(platform_tools)
 
     class SkillsMiddleware(AgentMiddleware):
         """Skill 区块注入 + 渐进式工具门控。"""
@@ -129,7 +133,7 @@ def build_skills_middleware() -> Any:
             skill_rt.sync_activated(list(state_activated))
 
             overrides: dict[str, Any] = {
-                "tools": _filter_tools(request.tools, skill_rt),
+                "tools": _filter_tools(request.tools, skill_rt, platform_tools=trusted),
             }
             block = skill_rt.render_prompt()
             if block:
@@ -144,7 +148,8 @@ def build_skills_middleware() -> Any:
 
             skill_rt = get_active_skill_context()
             name = str((request.tool_call or {}).get("name") or "")
-            if not name or skill_rt.allows_tool(name):
+            if (not name or any(getattr(request, "tool", None) is tool for tool in trusted)
+                    or skill_rt.allows_tool(name)):
                 return handler(request)
 
             pending = _skill_for_tool(skill_rt, name)
@@ -175,7 +180,7 @@ def _without_read_skill(tools: Sequence[Any] | None) -> list[Any]:
 
 
 def _filter_tools(
-    tools: Sequence[Any] | None, skill_rt: SkillRuntimeContext
+    tools: Sequence[Any] | None, skill_rt: SkillRuntimeContext, *, platform_tools: Sequence[Any] = ()
 ) -> list[Any]:
     """按门控过滤工具列表（未激活 Skill 的工具不出现在 schema 里）。
 
@@ -186,7 +191,7 @@ def _filter_tools(
     dropped: list[str] = []
     for tool in tools or ():
         name = _tool_name(tool)
-        if not name or skill_rt.allows_tool(name):
+        if not name or any(tool is item for item in platform_tools) or skill_rt.allows_tool(name):
             kept.append(tool)
         else:
             dropped.append(name)

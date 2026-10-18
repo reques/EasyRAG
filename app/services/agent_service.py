@@ -307,11 +307,18 @@ class AgentService:
         from app.agents.context import ChatContext as _Ctx
         from app.agents.dynamic import run_dynamic_agent
         from app.agents.events import emit, use_request_trace
+        from app.observability.context import observation_scope
 
         context = context or _Ctx(thread_id="default")
         if legacy:
             context = _merge_legacy_kwargs(context, legacy)
-        with use_request_trace(session_id=context.thread_id) as request_trace:
+        mode = "dynamic"
+        with (
+            use_request_trace(session_id=context.thread_id, trace_id=context.local_trace_id,
+                              reuse=bool(context.execution_id)) as request_trace,
+            observation_scope(f"agent.{mode}.main", kind="agent",
+                              metadata={"agentId": f"{mode}/main", "agentMode": mode}),
+        ):
             emit(
                 "agent", "agent_start", "Agent 开始执行", query,
                 input=query, mode="dynamic", model_id=context.model_id,
@@ -354,11 +361,18 @@ class AgentService:
         """
         from app.agents.context import ChatContext as _Ctx
         from app.agents.events import emit, use_request_trace
+        from app.observability.context import observation_scope
 
         context = context or _Ctx(thread_id="default")
         if legacy:
             context = _merge_legacy_kwargs(context, legacy)
-        with use_request_trace(session_id=context.thread_id) as request_trace:
+        mode = "deepagents"
+        with (
+            use_request_trace(session_id=context.thread_id, trace_id=context.local_trace_id,
+                              reuse=bool(context.execution_id)) as request_trace,
+            observation_scope(f"agent.{mode}.main", kind="agent",
+                              metadata={"agentId": f"{mode}/main", "agentMode": mode}),
+        ):
             emit(
                 "agent", "agent_start", "Agent 开始执行", query,
                 input=query, mode="deepagents", model_id=context.model_id,
@@ -552,6 +566,8 @@ class AgentService:
             run_config = checkpoint_run_config(
                 session_id, "deep", cfg.DEEP_MAIN_RECURSION_LIMIT
             )
+            from app.observability.langchain import with_model_callback
+            run_config = with_model_callback(run_config)
             graph_input, _processed_count, resumed = prepare_checkpoint_input(
                 agent,
                 run_config,

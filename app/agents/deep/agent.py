@@ -88,9 +88,12 @@ def build_main_agent(
     if recursion_limit is None:
         recursion_limit = get_settings().DEEP_SUBAGENT_RECURSION_LIMIT
     tools = registry_to_langchain_tools()  # 全量（Skill 门控在调用时生效）
-    tools.append(build_task_tool(model=subagent_model or model, recursion_limit=recursion_limit))
-    tools.append(build_spawn_tasks_tool(model=subagent_model or model))
-    tools.append(build_revise_plan_tool(model=subagent_model or model))
+    coordinators = [
+        build_task_tool(model=subagent_model or model, recursion_limit=recursion_limit),
+        build_spawn_tasks_tool(model=subagent_model or model),
+        build_revise_plan_tool(model=subagent_model or model),
+    ]
+    tools.extend(coordinators)
     prompt = MAIN_SYSTEM_PROMPT.format(subagents_section=task_system_prompt())
     logger.info(
         "[deepagents] main agent built: %d tools (incl. task, spawn_tasks, revise_plan)",
@@ -103,7 +106,7 @@ def build_main_agent(
         # 2026-09-04 Skill 重构：Skill 区块注入与渐进式工具门控由
         # SkillsMiddleware 接管（含 read_skill 工具），取代此前在
         # agent_service / dynamic / graph.nodes 三处的手工 prompt 拼接。
-        middleware=[build_skills_middleware()],
+        middleware=[build_skills_middleware(platform_tools=coordinators)],
         # 显式注入模型用于测试/离线一次性执行，调用方通常没有 thread_id；
         # 生产缓存实例才挂持久 checkpointer。
         checkpointer=get_agent_checkpointer() if cacheable else None,

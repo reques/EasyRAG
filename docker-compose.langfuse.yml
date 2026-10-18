@@ -1,0 +1,14 @@
+# Optional overlay; start the Langfuse stack before adding this file.
+# Include any existing local override before this file when using -f explicitly.
+services:
+  backend:
+    networks:
+      - easyrag
+      - observability
+    environment:
+      NO_PROXY: localhost,127.0.0.1,::1,postgres,redis,rustfs,rustfs-milvus,milvus,etcd,neo4j,ollama,mineru-api,host.docker.internal,langfuse-web
+      no_proxy: localhost,127.0.0.1,::1,postgres,redis,rustfs,rustfs-milvus,milvus,etcd,neo4j,ollama,mineru-api,host.docker.internal,langfuse-web
+networks:
+  observability:
+    external: true
+    name: easyrag-observability

@@ -86,6 +86,59 @@ class LLMClient:
 
     # ── internal helpers ──────────────────────────────────────────────────
 
+    def _request_sync(self, *, messages, **options):
+        from app.observability.context import observation_scope
+        from app.observability.models import response_usage
+        with observation_scope("llm.chat", kind="generation", model=options.get("model", self.model),
+                               metadata={"messageCount": len(messages), "stream": False}) as observation:
+            response = self._sync_client.chat.completions.create(messages=messages, **options)
+            usage, finish, text = response_usage(response)
+            observation.update(usage_details=usage or None, output=text,
+                               metadata={"usageStatus": "known" if usage else "unknown", "finishReason": finish})
+            return response
+
+    async def _request(self, *, messages, **options):
+        from app.observability.context import observation_scope
+        from app.observability.models import response_usage
+        with observation_scope("llm.chat", kind="generation", model=options.get("model", self.model),
+                               metadata={"messageCount": len(messages), "stream": False}) as observation:
+            response = await self._async_client.chat.completions.create(messages=messages, **options)
+            usage, finish, text = response_usage(response)
+            observation.update(usage_details=usage or None, output=text,
+                               metadata={"usageStatus": "known" if usage else "unknown", "finishReason": finish})
+            return response
+
+    async def _request_stream(self, *, messages, **options):
+        from app.observability.context import observation_scope
+        from app.observability.models import normalize_usage
+        with observation_scope("llm.chat", kind="generation", model=options.get("model", self.model),
+                               metadata={"messageCount": len(messages), "stream": True}) as observation:
+            stream = await self._async_client.chat.completions.create(messages=messages, stream=True, **options)
+            output_chars = 0
+            usage, finish = {}, None
+            try:
+                async for chunk in stream:
+                    candidate = normalize_usage(getattr(chunk, "usage", None))
+                    if candidate:
+                        usage = candidate
+                    if chunk.choices:
+                        choice = chunk.choices[0]
+                        finish = getattr(choice, "finish_reason", None) or finish
+                        delta = choice.delta
+                        text = getattr(delta, "content", None)
+                        reasoning = getattr(delta, "reasoning_content", None) or (getattr(delta, "model_extra", None) or {}).get("reasoning_content")
+                        if text or reasoning:
+                            observation.token(content=bool(text))
+                        output_chars += len(text or "")
+                    yield chunk
+            finally:
+                observation.update(usage_details=usage or None, metadata={
+                    "usageStatus": "known" if usage else "unknown", "finishReason": finish, "outputChars": output_chars})
+                try:
+                    await stream.close()
+                except Exception:
+                    pass
+
     def _call_kwargs(self, **extra) -> Dict[str, Any]:
         from app.agents.cancellation import check_run_cancelled
         check_run_cancelled()
@@ -206,7 +259,7 @@ class LLMClient:
             try:
                 logger.debug("LLM sync call | model=%s | msgs=%d | attempt=%d",
                              self.model, len(prompt), attempt + 1)
-                resp = self._sync_client.chat.completions.create(
+                resp = self._request_sync(
                     messages=prompt, **self._call_kwargs(**extra)
                 )
                 text = self._extract_text(resp)
@@ -245,19 +298,24 @@ class LLMClient:
         back to plain text), and mirrors the async ``chat_json`` retry behavior:
         on empty/non-JSON output it appends a direct-output instruction and retries.
         """
-        extra = self._json_call_options(extra)
-        text = self._chat_with_json_mode_sync(messages, **extra)
-        try:
-            return self._parse_json(text)
-        except LLMOutputParseError:
-            logger.warning(
-                "[llm] JSON output empty or invalid, retrying once | model=%s | chars=%d",
-                self.model, len(text),
-            )
-            text = self._chat_with_json_mode_sync(
-                self._nudge_messages(messages, _EMPTY_JSON_NUDGE), **extra
-            )
-            return self._parse_json(text)
+        from app.observability.context import observation_scope
+        with observation_scope("llm.json") as operation:
+            extra = self._json_call_options(extra)
+            text = self._chat_with_json_mode_sync(messages, **extra)
+            try:
+                return self._parse_json(text)
+            except LLMOutputParseError as exc:
+                with observation_scope("llm.json.parse") as failed_parse:
+                    failed_parse.error(exc)
+                operation.update(metadata={"recovered": True, "reason": "invalid_json_retry"})
+                logger.warning(
+                    "[llm] JSON output empty or invalid, retrying once | model=%s | chars=%d",
+                    self.model, len(text),
+                )
+                text = self._chat_with_json_mode_sync(
+                    self._nudge_messages(messages, _EMPTY_JSON_NUDGE), **extra
+                )
+                return self._parse_json(text)
 
     def _chat_with_json_mode_sync(
         self,
@@ -291,7 +349,7 @@ class LLMClient:
         """
         try:
             logger.debug("LLM async call | model=%s | msgs=%d", self.model, len(messages))
-            resp = await self._async_client.chat.completions.create(
+            resp = await self._request(
                 messages=messages, **self._call_kwargs(**extra)
             )
             text = self._extract_text(resp)
@@ -300,7 +358,7 @@ class LLMClient:
             logger.warning(
                 "LLM async returned empty, retrying once with direct-output instruction"
             )
-            resp = await self._async_client.chat.completions.create(
+            resp = await self._request(
                 messages=self._nudge_messages(messages, _EMPTY_RESPONSE_NUDGE),
                 **self._call_kwargs(**extra),
             )
@@ -320,19 +378,24 @@ class LLMClient:
         - 默认请求 ``response_format=json_object``（模型/网关不支持时自动降级重试）；
         - JSON 解析失败时整体重试一次（模型偶发输出非 JSON 内容）。
         """
-        extra = self._json_call_options(extra)
-        text = await self._chat_with_json_mode(messages, **extra)
-        try:
-            return self._parse_json(text)
-        except LLMOutputParseError:
-            logger.warning(
-                "[llm] JSON output empty or invalid, retrying once | model=%s | chars=%d",
-                self.model, len(text),
-            )
-            text = await self._chat_with_json_mode(
-                self._nudge_messages(messages, _EMPTY_JSON_NUDGE), **extra
-            )
-            return self._parse_json(text)
+        from app.observability.context import observation_scope
+        with observation_scope("llm.json") as operation:
+            extra = self._json_call_options(extra)
+            text = await self._chat_with_json_mode(messages, **extra)
+            try:
+                return self._parse_json(text)
+            except LLMOutputParseError as exc:
+                with observation_scope("llm.json.parse") as failed_parse:
+                    failed_parse.error(exc)
+                operation.update(metadata={"recovered": True, "reason": "invalid_json_retry"})
+                logger.warning(
+                    "[llm] JSON output empty or invalid, retrying once | model=%s | chars=%d",
+                    self.model, len(text),
+                )
+                text = await self._chat_with_json_mode(
+                    self._nudge_messages(messages, _EMPTY_JSON_NUDGE), **extra
+                )
+                return self._parse_json(text)
 
     async def _chat_with_json_mode(
         self,
@@ -365,8 +428,8 @@ class LLMClient:
         """
         try:
             logger.debug("LLM stream call | model=%s | msgs=%d", self.model, len(messages))
-            stream = await self._async_client.chat.completions.create(
-                messages=messages, stream=True, **self._call_kwargs(**extra)
+            stream = self._request_stream(
+                messages=messages, **self._call_kwargs(**extra)
             )
             async for chunk in stream:
                 if not chunk.choices:
@@ -396,8 +459,8 @@ class LLMClient:
         """
         try:
             logger.debug("LLM stream events | model=%s | msgs=%d", self.model, len(messages))
-            stream = await self._async_client.chat.completions.create(
-                messages=messages, stream=True, **self._call_kwargs(**extra)
+            stream = self._request_stream(
+                messages=messages, **self._call_kwargs(**extra)
             )
             async for chunk in stream:
                 if not chunk.choices:

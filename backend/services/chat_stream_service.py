@@ -101,6 +101,9 @@ async def recover_stale(session, run):
                 "recoverable": terminal == "interrupted",
             }, terminal)
             await session.commit()
+            from types import SimpleNamespace
+            from backend.services.observability_service import sync_execution_trace
+            await sync_execution_trace(SimpleNamespace(id=run.id, user_id=run.user_id, owner_token=run.owner_token))
 
 
 class StreamExecution:
@@ -163,6 +166,48 @@ async def _watch_safely(execution):
 
 
 async def _produce(execution, factory: Callable[[], AsyncIterator[str]]):
+    try:
+        await _produce_traced(execution, factory)
+    finally:
+        _executions.pop(execution.id, None)
+
+
+async def _produce_traced(execution, factory: Callable[[], AsyncIterator[str]]):
+    from app.agents.events import use_request_trace
+    from app.observability.context import ExecutionContext, execution_scope
+    from backend.services.observability_service import sync_execution_trace
+    async with get_session() as session:
+        run = await owned_run(session, execution.id, execution.user_id)
+        previous = await session.get(ChatStream, run.resumed_from_stream_id) if run.resumed_from_stream_id else None
+        context = ExecutionContext(
+            execution_id=str(run.id), trace_id=run.observability_trace_id or uuid.uuid4().hex,
+            local_trace_id=run.local_trace_id or "", user_id=str(run.user_id),
+            session_id=str(run.conversation_id), sampled=bool(run.observability_sampled),
+            metadata={"resumedFromTraceId": previous.observability_trace_id if previous else None,
+                      "resumedFromStreamId": str(previous.id) if previous else None},
+        )
+    with execution_scope(context) as root, use_request_trace(
+        execution.conversation_id, trace_id=context.local_trace_id
+    ) as local:
+        await sync_execution_trace(execution)
+        try:
+            await _produce_inner(execution, factory)
+        finally:
+            # Local events remain available even when cancellation skipped the
+            # normal AgentService result. No export/flush is awaited here.
+            await sync_execution_trace(execution, local.events)
+            try:
+                async with get_session() as session:
+                    final = await owned_run(session, execution.id, execution.user_id)
+                    status = final.status if final.status in TERMINAL else "interrupted"
+                if status != "completed":
+                    root.error(status=status)
+                root.end(status)
+            except Exception as exc:
+                root.error(exc, status="interrupted")
+
+
+async def _produce_inner(execution, factory: Callable[[], AsyncIterator[str]]):
     watcher = asyncio.create_task(_watch_safely(execution))
     source = factory()
     try:
@@ -194,6 +239,8 @@ async def _produce(execution, factory: Callable[[], AsyncIterator[str]]):
         execution.interrupted = True
         await _append(execution, {"type": "error", "detail": "服务中断，可从断点恢复。", "recoverable": True}, "interrupted")
     except Exception:
+        from app.observability.context import record_error
+        record_error(reason="execution_or_commit_failed")
         logger.exception("[chat-stream] producer failed stream=%s", execution.id)
         execution.cancel_event.set()
         # A journal failure may occur while the synchronous executor still runs.
@@ -205,13 +252,22 @@ async def _produce(execution, factory: Callable[[], AsyncIterator[str]]):
         execution.cancel_event.set()
         watcher.cancel()
         await asyncio.gather(watcher, return_exceptions=True)
-        try:
-            await source.aclose()
-        finally:
-            _executions.pop(execution.id, None)
+        await source.aclose()
 
 
 async def commit_result(execution, answer, metadata, payload):
+    from app.observability.context import observation_scope, current_observation
+    parent = current_observation()
+    try:
+        with observation_scope("result.commit"):
+            await _commit_result_inner(execution, answer, metadata, payload)
+    except Exception:
+        if parent:
+            parent.update(metadata={"failureStage": "result.commit"})
+        raise
+
+
+async def _commit_result_inner(execution, answer, metadata, payload):
     """Answer and terminal event commit together; cancellation competes on this row."""
     from backend.services.chat_service import add_message
     if execution.cancel_event.is_set():

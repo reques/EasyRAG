@@ -207,6 +207,8 @@ def _run_one_task(
                 key=spec.key, status=STATUS_OK, output=str(output), tail=tail,
             )
         except Exception as exc:
+            from app.observability.context import record_error
+            record_error(exc)
             _breaker_record(spec.subagent_type, False)
             logger.warning(
                 "[spawn_tasks] %s (%s) failed: %s",

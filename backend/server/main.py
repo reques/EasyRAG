@@ -25,6 +25,8 @@ logger = get_logger(__name__)
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """应用生命周期管理。"""
     logger.info("Starting %s v%s", cfg.APP_NAME, cfg.APP_VERSION)
+    from app.observability.langfuse_client import initialize as initialize_observability
+    initialize_observability()
 
     # 初始化数据库表（开发用，生产用 Alembic 迁移）
     try:
@@ -36,6 +38,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         from sqlalchemy import text
         engine = await get_engine()
         async with engine.begin() as conn:
+            from backend.services.observability_service import apply_migrations
+            await apply_migrations(conn)
             incremental_columns = (
                 "text_content TEXT",
                 "parser_name VARCHAR(32)",
@@ -176,6 +180,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     yield
     from backend.services.chat_stream_service import shutdown_streams
     await shutdown_streams()
+    from app.observability.langfuse_client import shutdown as shutdown_observability
+    await shutdown_observability()
 
     # 停止文件索引 worker（先停消费再关 Redis；存量任务排空后返回）
     if ingestion_worker_task is not None:

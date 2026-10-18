@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.logger import get_logger
+from backend.services.observability_service import admission_fields
 from app.llm.models import (
     ChatModelProfile,
     ChatModelUnavailableError,
@@ -38,7 +39,7 @@ from backend.services.chat_service import (
     schedule_memory_evaluation,
 )
 from backend.storage.postgres.manager import get_session
-from backend.server.utils.auth_middleware import get_current_user
+from backend.server.utils.auth_middleware import get_current_user, get_admin_user
 from backend.storage.postgres.models_user import User
 from backend.repositories.knowledge_repository import KnowledgeBaseRepository
 from backend.repositories.model_config_repository import CustomModelConfigRepository
@@ -125,7 +126,9 @@ async def _persist_trace_safely(
 ) -> str:
     """Best-effort trace persistence; observability must not break the answer."""
     if not result.get("events"):
-        return ""
+        from app.observability.context import execution_context
+        context = execution_context()
+        return context.local_trace_id if context else ""
     try:
         from backend.services.trace_service import persist_execution_trace
 
@@ -733,6 +736,20 @@ async def _require_idle_conversation(session, conversation_id):
         # it again and recheck before mutating the conversation.
 
 
+@router.get("/observability")
+async def observability_capabilities(current_user: User = Depends(get_current_user)):
+    return {"can_view": bool(current_user.is_superuser or current_user.role == "admin")}
+
+
+@router.get("/streams/{stream_id}/observability")
+async def execution_observability(stream_id: uuid.UUID, current_user: User = Depends(get_admin_user)):
+    from backend.services.observability_service import navigation
+    async with get_session() as session:
+        # Being an operator does not grant cross-user chat access.
+        run = await streams.owned_run(session, stream_id, current_user.id)
+        return navigation(run)
+
+
 @router.get("/streams/{stream_id}/events")
 async def stream_events(stream_id: uuid.UUID, after: int = Query(0, ge=0), current_user: User = Depends(get_current_user)):
     async with get_session() as session:
@@ -823,6 +840,7 @@ async def send_message_stream(
             conv_id = conv.id
             is_new = True
 
+        previous = None
         if req.resume_checkpoint:
             # Completion may have committed while admission waited on the lock.
             await session.refresh(conv, attribute_names=["messages"])
@@ -848,6 +866,7 @@ async def send_message_stream(
             id=stream_id, user_id=current_user.id, conversation_id=conv_id,
             source_message_id=user_message_id, fingerprint=request_fingerprint,
             owner_token=uuid.uuid4().hex, status="running", last_sequence=0,
+            **admission_fields(previous),
         )
         db_history = await get_compressed_history(session, conv_id)
         knowledge_base_ids, knowledge_catalog = await _load_knowledge_scope(
@@ -906,11 +925,21 @@ async def send_message_stream(
             resume_checkpoint=req.resume_checkpoint,
             deep_research=req.deep_research,
         )
+        _chat_ctx.execution_id = str(execution.id)
+        _chat_ctx.local_trace_id = stream_run.local_trace_id or ""
+        _chat_ctx.observability_trace_id = stream_run.observability_trace_id or ""
 
 
         agent = get_agent_service()
         agent_mode = agent.select_agent_mode(effective_query, _chat_ctx)
         use_deep = agent_mode == "deepagents"
+        execution.agent_mode = agent_mode
+        execution.model_id = selected_model.id
+        from app.observability.context import current_observation, execution_context
+        obs_context = execution_context()
+        if obs_context:
+            obs_context.metadata.update(agentMode=agent_mode, modelProfileId=selected_model.id)
+            current_observation().update(metadata=obs_context.metadata)
         stream_context = replace(_chat_ctx, cancel_event=execution.cancel_event, deep_research=use_deep)
         loop = asyncio.get_running_loop()
 
@@ -1012,7 +1041,8 @@ async def send_message_stream(
             # 把 start 变成局部变量，遮蔽外层函数的 start（单 Agent 分支的
             # elapsed 计算依赖它），导致 UnboundLocalError（实测 bug）
             deep_start = time.perf_counter()
-            deep_future = loop.run_in_executor(None, _run_deep_in_thread)
+            from contextvars import copy_context
+            deep_future = loop.run_in_executor(None, copy_context().run, _run_deep_in_thread)
             execution.workers.append(deep_future)
             while True:
                 try:
@@ -1063,6 +1093,8 @@ async def send_message_stream(
                     ) or ""
                 except Exception as exc:
                     logger.warning("[chat/stream] delegation persist failed: %s", exc)
+            if delegation_run_id:
+                current_observation().update(metadata={"delegationRunId": delegation_run_id})
             trace_id = await _persist_trace_safely(
                 deep_result,
                 conversation_id=conv_id,
@@ -1132,7 +1164,8 @@ async def send_message_stream(
                     except Exception as exc:
                         logger.warning("[chat/stream] deep title gen failed: %s", exc)
 
-                asyncio.get_event_loop().create_task(_gen_title_deep())
+                from app.observability.context import detached_context
+                asyncio.get_event_loop().create_task(_gen_title_deep(), context=detached_context())
             return
 
         # ── 轻量动态 Agent 路径（auto 普通问题 / AGENT_MODE=dynamic）──
@@ -1187,7 +1220,8 @@ async def send_message_stream(
                 )
 
         _dyn_start = time.perf_counter()
-        _dyn_future = loop.run_in_executor(None, _run_dynamic_in_thread)
+        from contextvars import copy_context
+        _dyn_future = loop.run_in_executor(None, copy_context().run, _run_dynamic_in_thread)
         execution.workers.append(_dyn_future)
         while True:
             try:
@@ -1229,6 +1263,8 @@ async def send_message_stream(
                 ) or ""
             except Exception as exc:
                 logger.warning("[chat/stream] dynamic delegation persist failed: %s", exc)
+        if delegation_run_id:
+            current_observation().update(metadata={"delegationRunId": delegation_run_id})
         trace_id = await _persist_trace_safely(
             dyn_result,
             conversation_id=conv_id,
@@ -1294,7 +1330,8 @@ async def send_message_stream(
                 except Exception as exc:
                     logger.warning("[chat/stream] dynamic title gen failed: %s", exc)
 
-            asyncio.get_event_loop().create_task(_gen_title_dynamic())
+            from app.observability.context import detached_context
+            asyncio.get_event_loop().create_task(_gen_title_dynamic(), context=detached_context())
         return
 
     streams.start_execution(stream_run, _event_gen_inner)
