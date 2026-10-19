@@ -136,6 +136,7 @@ class MCPServerHandle:
             "started_at": self.started_at,
             "tools": tools_list,
             "allowed_tools": self.config.allowed_tools,
+            "sandbox_profile": self.config.sandbox_profile,
         }
 
     # ── 常驻线程与异步生命周期 ───────────────────────────────────────────
@@ -218,6 +219,13 @@ class MCPServerHandle:
 
         # 3. 本地受限 Stdio
         elif transport_type == MCPTransportType.STDIO:
+            if cfg.sandbox_profile:
+                from app.tools.sandbox.runner_client import RunnerMcpSession
+
+                return await stack.enter_async_context(RunnerMcpSession(cfg.sandbox_profile))
+            from app.core.config import get_settings
+            if get_settings().SANDBOX_REQUIRE_MCP_RUNNER:
+                raise RuntimeError(f"MCP Server '{cfg.server_id}' requires a sandbox_profile")
             from mcp.client.stdio import StdioServerParameters, stdio_client
 
             command = list(cfg.stdio_command or [])
@@ -279,7 +287,7 @@ class MCPServerHandle:
 
         allowed = [
             t for t in tools_res.tools
-            if not cfg.allowed_tools or "*" in cfg.allowed_tools or t.name in cfg.allowed_tools
+            if "*" in cfg.allowed_tools or t.name in cfg.allowed_tools
         ]
 
         reg = get_tool_registry()
@@ -401,7 +409,7 @@ class MCPServerHandle:
 
         async def _call():
             result = await self.session.call_tool(raw_tool_name, arguments)
-            if getattr(result, "isError", False):
+            if getattr(result, "is_error", getattr(result, "isError", False)):
                 from app.observability.context import record_error
                 record_error(reason="mcp_is_error")
                 err = _text_content(result) or f"MCP 工具 '{raw_tool_name}' 返回异常"

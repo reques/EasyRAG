@@ -1,0 +1,6 @@
+FROM node:24-bookworm-slim
+RUN groupadd --gid 10001 sandbox && useradd --uid 10001 --gid sandbox --no-create-home sandbox \
+    && npm install --global @modelcontextprotocol/server-filesystem@2.0.0
+USER 10001:10001
+WORKDIR /workspace
+CMD ["mcp-server-filesystem", "/workspace"]

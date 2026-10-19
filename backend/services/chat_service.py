@@ -96,6 +96,15 @@ async def create_conversation(
     return conv
 
 
+async def save_auto_title(session: AsyncSession, conversation_id: uuid.UUID, title: str) -> None:
+    """Conditional UPDATE prevents a delayed model title from replacing a manual rename."""
+    from sqlalchemy import update
+    await session.execute(update(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.title.in_(("New Conversation", "新对话")),
+    ).values(title=title))
+
+
 async def delete_message(
     session: AsyncSession, message_id: uuid.UUID
 ) -> bool:
@@ -329,10 +338,10 @@ async def get_compressed_history(
 
 
 async def list_user_conversations(
-    session: AsyncSession, user_id: uuid.UUID
+    session: AsyncSession, user_id: uuid.UUID, limit: int = 50, offset: int = 0, *, archived: bool = False
 ) -> list[Conversation]:
     repo = ConversationRepository(session)
-    return list(await repo.list_by_user(user_id))
+    return list(await repo.list_by_user(user_id, limit=limit, offset=offset, archived=archived))
 
 
 def _fallback_title(query: str) -> str:

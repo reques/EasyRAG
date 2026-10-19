@@ -38,9 +38,11 @@ from app.tools.mcp.models import (
 )
 
 logger = get_logger(__name__)
-from backend.server.utils.auth_middleware import get_admin_user
+from backend.server.utils.auth_middleware import get_admin_user, get_current_user
+from backend.storage.postgres.models_user import User
 
-router = APIRouter(prefix="/mcp", tags=["mcp"], dependencies=[Depends(get_admin_user)])
+router = APIRouter(prefix="/mcp", tags=["mcp"], dependencies=[Depends(get_current_user)])
+_ADMIN_ONLY = [Depends(get_admin_user)]
 
 # 广场 id 允许的字符集（@publisher/name）；用于挡住路径穿越等畸形输入
 _CATALOG_ID_RE = re.compile(r"^[A-Za-z0-9@/._\-]{1,200}$")
@@ -66,9 +68,44 @@ def _get_manager():
     return get_mcp_manager()
 
 
+def _member_server_views(manager) -> list[dict]:
+    """Explicit allowlist: never serialize connection settings or raw errors to members."""
+    definitions = [item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+                   for item in manager.list_definitions()]
+    live = {item["server_id"]: item for item in manager.status()}
+    result = []
+    for definition in definitions:
+        server_id = definition["server_id"]
+        current = live.get(server_id, {})
+        running = bool(current.get("running"))
+        allowed = definition.get("allowed_tools", ["*"])
+        tools = []
+        for tool in current.get("tools", []) if running else []:
+            name = tool.get("name", "")
+            if name and ("*" in allowed or name in allowed):
+                tools.append({"name": name, "namespaced_name": tool.get("namespaced_name") or f"{server_id}__{name}", "enabled": True})
+        failed = current.get("error") or definition.get("last_error") or current.get("status") == "error"
+        result.append({
+            "server_id": server_id, "name": definition.get("name") or server_id,
+            "transport": definition.get("transport", "sse"), "enabled": definition.get("enabled", True),
+            "running": running, "status": current.get("status", "disconnected"),
+            "error": "服务连接异常，请联系管理员检查配置。" if failed else None,
+            "started_at": current.get("started_at"), "tools": tools,
+            "allowed_tools": allowed, "capabilities": definition.get("capabilities", []),
+            "timeout_s": definition.get("timeout_s", 30),
+        })
+    return result
+
+
+@router.get("/overview")
+async def member_overview(user: User = Depends(get_current_user)):
+    return {"can_manage": bool(user.is_superuser or user.role == "admin"),
+            "servers": _member_server_views(_get_manager())}
+
+
 # ── Server 配置管理 (CRUD) ────────────────────────────────────────────────
 
-@router.get("/servers")
+@router.get("/servers", dependencies=_ADMIN_ONLY)
 async def list_servers():
     """列出所有配置的 MCP server 及运行状态。"""
     mgr = _get_manager()
@@ -78,7 +115,7 @@ async def list_servers():
     }
 
 
-@router.post("/servers", response_model=MCPServerDefinition, status_code=status.HTTP_201_CREATED)
+@router.post("/servers", response_model=MCPServerDefinition, status_code=status.HTTP_201_CREATED, dependencies=_ADMIN_ONLY)
 async def create_server(payload: MCPServerCreate):
     """【新增】动态添加并立即热挂载远程 MCP Server (SSE / HTTP / 受信任 Stdio)。"""
     mgr = _get_manager()
@@ -89,7 +126,7 @@ async def create_server(payload: MCPServerCreate):
         raise HTTPException(status_code=400, detail=f"注册 MCP Server 失败: {exc}")
 
 
-@router.get("/servers/{server_id}", response_model=MCPServerDefinition)
+@router.get("/servers/{server_id}", response_model=MCPServerDefinition, dependencies=_ADMIN_ONLY)
 async def get_server(server_id: str):
     """【新增】获取指定 MCP Server 的完整配置。"""
     mgr = _get_manager()
@@ -99,7 +136,7 @@ async def get_server(server_id: str):
         raise HTTPException(status_code=404, detail=f"MCP server '{server_id}' not found")
 
 
-@router.put("/servers/{server_id}", response_model=MCPServerDefinition)
+@router.put("/servers/{server_id}", response_model=MCPServerDefinition, dependencies=_ADMIN_ONLY)
 async def update_server(server_id: str, patch: MCPServerUpdate):
     """【新增】更新指定 MCP Server 的配置参数并按需重连。"""
     mgr = _get_manager()
@@ -111,7 +148,7 @@ async def update_server(server_id: str, patch: MCPServerUpdate):
         raise HTTPException(status_code=400, detail=f"更新 MCP Server 失败: {exc}")
 
 
-@router.delete("/servers/{server_id}", status_code=status.HTTP_200_OK)
+@router.delete("/servers/{server_id}", status_code=status.HTTP_200_OK, dependencies=_ADMIN_ONLY)
 async def delete_server(server_id: str):
     """【新增】动态卸载指定 MCP Server，注销工具并释放连接。"""
     mgr = _get_manager()
@@ -124,7 +161,7 @@ async def delete_server(server_id: str):
 
 # ── 启停与同步控制 ────────────────────────────────────────────────────────
 
-@router.post("/servers/{name}/start")
+@router.post("/servers/{name}/start", dependencies=_ADMIN_ONLY)
 async def start_server(name: str):
     """启动指定 MCP server（连接 + 注册工具）。已运行则幂等返回。"""
     try:
@@ -137,7 +174,7 @@ async def start_server(name: str):
         raise HTTPException(status_code=502, detail=str(exc))
 
 
-@router.post("/servers/{name}/stop")
+@router.post("/servers/{name}/stop", dependencies=_ADMIN_ONLY)
 async def stop_server(name: str):
     """停止指定 MCP server（断开连接 + 注销工具）。"""
     try:
@@ -146,7 +183,7 @@ async def stop_server(name: str):
         raise HTTPException(status_code=404, detail=f"MCP server '{name}' not configured")
 
 
-@router.post("/servers/{name}/sync")
+@router.post("/servers/{name}/sync", dependencies=_ADMIN_ONLY)
 async def sync_server_tools(name: str):
     """【新增】动态重新拉取并同步指定 MCP Server 的工具列表。"""
     try:
@@ -159,7 +196,7 @@ async def sync_server_tools(name: str):
 
 # ── 工具发现与路由查询 (Tool Routing) ───────────────────────────────────
 
-@router.get("/servers/{name}/tools")
+@router.get("/servers/{name}/tools", dependencies=_ADMIN_ONLY)
 async def server_tools(name: str):
     """该 server 当前已注册的工具列表。"""
     manager = _get_manager()
@@ -171,7 +208,7 @@ async def server_tools(name: str):
     return {"name": name, "running": status_info["running"], "tools": status_info["tools"]}
 
 
-@router.get("/tools", response_model=List[MCPToolInfo])
+@router.get("/tools", response_model=List[MCPToolInfo], dependencies=_ADMIN_ONLY)
 async def list_all_tools(server_ids: Optional[str] = Query(None, description="逗号分隔的 server_id 白名单过滤")):
     """【新增】获取全部可调用的 MCP 工具，支持基于服务 ID 的按需白名单过滤。"""
     sids = [s.strip() for s in server_ids.split(",") if s.strip()] if server_ids else None
@@ -191,7 +228,7 @@ def _validate_catalog_id(catalog_id: str) -> str:
     return catalog_id
 
 
-@router.get("/catalog")
+@router.get("/catalog", dependencies=_ADMIN_ONLY)
 async def search_catalog(
     search: str = Query("", description="关键词，留空返回热门服务"),
     page: int = Query(1, ge=1, le=100),
@@ -205,7 +242,7 @@ async def search_catalog(
     return result
 
 
-@router.post("/catalog/{catalog_id:path}/install", response_model=MCPServerDefinition)
+@router.post("/catalog/{catalog_id:path}/install", response_model=MCPServerDefinition, dependencies=_ADMIN_ONLY)
 async def install_catalog_server(catalog_id: str, payload: MCPCatalogInstall):
     """【新增】把广场服务接入本地：按安装计划构造定义、注册并热挂载。
 
@@ -280,7 +317,7 @@ async def install_catalog_server(catalog_id: str, payload: MCPCatalogInstall):
     return definition
 
 
-@router.get("/catalog/{catalog_id:path}")
+@router.get("/catalog/{catalog_id:path}", dependencies=_ADMIN_ONLY)
 async def catalog_detail(catalog_id: str):
     """【新增】广场服务详情 + 可直接用于安装的计划（含必填环境变量与运行环境自检）。"""
     catalog_id = _validate_catalog_id(catalog_id)

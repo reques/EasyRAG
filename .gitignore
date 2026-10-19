@@ -9,6 +9,7 @@ build/
 # Environment
 .env
 *.env.local
+.venv/
 .venv-ragas/
 
 # OS
@@ -33,6 +34,7 @@ node_modules/
 frontend/dist/
 
 # Temp
+tmp/
 .pytest_cache/
 .ruff_cache/
 *.log

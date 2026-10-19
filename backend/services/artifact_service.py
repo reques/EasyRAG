@@ -80,6 +80,27 @@ def create_file(user_id, conversation_id, filename, content):
             'download_url': f'/artifacts/{conversation_id}/{object_name.rsplit("/", 1)[-1]}'}
 
 
+def create_generated_file(user_id, conversation_id, filename, data: bytes):
+    """Store a validated binary output produced by a sandbox container."""
+    if not isinstance(filename, str) or not filename or len(filename.encode('utf-8')) > 180:
+        raise ValueError('Invalid filename')
+    if re.search(r'[\\/:*?"<>|\x00-\x1f\x7f]', filename) or filename.startswith('.') or filename.endswith((' ', '.')):
+        raise ValueError('Use a filename without directories or control characters')
+    mime = MIME_TYPES.get(PurePosixPath(filename).suffix.lower())
+    if mime is None:
+        raise ValueError('Unsupported sandbox output format')
+    if not isinstance(data, bytes) or len(data) > MAX_BYTES:
+        raise ValueError('Sandbox output exceeds the 5 MiB limit')
+    object_name = prefix(user_id, conversation_id) + str(uuid4())
+    bucket = get_settings().MINIO_BUCKET
+    ensure_bucket(bucket)
+    get_minio_client().put_object(bucket, object_name, io.BytesIO(data), len(data),
+                                  content_type=mime, metadata={'filename': quote(filename, safe='')})
+    return {'id': object_name.rsplit('/', 1)[-1], 'kind': 'file', 'title': filename,
+            'filename': filename, 'size': len(data), 'content_type': mime,
+            'download_url': f'/artifacts/{conversation_id}/{object_name.rsplit("/", 1)[-1]}'}
+
+
 def list_files(user_id, conversation_id):
     return [describe(item, conversation_id) for item in get_minio_client().list_objects(
         get_settings().MINIO_BUCKET, prefix=prefix(user_id, conversation_id),

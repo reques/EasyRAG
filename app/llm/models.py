@@ -29,6 +29,9 @@ class ChatModelProfile:
     # 是否支持多模态（图片）输入。内置模型由我们在下方显式标注；
     # 自定义模型由用户在"添加模型"表单里勾选。默认 False → 走 OCR 回退。
     supports_vision: bool = False
+    context_window: Optional[int] = None
+    max_output_tokens: Optional[int] = None
+    context_source: str = "unknown"
 
     @property
     def available(self) -> bool:
@@ -57,6 +60,10 @@ class ChatModelProfile:
             "can_delete": self.source == "custom",
             # 前端据此决定是否显示"粘贴图片"入口的提示 / 直接禁用图片按钮
             "supports_vision": self.supports_vision,
+            "api_model": self.model,
+            "context_window": self.context_window,
+            "max_output_tokens": self.max_output_tokens,
+            "context_source": self.context_source,
         }
 
 

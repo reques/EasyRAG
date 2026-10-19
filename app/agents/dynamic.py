@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from app.agents.context import ChatContext
 from app.agents.action_progress import SUMMARY_ARG, build_action_progress_middleware
+from app.agents.context_usage import build_context_usage_middleware
 from app.agents.response_stream import ProgressEventCollector, ResponseStream, message_text
 from app.core.config import get_settings
 from app.core.logger import get_logger
@@ -90,7 +91,7 @@ def build_dynamic_agent(
     from langchain.agents import create_agent
 
     from app.agents.checkpointing import get_agent_checkpointer
-    from app.agents.deep.llm import get_langchain_model
+    from app.agents.deep.llm import get_langchain_model, build_selected_model_middleware
     from app.agents.deep.tools import registry_to_langchain_tools
     from app.skills.middleware import build_skills_middleware
 
@@ -111,7 +112,8 @@ def build_dynamic_agent(
         tools=tools,
         system_prompt=prompt,
         # 2026-09-04 Skill 重构：Skill 注入 + 渐进式门控（含 read_skill）
-        middleware=[build_skills_middleware(), build_action_progress_middleware()],
+        middleware=[build_selected_model_middleware(), build_skills_middleware(), build_action_progress_middleware(),
+                    build_context_usage_middleware()],
         checkpointer=get_agent_checkpointer(),
         name="easyrag_dynamic_agent",
     )

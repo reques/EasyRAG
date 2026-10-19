@@ -32,6 +32,8 @@ STALE_SECONDS = 90
 
 def fingerprint(payload: dict) -> str:
     data = {key: value for key, value in payload.items() if key != "request_id"}
+    if data.get("workspace_id") is None:
+        data.pop("workspace_id", None)  # Preserve fingerprints of requests admitted before workspaces.
     return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 

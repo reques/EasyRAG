@@ -308,6 +308,17 @@ def _export_skill_row_to_disk(record) -> None:
     (directory / SKILL_FILENAME).write_text(text_content, encoding="utf-8")
 
 
+async def _migrate_conversation_workspaces(conn) -> None:
+    """Keep legacy session IDs/history intact; old sessions are ungrouped."""
+    await conn.execute(text(
+        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS workspace_id UUID "
+        "REFERENCES workspaces(id) ON DELETE SET NULL"
+    ))
+    await conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_conversations_workspace_id ON conversations (workspace_id)"
+    ))
+
+
 async def init_db() -> None:
     """创建所有表（开发/测试用；生产应使用 Alembic 迁移）。"""
     from backend.storage.postgres.models_user import User, Department  # noqa: F401
@@ -322,12 +333,26 @@ async def init_db() -> None:
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_conversation_workspaces(conn)
+        await _migrate_workspace_organization(conn)
         await _migrate_legacy_evaluation_runs(conn)
         await _migrate_evaluation_benchmark_phase_one(conn)
         await _migrate_custom_model_supports_vision(conn)
         await _migrate_messages_image(conn)
         await _migrate_skill_config_to_files(conn)
     logger.info("[postgres] tables created")
+
+
+async def _migrate_workspace_organization(conn) -> None:
+    for statement in (
+        "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS local_path VARCHAR(1024)",
+        "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS section_id UUID REFERENCES workspace_sections(id) ON DELETE SET NULL",
+        "CREATE INDEX IF NOT EXISTS ix_workspaces_section_id ON workspaces(section_id)",
+        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ",
+        "CREATE INDEX IF NOT EXISTS ix_conversations_archived_at ON conversations(archived_at)",
+    ):
+        await conn.execute(text(statement))
 
 
 def get_session() -> AsyncSession:

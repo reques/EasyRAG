@@ -312,6 +312,12 @@ def add_token_usage(
     if last_call is not None:
         last_call.clear()
         last_call.update(usage)
+        meter = (getattr(message, "response_metadata", None) or {}).get("context_meter")
+        if isinstance(meter, dict):
+            last_call.update({name: meter.get(name) for name in (
+                "api_model", "profile_id", "context_window", "context_source", "breakdown",
+            )})
+        last_call["model_call_id"] = key
         emit(
             "planning", "model_usage", "模型用量",
             token_usage=dict(total), context_usage=dict(last_call),

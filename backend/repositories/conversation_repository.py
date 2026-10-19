@@ -26,12 +26,13 @@ class ConversationRepository(BaseRepository[Conversation]):
         return result.scalar_one_or_none()
 
     async def list_by_user(
-        self, user_id: uuid.UUID, limit: int = 50, offset: int = 0
+        self, user_id: uuid.UUID, limit: int = 50, offset: int = 0, *, archived: bool = False
     ) -> Sequence[Conversation]:
         stmt = (
             select(Conversation)
             .where(Conversation.user_id == user_id)
-            .order_by(Conversation.updated_at.desc())
+            .where(Conversation.archived_at.is_not(None) if archived else Conversation.archived_at.is_(None))
+            .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
             .limit(limit)
             .offset(offset)
         )

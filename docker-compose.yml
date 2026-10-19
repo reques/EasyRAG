@@ -27,6 +27,9 @@ services:
 
   backend:
     <<: *service-defaults
+    networks:
+      - easyrag
+      - sandbox-control
     container_name: easyrag-backend
     build:
       context: .
@@ -70,6 +73,13 @@ services:
       SKILLS_PERSONAL_DIR: /app/volumes/user-skills
       AGENT_CHECKPOINT_PATH: /app/volumes/checkpoints/agent_state.sqlite3
       MCP_FS_ROOT: /app/volumes/workspace
+      SANDBOX_RUNNER_URL: ${SANDBOX_RUNNER_URL:-http://sandbox-runner:8090}
+      SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
+      SANDBOX_EXEC_ENABLED: ${SANDBOX_EXEC_ENABLED:-false}
+      SANDBOX_REQUIRE_MCP_RUNNER: ${SANDBOX_REQUIRE_MCP_RUNNER:-false}
+      MCP_FILESYSTEM_SANDBOX_PROFILE: ${MCP_FILESYSTEM_SANDBOX_PROFILE:-}
+      MCP_POSTGRES_SANDBOX_PROFILE: ${MCP_POSTGRES_SANDBOX_PROFILE:-}
+      MCP_12306_SANDBOX_PROFILE: ${MCP_12306_SANDBOX_PROFILE:-}
       NO_PROXY: localhost,127.0.0.1,::1,postgres,redis,rustfs,rustfs-milvus,milvus,etcd,neo4j,ollama,mineru-api,host.docker.internal
       no_proxy: localhost,127.0.0.1,::1,postgres,redis,rustfs,rustfs-milvus,milvus,etcd,neo4j,ollama,mineru-api,host.docker.internal
     extra_hosts:
@@ -102,8 +112,94 @@ services:
       retries: 10
       start_period: 60s
 
+  sandbox-runner:
+    profiles: ["sandbox"]
+    restart: unless-stopped
+    depends_on:
+      sandbox-egress-proxy:
+        condition: service_started
+    networks:
+      - sandbox-control
+    build:
+      context: .
+      dockerfile: deploy/sandbox_runner/Dockerfile.runner
+    image: easyrag/sandbox-runner:local
+    environment:
+      SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
+      SANDBOX_PYTHON_IMAGE: easyrag/sandbox-python:local
+      SANDBOX_FILESYSTEM_IMAGE: easyrag/mcp-filesystem:local
+      SANDBOX_POSTGRES_IMAGE: easyrag/mcp-postgres:local
+      SANDBOX_RAIL_IMAGE: easyrag/mcp-12306:local
+      SANDBOX_WORKSPACE_VOLUME: easyrag-sandbox-workspace
+      SANDBOX_POSTGRES_READONLY_URL: ${SANDBOX_POSTGRES_READONLY_URL:-}
+      SANDBOX_POSTGRES_NETWORK: easyrag-sandbox-db
+      SANDBOX_EGRESS_NETWORK: easyrag-sandbox-egress
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      retries: 3
+
+  sandbox-python-image:
+    profiles: ["sandbox-images"]
+    build:
+      context: .
+      dockerfile: deploy/sandbox_runner/Dockerfile.python
+    image: easyrag/sandbox-python:local
+    command: ["true"]
+    network_mode: none
+
+  sandbox-mcp-filesystem-image:
+    profiles: ["sandbox-images"]
+    build:
+      context: .
+      dockerfile: deploy/sandbox_runner/Dockerfile.mcp-filesystem
+    image: easyrag/mcp-filesystem:local
+    command: ["true"]
+    network_mode: none
+
+  sandbox-mcp-postgres-image:
+    profiles: ["sandbox-images"]
+    build:
+      context: .
+      dockerfile: deploy/sandbox_runner/Dockerfile.mcp-postgres
+    image: easyrag/mcp-postgres:local
+    command: ["true"]
+    network_mode: none
+
+  sandbox-mcp-12306-image:
+    profiles: ["sandbox-images"]
+    build:
+      context: .
+      dockerfile: deploy/sandbox_runner/Dockerfile.mcp-12306
+    image: easyrag/mcp-12306:local
+    command: ["true"]
+    network_mode: none
+
+  sandbox-egress-proxy:
+    profiles: ["sandbox"]
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: deploy/sandbox_runner/Dockerfile.egress-proxy
+    image: easyrag/sandbox-egress-proxy:local
+    networks:
+      - sandbox-egress
+      - sandbox-uplink
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
   postgres:
     <<: *service-defaults
+    networks:
+      - easyrag
+      - sandbox-db
     container_name: easyrag-postgres
     image: pgvector/pgvector:pg17
     environment:
@@ -351,11 +447,24 @@ services:
       start_period: 30s
 
 volumes:
+  sandbox-workspace:
+    name: easyrag-sandbox-workspace
   mineru-output:
     name: easyrag-mineru-output
   ollama-data:
     name: easyrag-ollama-data
 
 networks:
+  sandbox-control:
+    name: easyrag-sandbox-control
+    internal: true
+  sandbox-db:
+    name: easyrag-sandbox-db
+    internal: true
+  sandbox-egress:
+    name: easyrag-sandbox-egress
+    internal: true
+  sandbox-uplink:
+    name: easyrag-sandbox-uplink
   easyrag:
     name: easyrag

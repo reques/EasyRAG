@@ -118,6 +118,7 @@ class Settings(BaseSettings):
     VECTOR_STORE_TYPE: Literal["memory", "milvus", "chroma"] = "milvus"
     MILVUS_HOST: str = "localhost"
     MILVUS_PORT: int = 19530
+    MILVUS_INIT_TIMEOUT: float = Field(default=30.0, ge=1, le=300)
     MILVUS_COLLECTION: str = "rag_docs"
     MILVUS_DATA_DIR: str = "./milvus_data"   # local dir for persisted metadata
     CHROMA_PERSIST_DIR: str = "./chroma_db"
@@ -230,11 +231,15 @@ class Settings(BaseSettings):
     #   按 auto 处理并告警）
     AGENT_MODE: Literal["auto", "single", "dynamic", "multi", "deepagents"] = "auto"
 
-    # Tool permission sandbox. Keep audit mode enabled first so deployments can
-    # review real traffic before switching config/sandbox_policy.json to enforce.
+    # Tool permission policy. The default config now enforces proc.exec rules;
+    # the separate runner switch controls whether Python execution is exposed.
     SANDBOX_ENABLED: bool = True
     SANDBOX_POLICY_FILE: str = "./config/sandbox_policy.json"
     SANDBOX_AUDIT_FILE: str = "./volumes/logs/tool_audit.jsonl"
+    SANDBOX_RUNNER_URL: str = ""
+    SANDBOX_RUNNER_TOKEN: str = ""
+    SANDBOX_EXEC_ENABLED: bool = False
+    SANDBOX_REQUIRE_MCP_RUNNER: bool = False
 
     # ── DeepAgents (AGENT_MODE=deepagents) ────────────────────────────────
     # 外部 SubAgent 配置文件（JSON/YAML，见 subagents.load_subagents 的格式；
@@ -271,9 +276,8 @@ class Settings(BaseSettings):
     # 超出部分取真实尾部并记日志，避免长会话把上下文窗口撑爆。
     # 正常路径（有摘要）不受此限制：摘要承载远期上下文 + 最近 20 条。
     HISTORY_CONTEXT_MAX_MESSAGES: int = 100
-    # 上下文占用指示器的分母：模型上下文窗口（token 数）。前端环形指示器
-    # 用「最近一轮 LLM 调用的真实 input_tokens / 本值」计算占比。
-    # 全局单值——内置与自定义模型共用；若接入的模型窗口不同（如 128K），按实际值改。
+    # 旧版全局展示配置，保留以兼容已有环境变量。上下文指示器现在只使用
+    # 提供商按模型报告的窗口；未知模型不再回退到这个数值。
     CHAT_CONTEXT_WINDOW: int = 200_000
 
     # ── 手动压缩上下文窗口（/compact）─────────────────────────────────────

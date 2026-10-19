@@ -137,3 +137,43 @@ def get_langchain_model(model_name: str | None = None, temperature: float | None
         "[deepagents] langchain model: %s via %s", model.model_name, cfg.LLM_BASE_URL
     )
     return model
+
+
+@lru_cache(maxsize=16)
+def _selected_langchain_model(
+    base_url: str, api_key: str, model_name: str, temperature: float,
+    max_tokens: int, timeout: float, max_retries: int,
+):
+    from app.llm.cancellable_http import async_model_http_client, sync_model_http_client
+
+    return DeepSeekChatOpenAI(
+        base_url=base_url,
+        api_key=api_key or "not-configured",
+        model=model_name,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        max_retries=max_retries,
+        http_client=sync_model_http_client(trust_env=True),
+        http_async_client=async_model_http_client(trust_env=True),
+    )
+
+
+def build_selected_model_middleware():
+    """Honor the request-local model even when a compiled Agent is cached."""
+    from langchain.agents.middleware import AgentMiddleware
+    from app.llm.client import get_active_chat_model_profile
+
+    class SelectedModelMiddleware(AgentMiddleware):
+        def wrap_model_call(self, request, handler):
+            profile = get_active_chat_model_profile()
+            if profile is None or not isinstance(request.model, DeepSeekChatOpenAI):
+                return handler(request)
+            cfg = get_settings()
+            selected = _selected_langchain_model(
+                profile.base_url, profile.api_key, profile.model, profile.temperature,
+                cfg.LLM_MAX_TOKENS, cfg.LLM_TIMEOUT, cfg.LLM_MAX_RETRIES,
+            )
+            return handler(request.override(model=selected))
+
+    return SelectedModelMiddleware()

@@ -284,8 +284,9 @@ async def test_retrieval(
         return await _test_retrieval_enhanced(req, kb_id, started_at)
 
     try:
+        retriever = await asyncio.to_thread(get_retriever)
         docs = await asyncio.to_thread(
-            get_retriever().retrieve,
+            retriever.retrieve,
             req.query,
             top_k=req.top_k,
             knowledge_base_ids=[str(kb_id)],
@@ -1212,7 +1213,8 @@ async def delete_file(
         # 1. 删除向量索引（按 source 文件名匹配）
         try:
             from app.rag.retriever import get_retriever
-            n = get_retriever().delete_documents_by_source(filename)
+            retriever = await asyncio.to_thread(get_retriever)
+            n = await asyncio.to_thread(retriever.delete_documents_by_source, filename)
             logger.info("[knowledge/delete] removed %d vector chunks for '%s'", n, filename)
         except NotImplementedError:
             logger.warning("[knowledge/delete] vector backend does not support per-file delete")
@@ -1295,7 +1297,8 @@ async def _purge_kb_contents(session: AsyncSession, kb: Any) -> PurgeResponse:
     deleted_vectors = 0
     try:
         from app.rag.retriever import get_retriever
-        deleted_vectors = get_retriever().delete_documents_by_kb(str(kb.id))
+        retriever = await asyncio.to_thread(get_retriever)
+        deleted_vectors = await asyncio.to_thread(retriever.delete_documents_by_kb, str(kb.id))
     except NotImplementedError:
         logger.warning("[knowledge/purge] vector backend does not support kb delete")
     except Exception as exc:
@@ -1400,6 +1403,8 @@ async def reindex_file(
 
         # 清理旧索引（向量 + 图谱），重置进度为 queued
         await _clear_file_index(session, kb_uuid, file_uuid, filename)
+        f.error_message = None
+        f.progress = 0
         f.processing_stage = "queued"
         f.progress_message = "重新索引已排队"
         f.status = "processing"
@@ -1427,7 +1432,8 @@ async def _clear_file_index(
     # 1. 向量索引（按 source 文件名匹配）
     try:
         from app.rag.retriever import get_retriever
-        n = get_retriever().delete_documents_by_source(filename)
+        retriever = await asyncio.to_thread(get_retriever)
+        n = await asyncio.to_thread(retriever.delete_documents_by_source, filename)
         logger.info("[knowledge/reindex] removed %d vector chunks for '%s'", n, filename)
     except NotImplementedError:
         logger.warning("[knowledge/reindex] vector backend does not support per-file delete")
@@ -1520,7 +1526,7 @@ async def _run_reindex(
             m["knowledge_base_id"] = str(kb_id)
             m["file_id"] = str(file_id)
 
-        retriever = get_retriever()
+        retriever = await asyncio.to_thread(get_retriever)
         n = 0
         batch_size = 64
         total_chunks = len(texts)

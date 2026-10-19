@@ -1,0 +1,6 @@
+FROM python:3.11-slim-bookworm
+RUN groupadd --gid 10001 sandbox && useradd --uid 10001 --gid sandbox --no-create-home sandbox
+COPY deploy/sandbox_runner/worker.py /opt/worker.py
+USER 10001:10001
+WORKDIR /work
+CMD ["python", "-I", "-S", "-B", "/opt/worker.py"]

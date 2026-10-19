@@ -15,7 +15,9 @@ tests
 docs
 examples
 eval
-deploy
+deploy/*
+!deploy/sandbox_runner/
+!deploy/sandbox_runner/**
 volumes
 models
 dist

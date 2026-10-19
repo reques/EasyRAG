@@ -11,6 +11,7 @@ The active backend is selected by ``Settings.VECTOR_STORE_TYPE``.
 from __future__ import annotations
 
 import hashlib
+import threading
 import uuid
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -285,13 +286,14 @@ class MilvusRetriever(BaseRetriever):
                 f"Python env): {exc}"
             ) from exc
 
-        connections.connect(host=cfg.MILVUS_HOST, port=cfg.MILVUS_PORT)
+        timeout = cfg.MILVUS_INIT_TIMEOUT
+        connections.connect(host=cfg.MILVUS_HOST, port=cfg.MILVUS_PORT, timeout=timeout)
         logger.info("[MilvusRetriever] connected to %s:%s", cfg.MILVUS_HOST, cfg.MILVUS_PORT)
 
         col_name = cfg.MILVUS_COLLECTION
         desired_fields = {"id", "content", "source", "knowledge_base_id", "vector"}
-        if utility.has_collection(col_name):
-            existing = Collection(col_name)
+        if utility.has_collection(col_name, timeout=timeout):
+            existing = Collection(col_name, timeout=timeout)
             existing_names = {f.name for f in existing.schema.fields}
             if not desired_fields.issubset(existing_names):
                 # schema 不含 knowledge_base_id（旧版 4 字段）→ 重建 collection。
@@ -300,8 +302,8 @@ class MilvusRetriever(BaseRetriever):
                     "[MilvusRetriever] collection '%s' schema outdated (%s), dropping to rebuild with knowledge_base_id",
                     col_name, sorted(existing_names),
                 )
-                utility.drop_collection(col_name)
-        if not utility.has_collection(col_name):
+                utility.drop_collection(col_name, timeout=timeout)
+        if not utility.has_collection(col_name, timeout=timeout):
             fields = [
                 FieldSchema(name="id",                dtype=DataType.VARCHAR, max_length=64, is_primary=True),
                 FieldSchema(name="content",           dtype=DataType.VARCHAR, max_length=65535),
@@ -310,17 +312,18 @@ class MilvusRetriever(BaseRetriever):
                 FieldSchema(name="vector",            dtype=DataType.FLOAT_VECTOR, dim=cfg.EMBEDDING_DIMENSION),
             ]
             schema = CollectionSchema(fields, description="RAG document store")
-            Collection(name=col_name, schema=schema)
+            Collection(name=col_name, schema=schema, timeout=timeout)
             logger.info("[MilvusRetriever] collection '%s' created (with knowledge_base_id)", col_name)
 
-        self._col = Collection(col_name)
+        self._col = Collection(col_name, timeout=timeout)
         # Ensure index exists
-        if not self._col.indexes:
+        if not self._col.has_index(timeout=timeout):
             self._col.create_index(
                 field_name="vector",
                 index_params={"metric_type": self._METRIC, "index_type": "IVF_FLAT", "params": {"nlist": 128}},
+                timeout=timeout,
             )
-        self._col.load()
+        self._col.load(timeout=timeout)
         logger.info("[MilvusRetriever] collection '%s' loaded", col_name)
 
     def add_documents(self, texts: List[str], metadatas: Optional[List[Dict]] = None) -> int:
@@ -599,20 +602,25 @@ class ChromaRetriever(BaseRetriever):
 # ── Singleton factory ─────────────────────────────────────────────────────────
 
 _retriever: Optional[BaseRetriever] = None
+_retriever_lock = threading.Lock()
 
 
 def get_retriever() -> BaseRetriever:
     """Return the process-level retriever singleton based on config."""
     global _retriever
     if _retriever is None:
-        vtype = cfg.VECTOR_STORE_TYPE
-        logger.info("[retriever] building backend: %s", vtype)
-        if vtype == "memory":
-            _retriever = MemoryRetriever()
-        elif vtype == "milvus":
-            _retriever = MilvusRetriever()
-        elif vtype == "chroma":
-            _retriever = ChromaRetriever()
-        else:
-            raise VectorStoreError(f"Unknown VECTOR_STORE_TYPE: {vtype}")
+        # Ingestion and retrieval can initialize concurrently in worker threads.
+        # Publish only a fully initialized instance; a failed attempt is retryable.
+        with _retriever_lock:
+            if _retriever is None:
+                vtype = cfg.VECTOR_STORE_TYPE
+                logger.info("[retriever] building backend: %s", vtype)
+                if vtype == "memory":
+                    _retriever = MemoryRetriever()
+                elif vtype == "milvus":
+                    _retriever = MilvusRetriever()
+                elif vtype == "chroma":
+                    _retriever = ChromaRetriever()
+                else:
+                    raise VectorStoreError(f"Unknown VECTOR_STORE_TYPE: {vtype}")
     return _retriever

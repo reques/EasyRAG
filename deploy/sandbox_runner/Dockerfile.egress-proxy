@@ -1,0 +1,5 @@
+FROM python:3.11-slim-bookworm
+RUN groupadd --gid 10001 sandbox && useradd --uid 10001 --gid sandbox --no-create-home sandbox
+COPY deploy/sandbox_runner/egress_proxy.py /srv/egress_proxy.py
+USER 10001:10001
+CMD ["python", "-I", "-S", "/srv/egress_proxy.py"]

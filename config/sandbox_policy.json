@@ -1,9 +1,14 @@
 {
   "defaults": {
-    "mode": "audit",
+    "mode": "enforce",
     "deny_capabilities": ["proc.exec"]
   },
   "rules": [
+    {
+      "tool": "run_python",
+      "allow": true,
+      "_comment": "仅在 SANDBOX_EXEC_ENABLED=true 且 mode=enforce 时由独立 runner 执行"
+    },
     {
       "tool": "web_search",
       "allow": true

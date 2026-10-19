@@ -22,6 +22,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import get_settings
+from app.agents.context_usage import build_context_usage_middleware
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -224,7 +225,7 @@ def build_subagent(config: SubAgentConfig, model=None):
     """
     from langchain.agents import create_agent
 
-    from app.agents.deep.llm import get_langchain_model
+    from app.agents.deep.llm import get_langchain_model, build_selected_model_middleware
     from app.agents.deep.tools import registry_to_langchain_tools
 
     tool_names = resolve_tool_spec(config.tools)
@@ -245,6 +246,7 @@ def build_subagent(config: SubAgentConfig, model=None):
         tools=tools,
         # 阶段 4：统一追加结构化尾部约定（外部配置文件也自动生效）
         system_prompt=config.system_prompt + RESULT_TAIL_PROMPT,
+        middleware=[build_selected_model_middleware(), build_context_usage_middleware()],
         name=f"subagent_{config.name}",
     )
     if cacheable:

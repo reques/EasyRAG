@@ -77,6 +77,10 @@ class MCPServerBase(BaseModel):
         default=None,
         description="stdio 子进程的工作目录；留空则继承后端进程的工作目录",
     )
+    sandbox_profile: Optional[str] = Field(
+        default=None,
+        description="使用独立 runner 的固定 MCP 配置：filesystem、postgres、rail12306",
+    )
 
     # 权限与治理
     allowed_tools: List[str] = Field(
@@ -132,6 +136,7 @@ class MCPServerUpdate(BaseModel):
     enabled: Optional[bool] = None
     timeout_s: Optional[int] = Field(default=None, ge=5, le=300)
     env: Optional[Dict[str, str]] = Field(default=None, description="覆盖 stdio 子进程的额外环境变量")
+    sandbox_profile: Optional[str] = None
 
 
 class MCPServerDefinition(MCPServerBase):

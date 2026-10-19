@@ -3,6 +3,7 @@
     <!-- 消息区 -->
     <div class="chat-main">
       <div class="session-toolbar">
+        <span v-if="chatStore.activeConversation?.archived_at" class="archived-session-notice">此会话已归档 <button type="button" @click="chatStore.restoreConversation(chatStore.activeConversationId)">恢复会话</button></span>
         <button ref="statusToggleEl" type="button" class="session-status-toggle" :class="{ active: panelOpen }" :aria-expanded="panelOpen" aria-controls="session-status-panel" @click="toggleStatusPanel">
           <ListChecks :size="16" /> <span>状态</span>
           <span v-if="sending" class="session-running-dot" aria-label="正在运行"></span>
@@ -325,19 +326,36 @@
               </button>
               <div v-if="ctxRingOpen" class="ctx-ring-pop">
                 <div class="ctx-ring-pop-head">
-                  <strong>上下文窗口</strong>
-                  <span>{{ lastCallUsage ? fmtK(contextUsed) + ' / ' + fmtK(contextWindow) : '暂无单次调用数据' }}（{{ contextPct === null ? '—' : contextPct.toFixed(1) + '%' }}）</span>
+                  <strong>最近一次调用 · 输入占用</strong>
+                  <span v-if="lastCallUsage">{{ fmtTokens(contextUsed) }} / {{ contextWindow ? fmtTokens(contextWindow) : '窗口未知' }}<template v-if="contextPct !== null">（{{ contextPct.toFixed(1) }}%）</template></span>
+                  <span v-else>暂无单次调用数据</span>
                 </div>
                 <div v-if="lastCallUsage" class="ctx-ring-bar">
                   <i class="is-input" :style="{ width: contextInputPct + '%' }" :title="'模型输入 ' + fmtK(contextUsed) + ' tokens'"></i>
-                  <i class="is-output" :style="{ width: contextOutputPct + '%' }" :title="'模型输出 ' + fmtK(contextOutput) + ' tokens（生成后计入下轮窗口）'"></i>
+                  <i class="is-output" :style="{ width: contextOutputPct + '%' }" :title="'本次模型输出 ' + fmtK(contextOutput) + ' tokens'"></i>
                 </div>
                 <div v-if="lastCallUsage" class="ctx-ring-legend">
-                  <span><i class="dot is-input"></i>输入 {{ fmtK(contextUsed) }}</span>
-                  <span><i class="dot is-output"></i>输出 {{ fmtK(contextOutput) }}</span>
-                  <span><i class="dot is-free"></i>剩余 {{ fmtK(Math.max(contextWindow - contextUsed - contextOutput, 0)) }}</span>
+                  <span><i class="dot is-input"></i>输入 {{ fmtTokens(contextUsed) }}</span>
+                  <span><i class="dot is-output"></i>输出 {{ fmtTokens(contextOutput) }}</span>
                 </div>
-                <p class="ctx-ring-note">占用来自最近一次模型调用的输入，包含系统提示、工具和历史；累计消耗在右侧状态面板单独显示。</p>
+                <p v-if="lastCallUsage?.api_model" class="ctx-ring-model">实际调用模型：{{ lastCallUsage.api_model }}</p>
+                <div v-if="contextBreakdown" class="ctx-ring-breakdown">
+                  <div><span>系统提示词与 Skill</span><span>约 {{ fmtK(contextBreakdown.system) }}</span></div>
+                  <div><span>工具定义</span><span>约 {{ fmtK(contextBreakdown.tools) }}</span></div>
+                  <div><span>对话与工具结果</span><span>约 {{ fmtK(contextBreakdown.conversation) }}</span></div>
+                  <div><span>知识库与记忆</span><span>约 {{ fmtK(contextBreakdown.knowledge) }}</span></div>
+                  <div v-if="contextUnattributed > 0"><span>其他／未归类</span><span>约 {{ fmtK(contextUnattributed) }}</span></div>
+                  <div v-else-if="contextEstimateOver > 0"><span>估算偏差</span><span>约 {{ fmtK(contextEstimateOver) }}</span></div>
+                </div>
+                <div v-else-if="lastCallUsage" class="ctx-ring-breakdown">
+                  <div><span>系统提示词与 Skill</span><span>—</span></div>
+                  <div><span>工具定义</span><span>—</span></div>
+                  <div><span>对话与工具结果</span><span>—</span></div>
+                  <div><span>知识库与记忆</span><span>—</span></div>
+                </div>
+                <p class="ctx-ring-note" v-if="contextBreakdown">输入和输出取自模型用量；分类使用通用分词器估算。{{ !contextBreakdown.complete_text ? '图片或文件未纳入分类估算。' : '' }}{{ !contextWindow ? '该次调用的模型窗口未获可靠元数据。' : '' }}累计消耗在右侧状态面板显示。</p>
+                <p class="ctx-ring-note" v-else-if="lastCallUsage">这条旧记录没有保存模型窗口与分项数据；发送新消息后将按实际调用展示。累计消耗在右侧状态面板显示。</p>
+                <p class="ctx-ring-note" v-else>发送消息后显示实际用量与分项估算。</p>
               </div>
             </div>
           </div>
@@ -387,7 +405,7 @@
             <button v-if="sending" type="button" class="btn-send btn-stop" @click="stopGeneration" title="停止生成">
               <Square :size="16" />
             </button>
-            <button v-else @click="send" :disabled="!input.trim() || sending || !selectedModelId" class="btn-send" title="发送">
+            <button v-else @click="send" :disabled="!input.trim() || sending || historyLoading || !!chatStore.activeConversation?.archived_at || !selectedModelId" class="btn-send" title="发送">
               <ArrowUp :size="20" />
             </button>
           </div>
@@ -442,7 +460,7 @@
       <section class="session-status-card">
         <div class="session-card-heading"><span>最近一次调用 · 上下文</span><strong>{{ contextPct === null ? '—' : contextPct.toFixed(1) + '%' }}</strong></div>
         <div class="session-context-bar"><i :style="{ width: contextInputPct + '%' }"></i></div>
-        <p v-if="lastCallUsage" class="session-context-caption">输入 {{ fmtK(contextUsed) }} / 窗口上限 {{ contextWindow ? fmtK(contextWindow) : '未知' }} tokens</p>
+        <p v-if="lastCallUsage" class="session-context-caption">输入 {{ fmtTokens(contextUsed) }} / 当次模型窗口 {{ contextWindow ? fmtTokens(contextWindow) : '未知' }} tokens</p>
         <p v-else class="session-empty">暂无单次调用数据</p>
       </section>
       <section class="session-status-card">
@@ -843,6 +861,7 @@ function goToSource(s) {
 
 const input = ref('')
 const sending = ref(false)
+const historyLoading = ref(false)
 const chatStarters = [
   { icon: FileSearch2, title: '检索资料', description: '从知识库定位依据', prompt: '请帮我从知识库中查找并总结最相关的资料。' },
   { icon: ListTree, title: '梳理脉络', description: '把复杂内容变清晰', prompt: '请帮我梳理这个主题的关键概念、关系与结论。' },
@@ -1014,15 +1033,24 @@ const selectedModel = computed(() => (
 
 // ── 上下文占用环形指示器 ──
 // 单次调用的输入占用与整轮累计消耗独立记录；旧记录不推算占用。
-const contextWindow = ref(0)
 const ctxRingOpen = ref(false)
 const ctxRingEl = ref(null)
 const lastCallUsage = computed(() => latestContextUsage(messages.value))
 const contextUsed = computed(() => lastCallUsage.value?.input_tokens || 0)
 const contextOutput = computed(() => lastCallUsage.value?.output_tokens || 0)
+const contextWindow = computed(() => Number(lastCallUsage.value?.context_window) || 0)
+const contextBreakdown = computed(() => {
+  const value = lastCallUsage.value?.breakdown
+  return value && ['system', 'tools', 'conversation', 'knowledge'].every(key => Number.isFinite(value[key])) ? value : null
+})
+const contextEstimatedTotal = computed(() => contextBreakdown.value
+  ? ['system', 'tools', 'conversation', 'knowledge'].reduce((sum, key) => sum + contextBreakdown.value[key], 0)
+  : 0)
+const contextUnattributed = computed(() => contextBreakdown.value ? Math.max(0, contextUsed.value - contextEstimatedTotal.value) : 0)
+const contextEstimateOver = computed(() => contextBreakdown.value ? Math.max(0, contextEstimatedTotal.value - contextUsed.value) : 0)
 const contextPct = computed(() => {
   if (!contextWindow.value || !lastCallUsage.value) return null
-  return Math.min(100, (contextUsed.value / contextWindow.value) * 100)
+  return (contextUsed.value / contextWindow.value) * 100
 })
 const contextTone = computed(() => {
   const pct = contextPct.value
@@ -1033,7 +1061,7 @@ const contextTone = computed(() => {
 })
 const contextRingDash = computed(() => {
   const c = 2 * Math.PI * 8
-  const used = contextPct.value === null ? 0 : (contextPct.value / 100) * c
+  const used = contextPct.value === null ? 0 : Math.min(1, contextPct.value / 100) * c
   return `${used.toFixed(2)} ${(c - used).toFixed(2)}`
 })
 const contextInputPct = computed(() => (
@@ -1043,14 +1071,17 @@ const contextOutputPct = computed(() => (
   contextWindow.value ? Math.min(100 - contextInputPct.value, contextOutput.value / contextWindow.value * 100) : 0
 ))
 const contextRingTitle = computed(() => {
-  if (!contextWindow.value) return '上下文窗口大小未配置（CHAT_CONTEXT_WINDOW）'
-  if (contextPct.value === null) return '暂无最近一次调用的上下文数据'
+  if (!lastCallUsage.value) return '暂无最近一次调用的上下文数据'
+  if (!contextWindow.value) return `最近一次调用输入 ${fmtK(contextUsed.value)} tokens；模型窗口未知`
   return `上下文占用 ${contextPct.value.toFixed(1)}% · ${fmtK(contextUsed.value)}/${fmtK(contextWindow.value)}`
 })
 function fmtK(n) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`
   return String(n)
+}
+function fmtTokens(n) {
+  return Number(n || 0).toLocaleString('en-US')
 }
 const customModels = computed(() => (
   modelOptions.value.filter(model => model.source === 'custom')
@@ -1072,7 +1103,6 @@ async function loadModels(preferredModelId = '') {
   try {
     const data = await api.get('/chat/models')
     modelOptions.value = data.models || []
-    contextWindow.value = data.context_window || 0
     const available = modelOptions.value.filter(model => model.available)
     const requested = available.find(model => model.id === preferredModelId)
     const saved = available.find(model => model.id === selectedModelId.value)
@@ -1649,6 +1679,7 @@ watch(() => [chatStore.activeConversationId, chatStore.newConversationVersion], 
   sending.value = false
   connectionState.value = ''
   conversationId.value = newId
+  historyLoading.value = !!newId
   generatedFiles.value = []
   previewArtifact.value = null
   artifactError.value = ''
@@ -1754,13 +1785,16 @@ watch(() => [chatStore.activeConversationId, chatStore.newConversationVersion], 
         }
       } catch { /* History remains available if execution discovery is unavailable. */ }
       scrollBottom()
-    } catch { /* 忽略 */ }
+    } catch { /* 保留会话选择，允许刷新重试 */ }
+    finally { if (load === conversationLoad) historyLoading.value = false }
   }
   nextTick(() => inputEl.value?.focus())
 }, { immediate: true })
 
 async function send(options = {}) {
   const attachedStream = options?.attach || null
+  if (historyLoading.value && !attachedStream) return
+  if (chatStore.activeConversation?.archived_at) return
   const resumeCheckpoint = options?.resume === true || !!attachedStream
   // 斜杠命令：/compact [保留轮数] 压缩上下文窗口（不产生对话轮次、不走流式）
   const compactCommand = input.value.trim().match(/^\/compact(?:\s+(\d{1,2}))?$/i)
@@ -1778,6 +1812,9 @@ async function send(options = {}) {
     : null
   const text = resumeCheckpoint ? (resumeUser?.content || '').trim() : input.value.trim()
   if (!text || sending.value) return
+  const requestWorkspaceId = conversationId.value ? null : chatStore.activeWorkspaceId
+  const requestOwner = chatStore.owner
+  if (chatStore.draft) chatStore.draft.has_content = true
   const requestSkills = resumeCheckpoint
     ? (resumeUser?.skills || [])
     : selectedSkills.value.map(skill => ({ id: skill.id, name: skill.name }))
@@ -1859,6 +1896,7 @@ async function send(options = {}) {
     } : {
       query: text,
       conversation_id: conversationId.value,
+      ...(conversationId.value ? {} : { workspace_id: requestWorkspaceId }),
       model_id: selectedModelId.value,
       skill_ids: requestSkills.map(skill => skill.id),
       deep_research: deepResearch.value,
@@ -2073,6 +2111,7 @@ async function send(options = {}) {
       signal: controller.signal,
       streamId: attachedStream?.id,
       onStream: ({ streamId, conversationId: id }) => {
+        if (id) chatStore.registerConversation(id, requestWorkspaceId, requestOwner)
         if (currentAbort !== controller) return
         currentStreamId = streamId
         const message = messages.value[msgIndex]

@@ -8,6 +8,8 @@ Supports backends controlled by ``Settings.EMBEDDING_TYPE``:
 """
 from __future__ import annotations
 
+import math
+import re
 import threading
 from typing import List, Optional
 
@@ -79,6 +81,15 @@ class OpenAICompatibleEmbedder(BaseEmbedder):
             raise EmbeddingError(f"OpenAI-compatible embedding failed: {exc}") from exc
 
 
+class _NonFiniteEmbeddingError(EmbeddingError):
+    """A numeric inference failure for which a CPU retry is appropriate."""
+
+
+_NONFINITE_RESPONSE = re.compile(
+    r"unsupported value:\s*(?:nan|[+-]?inf(?:inity)?)\b|non[- ]finite", re.IGNORECASE
+)
+
+
 class OllamaEmbedder(BaseEmbedder):
     """Embedder that calls a local Ollama server's /api/embed endpoint.
 
@@ -113,26 +124,62 @@ class OllamaEmbedder(BaseEmbedder):
 
     def _embed_batch(self, texts: List[str]) -> List[List[float]]:
         try:
-            resp = self._requests.post(
-                f"{self._base_url}/api/embed",
-                json={"model": self._model, "input": texts},
-                timeout=self._timeout,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            vectors = data.get("embeddings")
-            if not vectors or len(vectors) != len(texts):
-                raise EmbeddingError(
-                    f"Ollama returned {len(vectors or [])} vectors for {len(texts)} inputs"
+            try:
+                return self._request_embeddings(texts)
+            except _NonFiniteEmbeddingError:
+                logger.warning(
+                    "[OllamaEmbedder] non-finite inference result: model=%s batch_size=%d; retrying once on CPU",
+                    self._model, len(texts),
                 )
-            return vectors
+                try:
+                    vectors = self._request_embeddings(texts, cpu=True)
+                except Exception as exc:
+                    raise EmbeddingError(
+                        f"Ollama CPU retry failed for model '{self._model}': {exc}"
+                    ) from exc
+                logger.info("[OllamaEmbedder] CPU retry succeeded: model=%s batch_size=%d", self._model, len(texts))
+                return vectors
         except EmbeddingError:
             raise
         except Exception as exc:
             raise EmbeddingError(
-                f"Ollama embedding failed (is `ollama serve` running and model "
-                f"'{self._model}' pulled?): {exc}"
+                f"Ollama embedding failed for model '{self._model}': {exc}"
             ) from exc
+
+    def _request_embeddings(self, texts: List[str], *, cpu: bool = False) -> List[List[float]]:
+        payload = {"model": self._model, "input": texts}
+        if cpu:
+            # These options apply only to this retry. Unload afterwards so the
+            # next default request can load its normal GPU runner again.
+            payload.update(options={"num_gpu": 0}, keep_alive=0)
+        resp = self._requests.post(
+            f"{self._base_url}/api/embed", json=payload, timeout=self._timeout,
+        )
+        if resp.status_code >= 400:
+            try:
+                error = resp.json().get("error", "")
+            except (ValueError, AttributeError):
+                error = ""
+            if isinstance(error, str) and _NONFINITE_RESPONSE.search(error):
+                raise _NonFiniteEmbeddingError("Ollama returned a non-finite inference error")
+        resp.raise_for_status()
+        vectors = resp.json().get("embeddings")
+        if not isinstance(vectors, list) or len(vectors) != len(texts):
+            raise EmbeddingError("Ollama returned an invalid embedding count")
+        dimension = None
+        for vector in vectors:
+            if not isinstance(vector, list) or not vector:
+                raise EmbeddingError("Ollama returned an empty or malformed embedding")
+            if dimension is None:
+                dimension = len(vector)
+            if len(vector) != dimension:
+                raise EmbeddingError("Ollama returned inconsistent embedding dimensions")
+            for value in vector:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise EmbeddingError("Ollama returned a non-numeric embedding value")
+                if not math.isfinite(value):
+                    raise _NonFiniteEmbeddingError("Ollama returned a non-finite embedding value")
+        return vectors
 
 
 # ── Singleton factory ─────────────────────────────────────────────────────────

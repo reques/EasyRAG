@@ -3,6 +3,7 @@
     {
       "name": "filesystem",
       "transport": "stdio",
+      "sandbox_profile": "${MCP_FILESYSTEM_SANDBOX_PROFILE:-}",
       "enabled": true,
       "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "${MCP_FS_ROOT:-./volumes}"],
       "capabilities": ["fs.read"],
@@ -16,6 +17,7 @@
     {
       "name": "postgres-query",
       "transport": "stdio",
+      "sandbox_profile": "${MCP_POSTGRES_SANDBOX_PROFILE:-}",
       "enabled": true,
       "command": [
         "npx", "-y", "@modelcontextprotocol/server-postgres",
@@ -36,6 +38,7 @@
     {
       "server_id": "joooook-12306-mcp",
       "name": "12306-MCP车票查询工具",
+      "sandbox_profile": "${MCP_12306_SANDBOX_PROFILE:-}",
       "description": "基于 Model Context Protocol (MCP) 的 12306 余票查询服务，从 ModelScope MCP 广场安装。",
       "transport": "stdio",
       "enabled": true,

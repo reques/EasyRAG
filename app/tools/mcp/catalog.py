@@ -258,8 +258,8 @@ def plan_to_create_payload(
         "transport": resolved_transport,
         "timeout_s": int(timeout_s),
         "enabled": bool(enabled),
-        # 广场来源默认最小权限：不写 ["*"]，由调用方显式声明
-        "allowed_tools": list(allowed_tools or ["*"]),
+        # None keeps the default; an explicit [] must retain deny-all semantics.
+        "allowed_tools": list(["*"] if allowed_tools is None else allowed_tools),
         "capabilities": list(capabilities or []),
     }
 

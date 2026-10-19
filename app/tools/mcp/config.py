@@ -188,6 +188,7 @@ def load_mcp_server_definitions(path: Optional[str] = None) -> List["MCPServerDe
                 enabled=bool(item.get("enabled", True)),
                 timeout_s=int(item.get("timeout_s", 30)),
                 source=str(item.get("source") or ""),
+                sandbox_profile=item.get("sandbox_profile"),
             )
         )
     return definitions
@@ -229,6 +230,7 @@ def _build_entry(s: "MCPServerDefinition") -> Dict[str, Any]:
         "enabled": s.enabled,
         "timeout_s": s.timeout_s,
         "source": s.source or "",
+        "sandbox_profile": s.sandbox_profile,
     }
 
 
@@ -257,6 +259,9 @@ def save_mcp_server_definitions(servers: List["MCPServerDefinition"], path: Opti
                 entry["stdio_command"], raw_stdio if raw_stdio is not None else raw_cmd
             )
             entry["url"] = _raw_preserving(entry["url"], raw.get("url"))
+            entry["sandbox_profile"] = _raw_preserving(
+                entry["sandbox_profile"], raw.get("sandbox_profile")
+            )
             raw_env = raw.get("env")
             if isinstance(raw_env, dict):
                 entry["env"] = {

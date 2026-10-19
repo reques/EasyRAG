@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, List, Optional
 
 from app.agents.deep.task_tool import build_task_tool, task_system_prompt
+from app.agents.context_usage import build_context_usage_middleware
 from app.agents.deep.tools import registry_to_langchain_tools
 from app.core.config import get_settings
 from app.core.logger import get_logger
@@ -74,7 +75,7 @@ def build_main_agent(
     from langchain.agents import create_agent
 
     from app.agents.checkpointing import get_agent_checkpointer
-    from app.agents.deep.llm import get_langchain_model
+    from app.agents.deep.llm import get_langchain_model, build_selected_model_middleware
     from app.agents.deep.planner import build_revise_plan_tool, build_spawn_tasks_tool
     from app.skills.middleware import build_skills_middleware
 
@@ -106,7 +107,8 @@ def build_main_agent(
         # 2026-09-04 Skill 重构：Skill 区块注入与渐进式工具门控由
         # SkillsMiddleware 接管（含 read_skill 工具），取代此前在
         # agent_service / dynamic / graph.nodes 三处的手工 prompt 拼接。
-        middleware=[build_skills_middleware(platform_tools=coordinators)],
+        middleware=[build_selected_model_middleware(), build_skills_middleware(platform_tools=coordinators),
+                    build_context_usage_middleware()],
         # 显式注入模型用于测试/离线一次性执行，调用方通常没有 thread_id；
         # 生产缓存实例才挂持久 checkpointer。
         checkpointer=get_agent_checkpointer() if cacheable else None,

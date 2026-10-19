@@ -26,13 +26,13 @@ class Decision:
 
 
 class PolicyEngine:
-    """Evaluate the first matching rule, then the capability deny list."""
+    """Evaluate the first matching rule; apply default denies when none allows."""
 
     def __init__(self, policy: Optional[Mapping[str, Any]] = None):
         self.policy: Dict[str, Any] = dict(policy or {})
         defaults = self.policy.get("defaults") or {}
         mode = str(defaults.get("mode", "audit")).lower()
-        self.mode = mode if mode in _VALID_MODES else "audit"
+        self.mode = mode if mode in _VALID_MODES else "enforce"
         self.deny_capabilities = frozenset(str(item) for item in defaults.get("deny_capabilities", ()))
 
     @classmethod
@@ -43,10 +43,10 @@ class PolicyEngine:
                 raise ValueError("policy root must be an object")
             return cls(data)
         except FileNotFoundError:
-            logger.warning("Sandbox policy file %s does not exist; using audit mode", path)
+            logger.warning("Sandbox policy file %s does not exist; denying process execution", path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            logger.error("Sandbox policy file %s is invalid: %s; using audit mode", path, exc)
-        return cls()
+            logger.error("Sandbox policy file %s is invalid: %s; denying process execution", path, exc)
+        return cls({"defaults": {"mode": "enforce", "deny_capabilities": ["proc.exec"]}})
 
     @staticmethod
     def capabilities_for(metadata: Optional[Mapping[str, Any]]) -> Tuple[str, ...]:
@@ -69,6 +69,7 @@ class PolicyEngine:
 
         would_allow = True
         reason = "allowed by default"
+        explicitly_allowed = False
         for rule in self.policy.get("rules") or ():
             if not isinstance(rule, Mapping) or not self._matches(rule, tool_name, context):
                 continue
@@ -82,9 +83,10 @@ class PolicyEngine:
                 break
             if rule.get("allow") is True:
                 would_allow, reason = True, "allowed by matching rule"
+                explicitly_allowed = True
                 break
 
-        if would_allow:
+        if would_allow and not explicitly_allowed:
             blocked = sorted(self.deny_capabilities.intersection(capabilities))
             if blocked:
                 would_allow, reason = False, f"default policy denies capability: {', '.join(blocked)}"

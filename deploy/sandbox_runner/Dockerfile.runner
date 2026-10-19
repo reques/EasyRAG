@@ -1,0 +1,8 @@
+FROM python:3.11-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends docker.io \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /srv
+RUN pip install --no-cache-dir 'fastapi>=0.115,<1' 'mcp==2.0.0' 'uvicorn>=0.30,<1'
+COPY deploy/sandbox_runner/server.py /srv/server.py
+EXPOSE 8090
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8090"]

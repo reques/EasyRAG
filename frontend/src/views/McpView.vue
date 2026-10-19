@@ -3,21 +3,26 @@
     <header class="mcp-header">
       <div>
         <span class="mcp-eyebrow">MCP SERVICE CONSOLE</span>
-        <h1>MCP 服务管理</h1>
-        <p>挂载远程 SSE / Streamable HTTP 服务或本地受信任 Stdio 能力，工具会以 <code>{服务}__{工具}</code> 命名空间注入 Agent，并受白名单与沙箱策略约束。</p>
+        <h1>{{ canManage ? 'MCP 服务管理' : 'MCP 工具服务' }}</h1>
+        <p v-if="canManage">挂载远程 SSE / Streamable HTTP 服务或本地受信任 Stdio 能力，工具会以 <code>{服务}__{工具}</code> 命名空间注入 Agent，并受白名单与沙箱策略约束。</p>
+        <p v-else>查看共享 MCP 服务的连接状态与已放行工具，在对话中使用这些能力。</p>
       </div>
       <div class="mcp-header-actions">
         <button class="mcp-button" :disabled="loading" @click="fetchServers">
           <RefreshCw :size="15" :class="{ spin: loading }" /> 刷新
         </button>
-        <button class="mcp-button" @click="catalogOpen = true">
+        <button v-if="canManage" class="mcp-button" @click="catalogOpen = true">
           <Store :size="15" /> MCP 广场
         </button>
-        <button class="mcp-button is-primary" @click="openCreate">
+        <button v-if="canManage" class="mcp-button is-primary" @click="openCreate">
           <Plus :size="15" /> 添加服务
         </button>
       </div>
     </header>
+
+    <p v-if="accessLoaded && !canManage" class="mcp-banner mcp-readonly-notice" role="status">
+      <ShieldCheck :size="15" /><span>当前为只读视图。全局服务的添加、编辑、启停与安装由管理员管理；已放行工具仍可在对话中使用。</span>
+    </p>
 
     <section class="mcp-overview" aria-label="MCP 概览">
       <article>
@@ -40,7 +45,7 @@
 
     <p v-if="metrics.error" class="mcp-banner is-warn">
       <CircleAlert :size="15" />
-      <span>{{ metrics.error }} 个服务连接异常，展开卡片可查看具体原因；修复后点击卡片上的「连接」重试。</span>
+      <span>{{ canManage ? `${metrics.error} 个服务连接异常，展开卡片可查看具体原因；修复后点击卡片上的「连接」重试。` : `${metrics.error} 个服务连接异常，请联系管理员检查配置。` }}</span>
     </p>
 
     <section class="mcp-section">
@@ -50,7 +55,8 @@
           <p v-if="!loading && servers.length">
             共 {{ metrics.total }} 个服务，其中 {{ metrics.whitelisted }} 个启用了工具白名单。
           </p>
-          <p v-else>持久化在 config/mcp_servers.json，改动即时热挂载并从下一次工具调用生效。</p>
+          <p v-else-if="canManage">持久化在 config/mcp_servers.json，改动即时热挂载并从下一次工具调用生效。</p>
+          <p v-else>共享服务由管理员统一配置，此处展示安全的服务概览。</p>
         </div>
         <div v-if="servers.length" class="mcp-toolbar-actions">
           <div class="mcp-filter" role="group" aria-label="按状态筛选">
@@ -81,7 +87,7 @@
 
       <div v-else-if="error" class="mcp-state is-error">
         <CircleAlert :size="22" />
-        <strong>配置加载失败</strong>
+        <strong>服务列表加载失败</strong>
         <span>{{ error }}</span>
         <button class="mcp-button" @click="fetchServers">重新加载</button>
       </div>
@@ -89,8 +95,8 @@
       <div v-else-if="!servers.length" class="mcp-state">
         <Blocks :size="24" />
         <strong>还没有配置任何 MCP 服务</strong>
-        <span>从 MCP 广场一键安装现成服务（地图、数据库、网页抓取…），或手动接入自己的 SSE / Stdio 服务。</span>
-        <div class="mcp-state-actions">
+        <span>{{ canManage ? '从 MCP 广场一键安装现成服务（地图、数据库、网页抓取…），或手动接入自己的 SSE / Stdio 服务。' : '请联系管理员配置共享 MCP 服务，配置完成后可在对话中使用。' }}</span>
+        <div v-if="canManage" class="mcp-state-actions">
           <button class="mcp-button is-primary" @click="catalogOpen = true"><Store :size="14" /> 浏览 MCP 广场</button>
           <button class="mcp-button" @click="openCreate"><Plus :size="14" /> 手动添加</button>
         </div>
@@ -120,18 +126,18 @@
           </header>
 
           <div class="mcp-card-body">
-            <p class="mcp-card-desc">{{ srv.description || '未填写用途描述。' }}</p>
+            <p class="mcp-card-desc">{{ srv.description || (canManage ? '未填写用途描述。' : '由管理员配置的共享工具服务。') }}</p>
 
             <p v-if="serverError(srv)" class="mcp-banner is-error">
               <CircleAlert :size="14" /> <span>{{ serverError(srv) }}</span>
             </p>
 
             <dl class="mcp-card-meta">
-              <div v-if="srv.transport === 'stdio'">
+              <div v-if="canManage && srv.transport === 'stdio'">
                 <dt>启动命令</dt>
                 <dd class="mono">{{ formatCommand(srv.stdio_command) || '—' }}</dd>
               </div>
-              <div v-else>
+              <div v-else-if="canManage">
                 <dt>端点</dt>
                 <dd class="mono">{{ srv.url || '—' }}</dd>
               </div>
@@ -215,7 +221,7 @@
             </div>
           </div>
 
-          <footer class="mcp-card-footer">
+          <footer v-if="canManage" class="mcp-card-footer">
             <button
               v-if="!srv.running"
               type="button"
@@ -257,7 +263,7 @@
   </div>
 
   <McpServerDialog
-    v-if="dialog.open"
+    v-if="canManage && dialog.open"
     :server="dialog.server"
     :submitting="dialog.submitting"
     :error="dialog.error"
@@ -265,10 +271,10 @@
     @submit="submitDialog"
   />
 
-  <McpCatalogDialog v-if="catalogOpen" @close="catalogOpen = false" @installed="onInstalled" />
+  <McpCatalogDialog v-if="canManage && catalogOpen" @close="catalogOpen = false" @installed="onInstalled" />
 
   <Teleport to="body">
-    <div v-if="deleteTarget" class="mcp-dialog-overlay" @click.self="deleteTarget = null">
+    <div v-if="canManage && deleteTarget" class="mcp-dialog-overlay" @click.self="deleteTarget = null">
       <div class="mcp-confirm" role="dialog" aria-modal="true" aria-label="删除 MCP 服务">
         <h3>删除 MCP 服务</h3>
         <p>
@@ -323,6 +329,7 @@ import {
   X,
 } from 'lucide-vue-next'
 import api from '../api'
+import { loadMcpConsole } from '../api/mcp-console.js'
 import McpCatalogDialog from '../components/McpCatalogDialog.vue'
 import McpServerDialog from '../components/McpServerDialog.vue'
 import {
@@ -346,6 +353,8 @@ import {
 const servers = ref([])
 const loading = ref(false)
 const error = ref('')
+const canManage = ref(false)
+const accessLoaded = ref(false)
 const query = ref('')
 const filter = ref('all')
 const expanded = reactive({})
@@ -382,10 +391,21 @@ function notify(text, tone = 'success') {
 async function fetchServers() {
   loading.value = true
   error.value = ''
+  canManage.value = false
+  accessLoaded.value = false
+  dialog.open = false
+  dialog.server = null
+  catalogOpen.value = false
+  deleteTarget.value = null
   try {
-    const res = await api.get('/mcp/servers')
+    const res = await loadMcpConsole(api)
+    canManage.value = res.canManage
+    accessLoaded.value = true
     servers.value = mergeServers(res?.servers || [], res?.definitions || [])
+    toolCatalog.value = {}
   } catch (err) {
+    servers.value = []
+    toolCatalog.value = {}
     error.value = errorDetail(err)
   } finally {
     loading.value = false
@@ -393,6 +413,7 @@ async function fetchServers() {
 }
 
 async function runAction(server, action) {
+  if (!canManage.value) return
   if (busy[server.server_id]) return
   busy[server.server_id] = true
   try {
@@ -413,6 +434,7 @@ async function toggleTools(server) {
     return
   }
   expanded[server.server_id] = true
+  if (!canManage.value) return
   if (!server.running || toolLoading[server.server_id]) return
   const unknown = server.tools.some(tool => !toolCatalog.value[toolNamespacedName(server.server_id, tool)])
   if (!unknown) return
@@ -437,12 +459,14 @@ function resetFilters() {
 }
 
 function openCreate() {
+  if (!canManage.value) return
   dialog.open = true
   dialog.server = null
   dialog.error = ''
 }
 
 function openEdit(server) {
+  if (!canManage.value) return
   dialog.open = true
   dialog.server = server
   dialog.error = ''
@@ -454,6 +478,7 @@ function closeDialog() {
 }
 
 async function submitDialog(payload) {
+  if (!canManage.value) return
   dialog.submitting = true
   dialog.error = ''
   const editing = Boolean(dialog.server)
@@ -471,6 +496,7 @@ async function submitDialog(payload) {
 }
 
 async function confirmDelete() {
+  if (!canManage.value) return
   if (!deleteTarget.value || deleting.value) return
   const target = deleteTarget.value
   deleting.value = true
@@ -508,6 +534,7 @@ onBeforeUnmount(() => { notices.value = [] })
 </script>
 
 <style scoped>
+.mcp-readonly-notice { margin-bottom: 20px; color: var(--gray-700); background: var(--gray-50); border: 1px solid var(--gray-150); }
 .mcp-page {
   height: 100%;
   overflow: auto;

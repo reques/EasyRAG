@@ -27,7 +27,6 @@ from app.skills.loader import SkillDefinition
 from app.skills.registry import list_builtin_skills, merge_available_skills
 from app.skills.runtime import SkillRuntimeContext, resolve_dependency_closure
 from backend.services.chat_service import (
-    create_conversation,
     add_message,
     count_conversation_messages,
     count_folded_messages,
@@ -36,6 +35,7 @@ from backend.services.chat_service import (
     list_user_conversations,
     get_conversation,
     generate_conversation_title,
+    save_auto_title,
     schedule_memory_evaluation,
 )
 from backend.storage.postgres.manager import get_session
@@ -82,6 +82,7 @@ class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096)
     request_id: Optional[uuid.UUID] = None
     conversation_id: Optional[str] = None  # None = 创建新会话
+    workspace_id: Optional[uuid.UUID] = None
     model_id: Optional[str] = Field(default=None, max_length=64)
     # 2026-09-04 Skill 重构：语义从"注入这些 Skill 的指令"改为"本次请求可用的
     # Skill 范围"。上限由 SKILLS_MAX_SELECTED 控制（默认 10；渐进式披露下首轮
@@ -156,6 +157,10 @@ class ResumeCheckpointRequest(BaseModel):
 
 class ConversationSummary(BaseModel):
     id: str
+    session_id: str
+    workspace_id: Optional[str] = None
+    has_messages: bool = True
+    archived_at: Optional[str] = None
     title: Optional[str]
     created_at: str
     updated_at: str
@@ -171,13 +176,15 @@ class ChatModelInfo(BaseModel):
     provider_type: str = "cloud"
     can_delete: bool = False
     supports_vision: bool = False
+    api_model: str = ""
+    context_window: Optional[int] = None
+    max_output_tokens: Optional[int] = None
+    context_source: str = "unknown"
 
 
 class ChatModelListResponse(BaseModel):
     default_model_id: str
     models: list[ChatModelInfo]
-    # 上下文占用指示器的分母（Settings.CHAT_CONTEXT_WINDOW），全局单值。
-    context_window: int = 0
 
 
 class CustomModelCreate(BaseModel):
@@ -598,9 +605,10 @@ async def list_chat_models(
                 requires_api_key=True,
                 supports_vision=bool(record.supports_vision),
             ))
+    from app.llm.context_window import provider_context_windows
+    profiles = await provider_context_windows(profiles)
     return ChatModelListResponse(
         default_model_id=cfg.LLM_DEFAULT_MODEL_ID,
-        context_window=cfg.CHAT_CONTEXT_WINDOW,
         models=[
             ChatModelInfo(
                 **profile.to_public_dict(
@@ -656,7 +664,8 @@ async def create_custom_chat_model(
             await session.rollback()
             raise HTTPException(status_code=409, detail="已存在同名自定义模型") from exc
 
-    profile = profile_from_custom_model(record)
+    from app.llm.context_window import provider_context_window
+    profile = await provider_context_window(profile_from_custom_model(record))
     return ChatModelInfo(
         **profile.to_public_dict(default_model_id=cfg.LLM_DEFAULT_MODEL_ID)
     )
@@ -823,7 +832,7 @@ async def send_message_stream(
                     detail="Conversation not found",
                 )
             conv_id = conv.id
-            is_new = False
+            is_new = not conv.messages and conv.title in ("New Conversation", "新对话")
             await session.execute(select(Conversation.id).where(Conversation.id == conv_id).with_for_update())
             # A concurrent retry may have waited for the first reservation's
             # conversation lock after its initial request-ID lookup missed it.
@@ -835,8 +844,12 @@ async def send_message_stream(
                     raise HTTPException(409, "request_id was already used for a different request")
                 return _stream_response(existing)
             await _require_idle_conversation(session, conv_id)
+            await session.refresh(conv, attribute_names=["archived_at"])
+            if conv.archived_at is not None:
+                raise HTTPException(409, "请先恢复已归档会话，再发送新消息。")
         else:
-            conv = await create_conversation(session, current_user.id)
+            from backend.services.workspace_service import create_session
+            conv = await create_session(session, current_user.id, "新对话", req.workspace_id)
             conv_id = conv.id
             is_new = True
 
@@ -882,6 +895,11 @@ async def send_message_stream(
             if existing is not None and existing.user_id == current_user.id and existing.fingerprint == request_fingerprint:
                 return _stream_response(existing)
             raise HTTPException(409, "Conversation already has an active execution")
+
+    # Snapshot the limit for this run. A missing provider field stays unknown;
+    # it must never inherit the global display-only CHAT_CONTEXT_WINDOW value.
+    from app.llm.context_window import provider_context_window
+    selected_model = await provider_context_window(selected_model)
 
     async def _event_gen_inner(execution):
         from app.services.agent_service import get_agent_service
@@ -1157,10 +1175,8 @@ async def send_message_stream(
                     try:
                         title = await generate_conversation_title(req.query, answer)
                         async with get_session() as session:
-                            c = await get_conversation(session, conv_id)
-                            if c:
-                                c.title = title
-                                await session.commit()
+                            await save_auto_title(session, conv_id, title)
+                            await session.commit()
                     except Exception as exc:
                         logger.warning("[chat/stream] deep title gen failed: %s", exc)
 
@@ -1323,10 +1339,8 @@ async def send_message_stream(
                 try:
                     title = await generate_conversation_title(req.query, answer)
                     async with get_session() as session:
-                        c = await get_conversation(session, conv_id)
-                        if c:
-                            c.title = title
-                            await session.commit()
+                        await save_auto_title(session, conv_id, title)
+                        await session.commit()
                 except Exception as exc:
                     logger.warning("[chat/stream] dynamic title gen failed: %s", exc)
 
@@ -1465,13 +1479,22 @@ async def list_conversation_runs(
 @router.get("/conversations", response_model=list[ConversationSummary])
 async def list_conversations(
     current_user: User = Depends(get_current_user),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    archived: bool = False,
 ):
     """列出当前用户的所有会话。"""
     async with get_session() as session:
-        convs = await list_user_conversations(session, current_user.id)
+        from backend.services.workspace_service import conversations_with_messages
+        convs = await list_user_conversations(session, current_user.id, limit=limit, offset=offset, archived=archived)
+        populated = await conversations_with_messages(session, [c.id for c in convs])
         return [
             ConversationSummary(
                 id=str(c.id),
+                session_id=str(c.id),
+                workspace_id=str(c.workspace_id) if c.workspace_id else None,
+                has_messages=c.id in populated,
+                archived_at=c.archived_at.isoformat() if c.archived_at else None,
                 title=c.title,
                 created_at=c.created_at.isoformat() if c.created_at else "",
                 updated_at=c.updated_at.isoformat() if c.updated_at else "",

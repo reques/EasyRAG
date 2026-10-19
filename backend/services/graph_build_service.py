@@ -191,16 +191,18 @@ async def _load_kb_chunks(kb_id: uuid.UUID) -> List[Tuple[str, Dict[str, str]]]:
 
     返回 [(content, {chunk_id, source, knowledge_base_id}), ...]。
     """
+    return await asyncio.to_thread(_load_kb_chunks_sync, kb_id)
+
+
+def _load_kb_chunks_sync(kb_id: uuid.UUID) -> List[Tuple[str, Dict[str, str]]]:
     from pymilvus import Collection, connections, utility
 
-    connections.connect(host=cfg.MILVUS_HOST, port=cfg.MILVUS_PORT)
-    if not utility.has_collection(cfg.MILVUS_COLLECTION):
+    timeout = cfg.MILVUS_INIT_TIMEOUT
+    connections.connect(host=cfg.MILVUS_HOST, port=cfg.MILVUS_PORT, timeout=timeout)
+    if not utility.has_collection(cfg.MILVUS_COLLECTION, timeout=timeout):
         return []
-    col = Collection(cfg.MILVUS_COLLECTION)
-    try:
-        col.load()
-    except Exception:
-        pass
+    col = Collection(cfg.MILVUS_COLLECTION, timeout=timeout)
+    col.load(timeout=timeout)
     expr = f'knowledge_base_id == "{kb_id}"'
     chunks: List[Tuple[str, Dict[str, str]]] = []
     offset = 0
@@ -211,6 +213,7 @@ async def _load_kb_chunks(kb_id: uuid.UUID) -> List[Tuple[str, Dict[str, str]]]:
             output_fields=["id", "content", "source"],
             limit=batch,
             offset=offset,
+            timeout=timeout,
         )
         if not res:
             break

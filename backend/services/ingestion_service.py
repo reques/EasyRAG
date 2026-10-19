@@ -152,7 +152,9 @@ async def run_ingestion(
             m["knowledge_base_id"] = str(kb_id)
             m["file_id"] = str(file_id)
 
-        retriever = get_retriever()
+        # Initializing Milvus performs synchronous RPCs and waits for loading.
+        # The embedded worker shares the API loop, so offload construction too.
+        retriever = await asyncio.to_thread(get_retriever)
         n = 0
         batch_size = 64
         total_chunks = len(texts)

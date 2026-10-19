@@ -1,0 +1,6 @@
+FROM node:24-bookworm-slim
+RUN groupadd --gid 10001 sandbox && useradd --uid 10001 --gid sandbox --no-create-home sandbox \
+    && npm install --global --ignore-scripts 12306-mcp@0.3.10
+USER 10001:10001
+WORKDIR /tmp
+CMD ["12306-mcp"]
