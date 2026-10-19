@@ -35,6 +35,7 @@ frontend/dist/
 
 # Temp
 tmp/
+/eval/
 .pytest_cache/
 .ruff_cache/
 *.log
