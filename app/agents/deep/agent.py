@@ -80,7 +80,10 @@ def build_main_agent(
     from app.skills.middleware import build_skills_middleware
 
     global _main_agent_cache
-    cacheable = model is None  # 修复（2026-08-26 阶段 3）：model 随后会被重赋值，
+    from app.agents.configuration import get_agent_configuration
+    configuration = get_agent_configuration()
+    persistent = model is None
+    cacheable = persistent and configuration is None
     # 旧版 `if model is None:` 存入分支恒不成立——主 Agent 缓存从不生效
     if cacheable and _main_agent_cache is not None:
         return _main_agent_cache
@@ -88,7 +91,7 @@ def build_main_agent(
         model = get_langchain_model()
     if recursion_limit is None:
         recursion_limit = get_settings().DEEP_SUBAGENT_RECURSION_LIMIT
-    tools = registry_to_langchain_tools()  # 全量（Skill 门控在调用时生效）
+    tools = registry_to_langchain_tools(list(configuration.tool_names) if configuration and configuration.tool_names is not None else None)
     coordinators = [
         build_task_tool(model=subagent_model or model, recursion_limit=recursion_limit),
         build_spawn_tasks_tool(model=subagent_model or model),
@@ -96,6 +99,8 @@ def build_main_agent(
     ]
     tools.extend(coordinators)
     prompt = MAIN_SYSTEM_PROMPT.format(subagents_section=task_system_prompt())
+    if configuration and configuration.system_prompt:
+        prompt += "\n\n## 当前智能体角色指令\n" + configuration.system_prompt
     logger.info(
         "[deepagents] main agent built: %d tools (incl. task, spawn_tasks, revise_plan)",
         len(tools),
@@ -111,7 +116,7 @@ def build_main_agent(
                     build_context_usage_middleware()],
         # 显式注入模型用于测试/离线一次性执行，调用方通常没有 thread_id；
         # 生产缓存实例才挂持久 checkpointer。
-        checkpointer=get_agent_checkpointer() if cacheable else None,
+        checkpointer=get_agent_checkpointer() if persistent else None,
         name="easyrag_deep_agent",
     )
     if cacheable:

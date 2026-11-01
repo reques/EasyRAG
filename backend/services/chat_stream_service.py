@@ -34,6 +34,8 @@ def fingerprint(payload: dict) -> str:
     data = {key: value for key, value in payload.items() if key != "request_id"}
     if data.get("workspace_id") is None:
         data.pop("workspace_id", None)  # Preserve fingerprints of requests admitted before workspaces.
+    if data.get("agent_id") is None:
+        data.pop("agent_id", None)
     return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -181,12 +183,15 @@ async def _produce_traced(execution, factory: Callable[[], AsyncIterator[str]]):
     async with get_session() as session:
         run = await owned_run(session, execution.id, execution.user_id)
         previous = await session.get(ChatStream, run.resumed_from_stream_id) if run.resumed_from_stream_id else None
+        from backend.storage.postgres.models_conversation import Message
+        question = await session.get(Message, run.source_message_id)
         context = ExecutionContext(
             execution_id=str(run.id), trace_id=run.observability_trace_id or uuid.uuid4().hex,
             local_trace_id=run.local_trace_id or "", user_id=str(run.user_id),
             session_id=str(run.conversation_id), sampled=bool(run.observability_sampled),
             metadata={"resumedFromTraceId": previous.observability_trace_id if previous else None,
                       "resumedFromStreamId": str(previous.id) if previous else None},
+            question=question.content if question is not None else "",
         )
     with execution_scope(context) as root, use_request_trace(
         execution.conversation_id, trace_id=context.local_trace_id
@@ -263,6 +268,8 @@ async def commit_result(execution, answer, metadata, payload):
     try:
         with observation_scope("result.commit"):
             await _commit_result_inner(execution, answer, metadata, payload)
+        if parent:
+            parent.update(output=answer)
     except Exception:
         if parent:
             parent.update(metadata={"failureStage": "result.commit"})
@@ -275,13 +282,14 @@ async def _commit_result_inner(execution, answer, metadata, payload):
     if execution.cancel_event.is_set():
         raise AgentRunCancelled()
     async with get_session() as session:
-        await add_message(
+        message = await add_message(
             session, uuid.UUID(execution.conversation_id), "assistant", answer,
             metadata_json=json.dumps({**metadata, "stream_id": str(execution.id)}, ensure_ascii=False),
         )
         run = await writable_run(session, execution.id, execution.owner_token)
         if execution.cancel_event.is_set():
             raise AgentRunCancelled()
+        payload = {**payload, "message_id": message.id}
         append_in_session(session, run, payload, "completed")
         await session.commit()
 

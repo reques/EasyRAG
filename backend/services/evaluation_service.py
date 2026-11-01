@@ -165,136 +165,152 @@ def run_evaluation(
     score_sum = 0.0
     scored = 0
 
-    for case in cases:
-        try:
-            docs = retriever.retrieve(
-                case.question,
-                top_k=k,
-                knowledge_base_ids=[scoped_kb_id],
-                score_threshold=(
-                    None
-                    if score_threshold is None
-                    else -1.0 if score_threshold == 0 else score_threshold
-                ),
-            )
-        except Exception as exc:
-            logger.warning(
-                "[eval] retrieve failed for %r: %s",
-                case.question[:50],
-                exc,
-            )
-            docs = []
-
-        top_score = (
-            (docs[0].get("metadata") or {}).get("score", 0.0)
-            if docs
-            else 0.0
-        )
-        retrieved_chunk_ids: List[str] = []
-        retrieved_file_ids: List[str] = []
-        for d in docs:
-            metadata = d.get("metadata") or {}
-            source = str(metadata.get("source") or "")
-            returned_file_id = str(metadata.get("file_id") or "")
-            returned_chunk_id = get_document_chunk_id(
-                scoped_kb_id,
-                str(d.get("content") or ""),
-                metadata,
-            )
-            # Legacy Milvus collections do not persist file_id. The filename
-            # was ownership-checked before evaluation, so an exact source match
-            # can safely recover the expected public file ID for local metrics.
-            if (
-                not returned_file_id
-                and case.expected_source
-                and source == case.expected_source
-            ):
-                returned_file_id = case.expected_file_id
-            retrieved_file_ids.append(returned_file_id or f"source:{source}")
-            retrieved_chunk_ids.append(returned_chunk_id)
-
-        if case.expect_miss:
-            chunk_relevant: List[str] = []
-            reference_mode = "negative"
-            expected_chunk_count = 0
-            false_positive = 1 if case.expected_file_id in retrieved_file_ids else 0
-        elif case.expected_chunk_ids:
-            chunk_relevant = list(case.expected_chunk_ids)
-            reference_mode = "chunk_ids"
-            expected_chunk_count = len(chunk_relevant)
-            false_positive = 0
-        elif case.expected_chunk_id:
-            chunk_relevant = [case.expected_chunk_id]
-            reference_mode = "chunk"
-            expected_chunk_count = 1
-            false_positive = 0
-        else:
-            chunk_relevant = file_chunk_ids.get(case.expected_file_id)
-            if chunk_relevant is None:
-                chunk_relevant = _file_chunk_ids(
-                    retriever, scoped_kb_id,
-                    case.expected_file_id, case.expected_source,
-                )
-                file_chunk_ids[case.expected_file_id] = chunk_relevant
-            reference_mode = "file"
-            expected_chunk_count = len(chunk_relevant)
-            false_positive = 0
-
-        chunk_metrics = calculate_ranking_metrics(
-            retrieved_chunk_ids,
-            chunk_relevant,
-            k,
-        )
-        file_metrics = calculate_ranking_metrics(
-            retrieved_file_ids,
-            [case.expected_file_id],
-            k,
-        )
-        chunk_metric_rows.append(chunk_metrics)
-        file_metric_rows.append(file_metrics)
-        generated_answer = ""
-        generation_error = ""
-        if generate_answers:
+    from app.observability.experiments import current_experiment, evaluation_case_scope
+    experiment = current_experiment()
+    for case_index, case in enumerate(cases):
+        with evaluation_case_scope(experiment, case_index, case) as case_link:
+            retrieval_error = ""
             try:
-                generated_answer = generate_evaluation_answer(case.question, docs)
+                docs = retriever.retrieve(
+                    case.question,
+                    top_k=k,
+                    knowledge_base_ids=[scoped_kb_id],
+                    score_threshold=(
+                        None
+                        if score_threshold is None
+                        else -1.0 if score_threshold == 0 else score_threshold
+                    ),
+                )
             except Exception as exc:
-                generation_error = str(exc)[:500]
-                logger.warning("[eval] answer generation failed for %r: %s", case.question[:50], exc)
-        ragas_samples.append(RagasEvaluationSample(
-            question=case.question,
-            retrieved_context_ids=retrieved_chunk_ids,
-            reference_context_ids=chunk_relevant,
-            retrieved_contexts=[
-                str(doc.get("content") or "")
-                for doc in docs
-            ],
-            reference_answer=case.reference_answer,
-            response=generated_answer,
-        ))
-        if docs:
-            score_sum += float(top_score)
-            scored += 1
+                logger.warning(
+                    "[eval] retrieve failed for %r: %s",
+                    case.question[:50],
+                    exc,
+                )
+                docs = []
+                retrieval_error = type(exc).__name__
 
-        details.append({
-            "question": case.question,
-            "expected_file_id": case.expected_file_id,
-            "expected_chunk_id": case.expected_chunk_id,
-            "expected_chunk_count": expected_chunk_count,
-            "reference_mode": reference_mode,
-            "expect_miss": case.expect_miss,
-            "false_positive": false_positive,
-            "reference_answer": case.reference_answer,
-            "generated_answer": generated_answer,
-            **({"generation_error": generation_error} if generation_error else {}),
-            "file_hit_rank": file_metrics.first_relevant_rank,
-            "chunk_hit_rank": chunk_metrics.first_relevant_rank,
-            # Backward-compatible alias; the strict chunk match is canonical.
-            "hit_rank": chunk_metrics.first_relevant_rank,
-            "top_score": round(float(top_score), 4),
-            "returned": len(docs),
-            "chunk_metrics": chunk_metrics.to_dict(),
-            "file_metrics": file_metrics.to_dict(),
-        })
+            top_score = (
+                (docs[0].get("metadata") or {}).get("score", 0.0)
+                if docs
+                else 0.0
+            )
+            retrieved_chunk_ids: List[str] = []
+            retrieved_file_ids: List[str] = []
+            for d in docs:
+                metadata = d.get("metadata") or {}
+                source = str(metadata.get("source") or "")
+                returned_file_id = str(metadata.get("file_id") or "")
+                returned_chunk_id = get_document_chunk_id(
+                    scoped_kb_id,
+                    str(d.get("content") or ""),
+                    metadata,
+                )
+                # Legacy Milvus collections do not persist file_id. The filename
+                # was ownership-checked before evaluation, so an exact source match
+                # can safely recover the expected public file ID for local metrics.
+                if (
+                    not returned_file_id
+                    and case.expected_source
+                    and source == case.expected_source
+                ):
+                    returned_file_id = case.expected_file_id
+                retrieved_file_ids.append(returned_file_id or f"source:{source}")
+                retrieved_chunk_ids.append(returned_chunk_id)
+
+            if case.expect_miss:
+                chunk_relevant: List[str] = []
+                reference_mode = "negative"
+                expected_chunk_count = 0
+                false_positive = 1 if case.expected_file_id in retrieved_file_ids else 0
+            elif case.expected_chunk_ids:
+                chunk_relevant = list(case.expected_chunk_ids)
+                reference_mode = "chunk_ids"
+                expected_chunk_count = len(chunk_relevant)
+                false_positive = 0
+            elif case.expected_chunk_id:
+                chunk_relevant = [case.expected_chunk_id]
+                reference_mode = "chunk"
+                expected_chunk_count = 1
+                false_positive = 0
+            else:
+                chunk_relevant = file_chunk_ids.get(case.expected_file_id)
+                if chunk_relevant is None:
+                    chunk_relevant = _file_chunk_ids(
+                        retriever, scoped_kb_id,
+                        case.expected_file_id, case.expected_source,
+                    )
+                    file_chunk_ids[case.expected_file_id] = chunk_relevant
+                reference_mode = "file"
+                expected_chunk_count = len(chunk_relevant)
+                false_positive = 0
+
+            chunk_metrics = calculate_ranking_metrics(
+                retrieved_chunk_ids,
+                chunk_relevant,
+                k,
+            )
+            file_metrics = calculate_ranking_metrics(
+                retrieved_file_ids,
+                [case.expected_file_id],
+                k,
+            )
+            chunk_metric_rows.append(chunk_metrics)
+            file_metric_rows.append(file_metrics)
+            generated_answer = ""
+            generation_error = ""
+            if generate_answers:
+                try:
+                    generated_answer = generate_evaluation_answer(case.question, docs)
+                except Exception as exc:
+                    generation_error = str(exc)[:500]
+                    logger.warning("[eval] answer generation failed for %r: %s", case.question[:50], exc)
+            ragas_samples.append(RagasEvaluationSample(
+                question=case.question,
+                retrieved_context_ids=retrieved_chunk_ids,
+                reference_context_ids=chunk_relevant,
+                retrieved_contexts=[
+                    str(doc.get("content") or "")
+                    for doc in docs
+                ],
+                reference_answer=case.reference_answer,
+                response=generated_answer,
+            ))
+            if docs:
+                score_sum += float(top_score)
+                scored += 1
+
+            details.append({
+                "question": case.question,
+                "expected_file_id": case.expected_file_id,
+                "expected_chunk_id": case.expected_chunk_id,
+                "expected_chunk_count": expected_chunk_count,
+                "reference_mode": reference_mode,
+                "expect_miss": case.expect_miss,
+                "false_positive": false_positive,
+                "reference_answer": case.reference_answer,
+                "generated_answer": generated_answer,
+                **({"retrieval_error": retrieval_error} if retrieval_error else {}),
+                **({"observability": case_link} if case_link else {}),
+                **({"generation_error": generation_error} if generation_error else {}),
+                "file_hit_rank": file_metrics.first_relevant_rank,
+                "chunk_hit_rank": chunk_metrics.first_relevant_rank,
+                # Backward-compatible alias; the strict chunk match is canonical.
+                "hit_rank": chunk_metrics.first_relevant_rank,
+                "top_score": round(float(top_score), 4),
+                "returned": len(docs),
+                "chunk_metrics": chunk_metrics.to_dict(),
+                "file_metrics": file_metrics.to_dict(),
+            })
+
+            if case_link:
+                from app.observability.context import current_observation
+                from app.observability.redaction import selected_content
+                from app.observability.retrieval import documents_for_observation
+                root = current_observation()
+                root.update(output=generated_answer if generate_answers else selected_content(contexts=documents_for_observation(docs)))
+                if retrieval_error or generation_error:
+                    root.error(reason="evaluation_case_failed")
 
     def mean(rows, attribute: str) -> float:
         if not rows:
@@ -341,6 +357,18 @@ def run_evaluation(
             "execution_mode": cfg.RAGAS_EXECUTION_MODE,
             "metrics": {},
         }
+    if experiment:
+        from backend.services.evaluation_observability import experiment_navigation
+        from app.observability.langfuse_client import state
+        linked = sum(bool(row.get("observability")) for row in details)
+        result["observability"] = {
+            "experiment_id": experiment["id"], "experiment_name": experiment["name"],
+            "dataset_id": experiment["dataset_id"], "dataset_source": "local_snapshot",
+            "linked_items": linked, "total_items": len(cases),
+            "state": ("queued" if linked == len(cases) else "partial") if linked else state(),
+            "visibility": "not_confirmed",
+            "url": experiment_navigation(experiment) if linked else None,
+        }
     return result
 
 
@@ -357,7 +385,9 @@ async def save_run(
 ) -> EvaluationRun:
     """把一次评估结果落库为命名运行。"""
     finished_at = datetime.now(timezone.utc)
+    experiment_id = (metrics.get("observability") or {}).get("experiment_id")
     run = EvaluationRun(
+        id=uuid.UUID(experiment_id) if experiment_id else uuid.uuid4(),
         name=name,
         knowledge_base_id=kb_id,
         dataset_id=dataset_id,

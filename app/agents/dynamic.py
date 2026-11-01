@@ -92,17 +92,21 @@ def build_dynamic_agent(
 
     from app.agents.checkpointing import get_agent_checkpointer
     from app.agents.deep.llm import get_langchain_model, build_selected_model_middleware
-    from app.agents.deep.tools import registry_to_langchain_tools
+    from app.agents.deep.tools import registry_to_langchain_tools, tools_prompt
     from app.skills.middleware import build_skills_middleware
 
     global _dynamic_agent_cache
-    cacheable = model is None
+    from app.agents.configuration import get_agent_configuration
+    configuration = get_agent_configuration()
+    cacheable = model is None and configuration is None
     if cacheable and _dynamic_agent_cache is not None:
         return _dynamic_agent_cache
     if model is None:
         model = get_langchain_model()
-    tools = registry_to_langchain_tools()
-    prompt = DYNAMIC_SYSTEM_PROMPT.format(tools_prompt=_tools_prompt_text())
+    tools = registry_to_langchain_tools(list(configuration.tool_names) if configuration and configuration.tool_names is not None else None)
+    prompt = DYNAMIC_SYSTEM_PROMPT.format(tools_prompt=tools_prompt(tools) if configuration else _tools_prompt_text())
+    if configuration and configuration.system_prompt:
+        prompt += "\n\n## 当前智能体角色指令\n" + configuration.system_prompt
     logger.info(
         "[dynamic] agent built: %d tools (registry only, no delegation tools)",
         len(tools),

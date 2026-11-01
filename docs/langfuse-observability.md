@@ -53,7 +53,42 @@ docker compose up -d --no-deps backend
 
 ## 内容与失败处理
 
-`metadata_only` 不上传问题、历史、system prompt、reasoning、工具参数原文、检索正文、图片和文件内容，仅保留允许的关联和指标。`redacted` 可显式开启有限的纯文本输出诊断，仍不上传任意对象、模型输入历史或完整工具参数。内容过滤后再经过 SDK 导出前脱敏；密钥、JWT、URL、邮箱等会替换，异常只记录类型与阶段。
+`metadata_only` 不上传问题、历史、system prompt、reasoning、工具参数原文、检索正文、反馈原因、图片和文件内容，仅保留允许的关联、检索文档 ID、排名和指标。`redacted` 显式开启经过筛选的问题、最终回答、检索片段和反馈原因；不上传任意对象、模型输入历史或完整工具参数。内容过滤后再经过 SDK 导出前脱敏；密钥、JWT、URL、邮箱等会替换，异常只记录类型与阶段。
+
+## 问答与检索过程
+
+新执行的 `execution.chat` 根节点以数据库中的用户消息作为问题。`redacted` 下，根 input 为 `{question, contexts}`，output 为成功提交的最终回答。取消、保存失败不会把未提交的回答写成最终结果。根节点的 contexts 汇总本次实际检索片段，供 observation evaluator 显式映射；这不是完整历史或完整模型 prompt。
+
+基础检索各后端生成 `retrieval.basic`；增强检索生成 `retrieval.enhanced`，并显示查询分解、并行召回、融合、重排、answerability、覆盖检查、聚类与缺口补充节点。检索节点记录知识库范围、Top K、结果数，以及允许的 chunk/file/KB ID、排名和分数。增强检索线程继承执行上下文，辅助模型和子检索仍归入同一 trace。
+
+正文默认仍不上传。要查看问答和检索正文，在后端运行环境设置 `EASYRAG_OBSERVABILITY_CONTENT_MODE=redacted` 并重新创建 backend。结构化内容只允许显式字段，默认每个 input/output 的文本总预算为 2000 字符，最多 20 条片段；长文本会截断。不能把截断后的上下文当作完整证据评判模型，也不会因为启用内容模式而采集图片或 reasoning。
+
+## 用户反馈
+
+已保存的助手消息下方有“有帮助”“需改进”按钮，后者可填写原因。评分支持修改，刷新后恢复。普通用户通过应用提交反馈，不需要 Langfuse 账户；只有消息所属用户可读取或修改反馈，用户消息不能评分。
+
+- `GET /api/v1/chat/messages/{message_id}/feedback` 读取反馈。
+- `PUT /api/v1/chat/messages/{message_id}/feedback` 保存 `{rating: "like" | "dislike", reason?: string}`；reason 最长 2000 字符。
+- 本地 `message_feedback` 为权威记录。只有消息 metadata 中的精确 stream 属于同一用户/会话且已采样，才建立远端关联；历史记录和未采样执行不猜测 trace。
+- `user-feedback` 为 BOOLEAN Score，赞=1，踩=0。固定 Score ID 使修改覆盖同一评分，避免重复计数。`metadata_only` 下不上传原因。
+- `observability_scores` 在同一事务中记录待发送评分。后台每 10 秒尝试投递，失败退避至最多 300 秒；重启后继续处理，租约避免多进程同时领取。上传过程中修改评分会保留待处理的新修订。
+- delivery_state 的 `pending` 表示等待投递/重试，`accepted` 表示评分 API 已接收，不代表远端已完成索引；`not_linked` 表示本地已保存但无可用 trace。
+
+在 Langfuse 按 `user-feedback=0` 筛选，结合对应问题、回答及检索节点检查原因。可把有代表性的失败样例加入后续回归集。
+
+## 现有评测与 Experiment
+
+普通“运行评估”和“运行基准”均保留原有检索、可选回答生成与 Ragas 流程。启用 Langfuse 后，每条真实执行的评测用例生成一条独立 trace，根名为 `evaluation.case`。原生 OTel Experiment 属性将这些根与子节点关联为同一个 Experiment；不会为了同步结果重复调用检索器、模型或 Ragas。
+
+数据继续由本地评测系统管理，使用 Langfuse 支持的 local-data experiment 模式：Dataset 关联 ID 是知识库 ID 加完整实际用例快照的 SHA-256；相同快照在不同运行中保持相同 ID，修改题目或标注会产生新身份。item ID 同样稳定，Experiment ID 与本地 EvaluationRun ID 一致。不会复制或覆盖远端托管 Dataset。元数据包含应用版本、模型、指标版本及已知的检索配置、数据集/基准版本。
+
+每条用例的 `observability` 返回 `trace_id`、`observation_id`、`experiment_id` 和 `item_id`。现有 HitRate/MRR/Recall/Precision/nDCG 以 `retrieval.*` Score 关联到同一个实际根 observation，负样本使用 `retrieval.expected_miss`；可用的逐条 Ragas 值写为 `ragas.*`。缺失、NaN、检索失败和相关生成失败不会伪造零分。评分队列和本地结果在同一事务提交，随后后台投递。
+
+评测结果与历史详情中可打开“在 Langfuse 比较实验”。链接使用配置的 Web base URL/project ID，采用当前 SDK 5 的 `/project/{id}/experiments/results?baseline={experiment_id}` 路径。界面显示关联用例数量，并明确提示远端接收与索引未确认。关闭或缺失 SDK 时本地评测正常返回，关联状态显示不可用。
+
+比较时选择相同快照、相同评测规则的 baseline/candidate，逐条检查分数和输出；修改模型或检索参数后创建新运行。只有基准启用 Faithfulness 才会沿现有流程生成回答，单纯检索评测的 output 是检索结果，不应当作完整 Agent 回答质量。完整 Agent 多步任务 runner 不在本轮范围。
+
+新表迁移见 `scripts/migrations/20261025_langfuse_quality.sql`；开发启动的 `init_db` 同样创建缺失表。上线前应用迁移、重建并重新创建 backend/frontend。Langfuse 控制台的 Judge 连接、评分标准与在线采样规则仍需按实际任务配置。
 
 usage 缺失或取消前未返回时标为 unknown，不虚构 0；推理输出与可见正文首 token 分开记录。自定义网关无法确认价格时不提供成本承诺。
 

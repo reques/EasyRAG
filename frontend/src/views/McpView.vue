@@ -4,7 +4,7 @@
       <div>
         <span class="mcp-eyebrow">MCP SERVICE CONSOLE</span>
         <h1>{{ canManage ? 'MCP 服务管理' : 'MCP 工具服务' }}</h1>
-        <p v-if="canManage">挂载远程 SSE / Streamable HTTP 服务或本地受信任 Stdio 能力，工具会以 <code>{服务}__{工具}</code> 命名空间注入 Agent，并受白名单与沙箱策略约束。</p>
+        <p v-if="canManage">连接外部工具与服务，为智能体扩展更多工作能力。</p>
         <p v-else>查看共享 MCP 服务的连接状态与已放行工具，在对话中使用这些能力。</p>
       </div>
       <div class="mcp-header-actions">
@@ -55,7 +55,7 @@
           <p v-if="!loading && servers.length">
             共 {{ metrics.total }} 个服务，其中 {{ metrics.whitelisted }} 个启用了工具白名单。
           </p>
-          <p v-else-if="canManage">持久化在 config/mcp_servers.json，改动即时热挂载并从下一次工具调用生效。</p>
+          <p v-else-if="canManage">添加工具服务，按需启用并管理工具访问范围。</p>
           <p v-else>共享服务由管理员统一配置，此处展示安全的服务概览。</p>
         </div>
         <div v-if="servers.length" class="mcp-toolbar-actions">
@@ -539,27 +539,27 @@ onBeforeUnmount(() => { notices.value = [] })
   height: 100%;
   overflow: auto;
   scrollbar-gutter: stable;
-  padding: 34px 42px 60px;
-  background: var(--gray-25);
+  padding: 30px 32px 60px;
+  background: #fff;
 }
 
 .mcp-header {
   max-width: 1240px;
   margin: 0 auto 22px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
 }
 .mcp-eyebrow {
-  display: block;
+  display: none;
   color: var(--gray-500);
   font-size: 11px;
   font-weight: 650;
   letter-spacing: .13em;
   margin-bottom: 7px;
 }
-.mcp-header h1 { font-size: 27px; line-height: 1.25; color: var(--gray-1000); margin-bottom: 7px; }
+.mcp-header h1 { font-size: 22px; font-weight: 600; line-height: 1.25; color: var(--gray-1000); margin-bottom: 8px; }
 .mcp-header p { color: var(--gray-600); font-size: 13px; max-width: 720px; }
 .mcp-header p code {
   font-family: var(--font-mono);
@@ -575,7 +575,8 @@ onBeforeUnmount(() => { notices.value = [] })
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 7px 13px;
+  min-height: 38px;
+  padding: 7px 14px;
   border: 1px solid var(--gray-150);
   border-radius: var(--radius-md);
   background: var(--gray-0);
@@ -595,31 +596,32 @@ onBeforeUnmount(() => { notices.value = [] })
 .mcp-overview {
   max-width: 1240px;
   margin: 0 auto 18px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 .mcp-overview article {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 15px 16px;
-  background: var(--gray-0);
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--gray-10);
   border: 1px solid var(--gray-150);
-  border-radius: var(--radius-lg);
+  border-radius: 8px;
 }
 .mcp-metric-icon {
-  width: 36px;
-  height: 36px;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
   border-radius: var(--radius-md);
-  background: var(--gray-50);
-  color: var(--gray-700);
+  background: transparent;
+  color: var(--gray-400);
 }
-.mcp-overview small { display: block; color: var(--gray-500); font-size: 11px; }
-.mcp-overview strong { font-size: 21px; line-height: 1.15; color: var(--gray-1000); }
+.mcp-overview article > div { display: flex; align-items: center; gap: 8px; }
+.mcp-overview small { color: var(--gray-600); font-size: 12px; }
+.mcp-overview strong { font-size: 14px; font-weight: 600; line-height: 1.15; color: var(--gray-800); }
 
 .mcp-banner {
   display: flex;
@@ -644,9 +646,10 @@ onBeforeUnmount(() => { notices.value = [] })
   justify-content: space-between;
   gap: 20px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  margin-top: 28px;
+  margin-bottom: 20px;
 }
-.mcp-toolbar-copy h2 { font-size: 16px; color: var(--gray-1000); }
+.mcp-toolbar-copy h2 { font-size: 14px; font-weight: 500; color: var(--gray-700); }
 .mcp-toolbar-copy p { color: var(--gray-600); font-size: 12px; margin-top: 2px; }
 .mcp-toolbar-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
@@ -686,7 +689,7 @@ onBeforeUnmount(() => { notices.value = [] })
   align-items: center;
   gap: 7px;
   width: 240px;
-  height: 34px;
+  height: 40px;
   padding: 0 9px;
   border: 1px solid var(--gray-150);
   border-radius: var(--radius-md);
@@ -719,8 +722,8 @@ onBeforeUnmount(() => { notices.value = [] })
 
 .mcp-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(370px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 20px;
 }
 .mcp-card {
   display: flex;
@@ -728,15 +731,15 @@ onBeforeUnmount(() => { notices.value = [] })
   background: var(--gray-0);
   border: 1px solid var(--gray-150);
   border-radius: var(--radius-lg);
-  padding: 16px;
+  padding: 22px;
   transition: border-color .16s, box-shadow .16s;
 }
-.mcp-card:hover { border-color: var(--gray-200); box-shadow: var(--shadow-card); }
+.mcp-card:hover { border-color: var(--main-200); }
 
 .mcp-card-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
 .mcp-card-icon {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -748,7 +751,7 @@ onBeforeUnmount(() => { notices.value = [] })
 .mcp-card-icon.is-error { background: var(--color-error-50); color: var(--color-error-700); }
 .mcp-card-icon.is-connecting { background: var(--color-info-50); color: var(--color-info-700); }
 .mcp-card-title { flex: 1; min-width: 0; }
-.mcp-card-title strong { display: block; font-size: 14px; color: var(--gray-1000); overflow-wrap: anywhere; }
+.mcp-card-title strong { display: block; font-size: 15px; font-weight: 600; color: var(--gray-1000); overflow-wrap: anywhere; }
 .mcp-card-title small { display: block; margin-top: 1px; color: var(--gray-500); font-size: 11px; font-family: var(--font-mono); }
 .mcp-card-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: 0 0 auto; }
 
@@ -786,9 +789,9 @@ onBeforeUnmount(() => { notices.value = [] })
 .mcp-card-desc { color: var(--gray-600); font-size: 12px; line-height: 1.55; }
 
 .mcp-card-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: grid;
+  gap: 8px 12px;
   padding: 10px 11px;
   background: var(--gray-25);
   border: 1px solid var(--gray-100);
@@ -796,6 +799,7 @@ onBeforeUnmount(() => { notices.value = [] })
   font-size: 12px;
 }
 .mcp-card-meta > div { display: flex; gap: 8px; align-items: flex-start; }
+.mcp-card-meta > div:has(.mono) { grid-column: 1 / -1; }
 .mcp-card-meta dt { flex: 0 0 62px; color: var(--gray-500); font-size: 11px; line-height: 1.6; }
 .mcp-card-meta dd { flex: 1; min-width: 0; color: var(--gray-800); overflow-wrap: anywhere; line-height: 1.6; }
 .mcp-card-meta dd.mono { font-family: var(--font-mono); font-size: 11px; }
@@ -963,6 +967,7 @@ a.mcp-source-tag:hover { background: var(--main-100); }
   .mcp-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
+  .mcp-card-meta { grid-template-columns: 1fr; }
   .mcp-page { padding: 24px 16px 48px; }
   .mcp-header, .mcp-toolbar { flex-direction: column; align-items: stretch; }
   .mcp-search { width: 100%; }

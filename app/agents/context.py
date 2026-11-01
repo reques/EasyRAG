@@ -72,6 +72,8 @@ class BaseContext:
     """已授权知识库 UUID（工具侧 kb_search 授权边界）。"""
 
     deep_research: bool = False
+    agent_config: Any = None
+    """Owner-authorized runtime snapshot; never accepted from the client."""
     """深度研究开关（请求级选择，当前由路由层消费）。"""
 
 
@@ -129,6 +131,7 @@ class ChatContext(BaseContext):
         input_message_id: Optional[str] = None,
         resume_checkpoint: bool = False,
         deep_research: bool = False,
+        agent_config: Any = None,
         on_step: Optional[StepCallback] = None,
         on_artifact: Optional[ArtifactCallback] = None,
     ) -> "ChatContext":
@@ -151,6 +154,7 @@ class ChatContext(BaseContext):
             input_message_id=(str(input_message_id) if input_message_id else None),
             resume_checkpoint=resume_checkpoint,
             deep_research=deep_research,
+            agent_config=agent_config,
             on_step=on_step,
             on_artifact=on_artifact,
             query=query,

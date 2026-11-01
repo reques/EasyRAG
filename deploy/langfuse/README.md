@@ -43,6 +43,20 @@ Langfuse 的数据库、Redis、ClickHouse 和对象数据各用独立命名卷�
 
 本地无服务时可运行 `scripts/verify_langfuse.py` 验证内存 SDK 行为；**它不证明 Langfuse 已部署或已收录 trace**。实际状态见 [实施记录](../../docs/langfuse-implementation-verification.md)。
 
+### 问答、反馈与 Experiment 的真实验收
+
+先应用 `scripts/migrations/20261016_langfuse_trace_links.sql` 和 `scripts/migrations/20261025_langfuse_quality.sql`，重建前后端。若需要查看脱敏后的问题、回答、检索上下文与反馈原因，将根 `.env` 的 `EASYRAG_OBSERVABILITY_CONTENT_MODE` 改为 `redacted`，再通过 `app up -d --no-deps --force-recreate backend` 重新创建后端。`connect` 会恢复默认的 `metadata_only`，因此应在最后一次 `connect` 后设置内容策略。
+
+```powershell
+.\.venv\Scripts\python.exe scripts/verify_langfuse_quality_live.py --live --model-id deepseek-v4-flash
+```
+
+`--model-id` 使用已配置且可用的 EasyRAG 模型 ID；省略时创建本机 Ollama Qwen3.5 验收配置。脚本建立合成账号和 TXT 知识库，实际索引/检索、运行问答、提交一条点踩及脱敏原因、执行两条检索 benchmark 样例，然后等待 Langfuse Trace、Score 和 Experiment 索引并核验关联。合成密钥 canary 用于断言脱敏；此次评测不运行 Ragas/LLM Judge。
+
+默认复用 `tmp/langfuse-quality-live/` 中的已完成步骤；独立重跑时指定新的 `--work-dir`，不同模型应使用不同工作目录。报告 `quality-report.json` 无凭据，可供核对；`quality-private.json` 包含合成账号密码和运行状态，只能保存在忽略目录。`--phase prepare/chat/trace/feedback/evaluation` 可单独复验某一阶段，但后续阶段依赖前面已完成的状态。
+
+2026-11-01 已完成真实部署验收：[结果与控制台链接](../../docs/langfuse-implementation-verification.md#2026-11-01正式本地部署与真实质量闭环验收)。
+
 ## 运维与关闭
 
 ```powershell

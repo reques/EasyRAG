@@ -171,6 +171,7 @@
         </div>
       </div>
 
+      <EvaluationObservability :value="result.metrics?.observability" />
       <div class="ev-metric-grid">
         <div class="ev-metric">
           <span>HitRate@K</span>
@@ -317,6 +318,7 @@
               <button class="ev-btn-ghost" @click="detail = null"><X :size="16" /></button>
             </div>
           </div>
+          <EvaluationObservability :value="detail.metrics?.observability" />
           <div v-if="detail.metrics" class="ev-metric-grid ev-metric-grid-sm">
             <div class="ev-metric">
               <span>HitRate@K</span>
@@ -360,6 +362,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Plus, Trash2, Play, LoaderCircle, RefreshCw, Eye, X, CircleAlert, Save, Search, Download, Upload } from 'lucide-vue-next'
 import api from '../api'
+import EvaluationObservability from '../components/EvaluationObservability.vue'
 
 const props = defineProps({
   kbId: { type: String, default: '' },
@@ -489,6 +492,7 @@ async function run() {
       name: form.value.name.trim() || `run-${Date.now()}`,
       kb_id: form.value.kbId,
       top_k: form.value.topK,
+      dataset_id: datasetSel.value || null,
       cases: cases.value.map((c) => ({
         question: c.question.trim(),
         expected_file_id: c.expected_file_id,

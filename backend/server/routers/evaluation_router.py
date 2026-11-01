@@ -28,6 +28,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from sqlalchemy.exc import IntegrityError
 
+from app.observability.experiments import use_evaluation_experiment
+from backend.services.evaluation_observability import enqueue_evaluation_scores
 from app.core.config import get_settings
 from backend.services.evaluation_benchmarks import (
     assess_benchmark,
@@ -747,19 +749,25 @@ async def run_benchmark_endpoint(
         )
         snapshot = build_benchmark_snapshot(benchmark, dataset)
 
-    metrics = await asyncio.to_thread(
-        run_evaluation,
-        cases,
-        int(retrieval_config.get("top_k", 5)),
-        knowledge_base_id=benchmark.knowledge_base_id,
-        ragas_metrics=(
-            (["context_precision"] if context_enabled else [])
-            + (["faithfulness"] if faithfulness_enabled else [])
-        ) or None,
-        score_threshold=float(retrieval_config.get("score_threshold", 0.0)),
-        run_ragas=context_enabled or faithfulness_enabled,
-        generate_answers=faithfulness_enabled,
-    )
+    with use_evaluation_experiment(cases, benchmark.knowledge_base_id, name=benchmark.name, user_id=current_user.id,
+                                  configuration={"top_k": retrieval_config.get("top_k", 5),
+                                  "score_threshold": retrieval_config.get("score_threshold", 0.0),
+                                  "generate_answers": faithfulness_enabled,
+                                  "dataset_version": snapshot["dataset"]["version"],
+                                  "benchmark_version": snapshot["benchmark"]["version"]}):
+        metrics = await asyncio.to_thread(
+            run_evaluation,
+            cases,
+            int(retrieval_config.get("top_k", 5)),
+            knowledge_base_id=benchmark.knowledge_base_id,
+            ragas_metrics=(
+                (["context_precision"] if context_enabled else [])
+                + (["faithfulness"] if faithfulness_enabled else [])
+            ) or None,
+            score_threshold=float(retrieval_config.get("score_threshold", 0.0)),
+            run_ragas=context_enabled or faithfulness_enabled,
+            generate_answers=faithfulness_enabled,
+        )
     metrics["benchmark_assessment"] = assess_benchmark(metrics_config, metrics)
     run_name = req.name or (
         f"{benchmark.name}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
@@ -780,6 +788,7 @@ async def run_benchmark_endpoint(
             benchmark_version=snapshot["benchmark"]["version"],
             benchmark_snapshot=snapshot,
         )
+        await enqueue_evaluation_scores(session, metrics, current_user.id)
         await session.commit()
         stored_metrics = _metrics_payload(run)
         details = stored_metrics.pop("details", [])
@@ -799,12 +808,17 @@ async def create_run(
     current_user: User = Depends(get_current_user),
 ):
     """执行一次评估并保存为命名运行（同步逐条检索，评估集大时较慢）。"""
+    dataset_version = None
     # 权限检查使用短会话，避免评估期间长时间占用数据库连接。
     async with get_session() as session:
         kb_repo = KnowledgeBaseRepository(session)
         kb = await kb_repo.get_by_id(req.kb_id)
         if not kb or kb.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+        if req.dataset_id:
+            dataset = await _require_dataset_for_knowledge_base(session, req.dataset_id, req.kb_id, current_user.id)
+            dataset_version = dataset.version
 
         file_repo = KnowledgeFileRepository(session)
         expected_file_ids = list({case.expected_file_id for case in req.cases})
@@ -840,13 +854,16 @@ async def create_run(
             for case in req.cases
         ]
 
-    metrics = await asyncio.to_thread(
-        run_evaluation,
-        cases,
-        req.top_k,
-        knowledge_base_id=req.kb_id,
-        ragas_metrics=req.ragas_metrics,
-    )
+    with use_evaluation_experiment(cases, req.kb_id, name=req.name, user_id=current_user.id,
+                                  configuration={"top_k": req.top_k, "ragas_metrics": req.ragas_metrics,
+                                                 "dataset_version": dataset_version}):
+        metrics = await asyncio.to_thread(
+            run_evaluation,
+            cases,
+            req.top_k,
+            knowledge_base_id=req.kb_id,
+            ragas_metrics=req.ragas_metrics,
+        )
 
     async with get_session() as session:
         # 评估可能耗时较长，保存前再次校验，防止期间知识库被删除
@@ -864,6 +881,7 @@ async def create_run(
             kb_id=req.kb_id,
             dataset_id=req.dataset_id,
         )
+        await enqueue_evaluation_scores(session, metrics, current_user.id)
         await session.commit()
         metrics = _metrics_payload(run)
         detail = metrics.pop("details", [])

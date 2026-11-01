@@ -147,7 +147,7 @@ def _run_one_task(
 
     cfg = get_subagent_config(spec.subagent_type)
     if cfg is None:
-        from app.agents.deep.subagents import get_subagents
+        from app.agents.deep.subagents import get_available_subagents as get_subagents
 
         available = ", ".join(c.name for c in get_subagents())
         return TaskResult(

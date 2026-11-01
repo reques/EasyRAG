@@ -26,6 +26,10 @@ class ExecutionContext:
     lock: threading.RLock = field(default_factory=threading.RLock)
     closed: bool = False
     model_callback: object | None = field(default=None, repr=False)
+    question: str = ""
+    root: object | None = field(default=None, repr=False)
+    retrieval_documents: list = field(default_factory=list, repr=False)
+    experiment: dict = field(default_factory=dict)
 
 
 _execution: ContextVar[ExecutionContext | None] = ContextVar("observability_execution", default=None)
@@ -169,7 +173,7 @@ def observation_scope(name, **kwargs):
 
 
 @contextmanager
-def execution_scope(context):
+def execution_scope(context, *, name="execution.chat"):
     token = _execution.set(context)
     parent = _current.set(None)
     try:
@@ -183,7 +187,8 @@ def execution_scope(context):
                 attrs = propagate_attributes(user_id=context.user_id, session_id=context.session_id)
             except ImportError:
                 pass
-        with attrs, observation_scope("execution.chat") as root:
+        with attrs, observation_scope(name, input=redaction.selected_content(context.question)) as root:
+            context.root = root
             try:
                 yield root
             except BaseException as exc:

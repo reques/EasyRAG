@@ -195,6 +195,8 @@ class AgentService:
         的注释写的是"按 auto 处理"，但实际分支只是打印警告、**没有**再走 auto 的
         复杂判定 —— 本方法按实际行为保留该语义（改动需要单独评估，不混在收口里）。
         """
+        if context is not None and context.agent_config is not None:
+            return context.agent_config.mode
         if cfg.AGENT_MODE == "deepagents" or (context is not None and context.deep_research):
             return "deepagents"
 

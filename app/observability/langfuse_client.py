@@ -44,13 +44,16 @@ def initialize():
             from langfuse.span_filter import is_langfuse_span
             from opentelemetry.sdk.trace import TracerProvider
             from app.observability.redaction import mask_otel_spans
+            from app.observability.experiments import ExperimentSpanProcessor
+            provider = TracerProvider()
+            provider.add_span_processor(ExperimentSpanProcessor())
             _client = Langfuse(
                 public_key=cfg.LANGFUSE_PUBLIC_KEY,
                 secret_key=cfg.LANGFUSE_SECRET_KEY,
                 base_url=cfg.LANGFUSE_BASE_URL.rstrip("/"),
                 environment=cfg.LANGFUSE_TRACING_ENVIRONMENT,
                 release=cfg.APP_VERSION,
-                tracer_provider=TracerProvider(),
+                tracer_provider=provider,
                 # Sampling is decided and persisted at admission, not sampled a
                 # second time by the SDK. The processor queue is bounded by OTel.
                 sample_rate=1.0, timeout=2, flush_at=64, flush_interval=2,

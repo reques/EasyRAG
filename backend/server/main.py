@@ -177,7 +177,11 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("[lifespan] ingestion worker start skipped: %s", exc)
 
+    from backend.services.score_delivery_service import score_delivery_worker
+    score_delivery_task = asyncio.create_task(score_delivery_worker())
     yield
+    score_delivery_task.cancel()
+    await asyncio.gather(score_delivery_task, return_exceptions=True)
     from backend.services.chat_stream_service import shutdown_streams
     await shutdown_streams()
     from app.observability.langfuse_client import shutdown as shutdown_observability
@@ -249,6 +253,7 @@ def create_app() -> FastAPI:
     from backend.server.routers.evaluation_router import router as eval_router
     from backend.server.routers.memory_router import router as memory_router
     from backend.server.routers.mcp_router import router as mcp_router
+    from backend.server.routers.agent_router import router as agent_router
 
     from backend.server.routers.artifact_router import router as artifact_router
     application.include_router(artifact_router, prefix="/api/v1")
@@ -260,6 +265,7 @@ def create_app() -> FastAPI:
     application.include_router(eval_router, prefix="/api/v1")
     application.include_router(memory_router, prefix="/api/v1")
     application.include_router(mcp_router, prefix="/api/v1")
+    application.include_router(agent_router, prefix="/api/v1")
 
     # =========================================================================
     # 旧路由（保持兼容）— app/api/routes.py + app/api/kb_routes.py

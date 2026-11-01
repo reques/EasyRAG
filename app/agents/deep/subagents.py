@@ -193,7 +193,7 @@ def get_subagents() -> List[SubAgentConfig]:
 
 def get_subagent_config(name: str) -> Optional[SubAgentConfig]:
     """按名称查找 SubAgent 配置（未命中返回 None，task 工具抛错提示可选集）。"""
-    for cfg in get_subagents():
+    for cfg in get_available_subagents():
         if cfg.name == name:
             return cfg
     return None
@@ -202,10 +202,16 @@ def get_subagent_config(name: str) -> Optional[SubAgentConfig]:
 def subagents_prompt() -> str:
     """可用的 SubAgent 名册文本（注入主 Agent system prompt）。"""
     lines = []
-    for cfg in get_subagents():
+    for cfg in get_available_subagents():
         tools = "、".join(cfg.tools) if cfg.tools else "无工具"
         lines.append(f"- {cfg.name}: {cfg.description}（工具: {tools}）")
     return "\n".join(lines) or "（无可用子智能体）"
+
+
+def get_available_subagents():
+    from app.agents.configuration import get_agent_configuration
+    configuration = get_agent_configuration()
+    return list(configuration.subagents) if configuration is not None else get_subagents()
 
 
 # 生产路径缓存：key = (subagent 名, 解析后工具集指纹)——工具集变化时重建；
@@ -319,7 +325,13 @@ def parse_result_tail(text: str) -> Dict[str, Any]:
             "raw": tail[-300:]}
 
 
-def run_subagent(
+def run_subagent(config, task_description, model=None, recursion_limit=20):
+    from app.agents.configuration import use_child_configuration
+    with use_child_configuration(config):
+        return _run_subagent_inner(config, task_description, model=model, recursion_limit=recursion_limit)
+
+
+def _run_subagent_inner(
     config: SubAgentConfig,
     task_description: str,
     model=None,

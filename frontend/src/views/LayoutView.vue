@@ -1,15 +1,19 @@
 <template>
-  <div class="layout" :class="{ 'is-sidebar-open': sidebarOpen }">
+  <div class="layout" :class="{ 'is-sidebar-open': sidebarOpen, 'is-sidebar-collapsed': sidebarCollapsed }">
     <button v-if="sidebarOpen" class="sidebar-backdrop" aria-label="关闭侧边栏" @click="sidebarOpen = false"></button>
     <aside class="sidebar">
-      <div class="sidebar-brand" title="EasyRAG 首页" @click="$router.push('/')">
-        <span class="brand-logo"><Asterisk :size="20" :stroke-width="2.1" /></span>
-        <span class="brand-copy"><span class="brand-name">EasyRAG</span><small>KNOWLEDGE OS</small></span>
+      <div class="sidebar-brand-row">
+        <button type="button" class="sidebar-brand" title="EasyRAG 首页" @click="$router.push('/')">
+          <span class="brand-logo"><Asterisk :size="22" :stroke-width="1.9" /></span>
+          <span class="brand-copy"><span class="brand-name">EasyRAG</span><small>知识与智能协作</small></span>
+        </button>
+        <button type="button" class="sidebar-collapse" :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'" :aria-label="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'" :aria-expanded="!sidebarCollapsed" @click="sidebarCollapsed = !sidebarCollapsed"><PanelLeft :size="17" /></button>
       </div>
       <nav class="sidebar-nav">
         <button class="nav-item primary-action" title="在最近中新建会话" @click="sessions?.newChat(null)"><Plus :size="17" class="nav-icon" /><span class="nav-text">新建会话</span></button>
         <router-link :to="{ path: '/', query: chatStore.activeConversationId ? { session: chatStore.activeConversationId } : {} }" class="nav-item" title="智能对话" exact-active-class="active"><MessagesSquare :size="17" class="nav-icon" /><span class="nav-text">对话</span></router-link>
         <router-link to="/knowledge" class="nav-item" title="知识空间" active-class="active"><LibraryBig :size="17" class="nav-icon" /><span class="nav-text">知识库</span></router-link>
+        <router-link to="/agents" class="nav-item" title="智能体管理" active-class="active"><Bot :size="17" class="nav-icon" /><span class="nav-text">智能体</span></router-link>
         <router-link to="/memory" class="nav-item" title="记忆管理" active-class="active"><BrainCircuit :size="17" class="nav-icon" /><span class="nav-text">记忆</span></router-link>
         <router-link to="/mcp" class="nav-item" title="MCP 工具中心" active-class="active"><Blocks :size="17" class="nav-icon" /><span class="nav-text">MCP 工具</span></router-link>
       </nav>
@@ -41,7 +45,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Asterisk, Blocks, BrainCircuit, Copy, Folder, LibraryBig, LogOut, MessagesSquare, PanelLeft, Plus } from 'lucide-vue-next'
+import { Asterisk, Blocks, Bot, BrainCircuit, Copy, Folder, LibraryBig, LogOut, MessagesSquare, PanelLeft, Plus } from 'lucide-vue-next'
 import WorkspaceSessions from '../components/WorkspaceSessions.vue'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
@@ -54,12 +58,13 @@ const router = useRouter()
 const route = useRoute()
 const sessions = ref(null)
 const sidebarOpen = ref(false)
+const sidebarCollapsed = ref(false)
 const copied = ref(false)
 const appVersion = ref('v0.3.1')
 const avatarLetter = computed(() => (auth.username || '?').slice(0, 1).toUpperCase())
 const currentWorkspaceName = computed(() => chatStore.workspaces.find(w => w.id === chatStore.activeWorkspaceId)?.name || '最近')
-const pageTitle = computed(() => ({ '/knowledge': '知识空间', '/memory': '记忆管理', '/mcp': 'MCP 工具中心' }[route.path] || chatStore.activeConversation?.title || '智能对话'))
-const pageDescription = computed(() => ({ '/knowledge': '组织资料、检索与评估', '/memory': '查看和修正 Agent 记住的信息', '/mcp': '管理远程与本地扩展工具能力' }[route.path] || '从你的知识与工具中获得答案'))
+const pageTitle = computed(() => ({ '/agents': '智能体管理', '/knowledge': '知识空间', '/memory': '记忆管理', '/mcp': 'MCP 工具中心' }[route.path] || chatStore.activeConversation?.title || '智能对话'))
+const pageDescription = computed(() => ({ '/agents': '角色配置与模型连接', '/knowledge': '组织资料、检索与评估', '/memory': '查看和修正 Agent 记住的信息', '/mcp': '管理远程与本地扩展工具能力' }[route.path] || '从你的知识与工具中获得答案'))
 
 watch(() => [route.path, route.query.session], ([path, id], previous = []) => {
   if (path !== '/') { sidebarOpen.value = false; return }
@@ -92,6 +97,21 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.sidebar-brand-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 48px; }
+.sidebar-brand { min-width: 0; border: 0; background: transparent; text-align: left; }
+.sidebar-collapse { display: grid; place-items: center; width: 28px; height: 30px; flex-shrink: 0; border: 0; border-radius: 6px; background: transparent; color: var(--gray-500); }
+.sidebar-collapse:hover { background: var(--gray-100); color: var(--gray-900); }
+@media (min-width: 1061px) {
+  .is-sidebar-collapsed .sidebar { width: 72px; padding-inline: 12px; }
+  .is-sidebar-collapsed .sidebar-brand { display: none; }
+  .is-sidebar-collapsed .sidebar-brand-row { justify-content: center; }
+  .is-sidebar-collapsed .sidebar-conversations,
+  .is-sidebar-collapsed .nav-text,
+  .is-sidebar-collapsed .user-badge,
+  .is-sidebar-collapsed .btn-logout { display: none; }
+  .is-sidebar-collapsed .nav-item { justify-content: center; padding: 0; }
+  .is-sidebar-collapsed .sidebar-footer { justify-content: center; padding: 0; }
+}
 .sidebar-conversations { min-height: 0; overflow: hidden; }
 .session-breadcrumb { min-width: 0; flex: 1; }
 .app-topbar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -103,6 +123,9 @@ onMounted(async () => {
 .sidebar-toggle { display: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; margin-right: 10px; border: 0; border-radius: 5px; background: transparent; color: var(--gray-600); cursor: pointer; }
 .sidebar-backdrop { display: none; }
 @media (max-width: 1060px) {
+  .sidebar-collapse { display: none; }
+  .sidebar-brand-row { justify-content: center; }
+  .is-sidebar-open .sidebar-brand-row { justify-content: flex-start; }
   .sidebar-toggle { display: inline-flex; flex-shrink: 0; }
   .is-sidebar-open .sidebar { position: fixed; top: 0; bottom: 0; left: 0; z-index: 110; width: min(300px, 85vw); padding-inline: 13px; }
   .is-sidebar-open .sidebar-brand { justify-content: flex-start; }

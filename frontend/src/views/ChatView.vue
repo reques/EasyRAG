@@ -3,6 +3,8 @@
     <!-- 消息区 -->
     <div class="chat-main">
       <div class="session-toolbar">
+        <label class="session-agent-picker"><Bot :size="15" /><select v-model="selectedAgentId" aria-label="选择智能体" :disabled="sending || historyLoading" @change="changeAgent"><option value="">自动选择智能体</option><optgroup label="主智能体"><option v-for="agent in agentOptions.filter(a => a.kind === 'main')" :key="agent.id" :value="agent.id" :disabled="!agent.enabled">{{ agent.name }}{{ agent.enabled ? '' : '（已停用）' }}</option></optgroup><optgroup label="试用子智能体"><option v-for="agent in agentOptions.filter(a => a.kind === 'subagent')" :key="agent.id" :value="agent.id" :disabled="!agent.enabled">{{ agent.name }}{{ agent.enabled ? '' : '（已停用）' }}</option></optgroup><option v-if="selectedAgentId && !selectedAgent" :value="selectedAgentId" disabled>智能体已移除</option></select><router-link to="/agents" title="管理智能体" aria-label="管理智能体"><Settings2 :size="14" /></router-link></label>
+        <span v-if="agentLoadError" class="session-agent-error" role="alert">{{ agentLoadError }}</span>
         <span v-if="chatStore.activeConversation?.archived_at" class="archived-session-notice">此会话已归档 <button type="button" @click="chatStore.restoreConversation(chatStore.activeConversationId)">恢复会话</button></span>
         <button ref="statusToggleEl" type="button" class="session-status-toggle" :class="{ active: panelOpen }" :aria-expanded="panelOpen" aria-controls="session-status-panel" @click="toggleStatusPanel">
           <ListChecks :size="16" /> <span>状态</span>
@@ -135,6 +137,7 @@
                  msg.meta 数据仍在收集与持久化，仅不再展示。 -->
           </div>
           <div v-if="msg.content" class="message-actions">
+            <MessageFeedback v-if="msg.role === 'assistant' && msg.messageId && !msg.streaming" :message-id="msg.messageId" />
             <button
               type="button"
               class="message-copy-btn"
@@ -293,7 +296,7 @@
               :class="{ active: deepResearch }"
               :aria-pressed="deepResearch"
               :disabled="sending"
-              @click="deepResearch = !deepResearch"
+              @click="toggleDeepResearch"
               :title="deepResearch ? '关闭深度研究（恢复自动模式）' : '开启深度研究：由主 Agent 调度研究子智能体，多步检索与推理，回答更深入'"
             >
               <Sparkles :size="13" :class="{ 'is-on': deepResearch }" />
@@ -763,7 +766,7 @@
 import { ref, reactive, computed, watch, nextTick, onActivated, onMounted, onUnmounted } from 'vue'
 import { appendWorkArtifact, buildHistoryWorkItems } from '../utils/work-progress.js'
 import { interruptTasks, latestContextUsage, mergeTasks, messageUsage, sessionUsage, shouldAutoOpen, statusArtifacts } from '../utils/session-status.js'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { marked } from 'marked'
 import {
@@ -800,6 +803,7 @@ import {
 } from 'lucide-vue-next'
 import api from '../api'
 import AgentTrace from '../components/AgentTrace.vue'
+import MessageFeedback from '../components/MessageFeedback.vue'
 const canObserve = ref(false)
 onMounted(async () => {
   try { canObserve.value = !!(await api.get('/chat/observability')).can_view } catch { /* No operator access. */ }
@@ -849,6 +853,7 @@ function modeLabel(mode) {
 
 const chatStore = useChatStore()
 const router = useRouter()
+const route = useRoute()
 const messages = ref([])
 
 // 点击知识库引用 → 跳转到知识库页并定位到对应文档详情
@@ -1008,6 +1013,44 @@ function startTaskPanelResize(event) {
 // 对话模型目录由后端环境配置生成；浏览器只保存公开 model_id，不接触供应商密钥。
 const MODEL_STORAGE_KEY = 'easyrag-chat-model-id'
 const modelOptions = ref([])
+const agentOptions = ref([])
+const selectedAgentId = ref('')
+const agentLoadError = ref('')
+const selectedAgent = computed(() => agentOptions.value.find(a => a.id === selectedAgentId.value))
+async function loadAgents() {
+  try { const result = await api.get('/agents'); agentOptions.value = result.agents || []; agentLoadError.value = '' }
+  catch { agentLoadError.value = '智能体目录加载失败，可前往管理页重试' }
+}
+async function changeAgent() {
+  const agent = selectedAgent.value
+  if (agent) deepResearch.value = agent.mode === 'deepagents'
+  if (agent?.model_id) {
+    await loadModels(agent.model_id)
+    if (!modelOptions.value.some(m => m.id === agent.model_id && m.available)) {
+      selectedModelId.value = ''
+      modelLoadError.value = '智能体配置的模型不可用，请配置模型或重新选择'
+    }
+  }
+}
+function toggleDeepResearch() {
+  // An explicit profile owns its execution mode. Switching this legacy toggle
+  // opts back into automatic routing rather than silently ignoring the UI.
+  selectedAgentId.value = ''
+  deepResearch.value = !deepResearch.value
+}
+async function consumeAgentRoute() {
+  if (route.path !== '/' || sending.value) return
+  const id = typeof route.query.agent === 'string' ? route.query.agent : ''
+  const model = typeof route.query.model === 'string' ? route.query.model : ''
+  if (!id && !model) return false
+  await loadAgents()
+  if (id) { selectedAgentId.value = id; await changeAgent() }
+  if (model) await loadModels(model)
+  const query = {...route.query}; delete query.agent; delete query.model
+  await router.replace({path:'/',query})
+  return true
+}
+watch(() => [route.path, route.query.agent, route.query.model], consumeAgentRoute)
 const selectedModelId = ref(localStorage.getItem(MODEL_STORAGE_KEY) || '')
 const modelsLoading = ref(true)
 const modelLoadError = ref('')
@@ -1097,11 +1140,14 @@ const modelPickerTitle = computed(() => {
   return '添加自定义模型'
 })
 
+let modelLoadVersion = 0
 async function loadModels(preferredModelId = '') {
+  const version = ++modelLoadVersion
   modelsLoading.value = true
   modelLoadError.value = ''
   try {
     const data = await api.get('/chat/models')
+    if (version !== modelLoadVersion) return
     modelOptions.value = data.models || []
     const available = modelOptions.value.filter(model => model.available)
     const requested = available.find(model => model.id === preferredModelId)
@@ -1109,11 +1155,12 @@ async function loadModels(preferredModelId = '') {
     const preferred = available.find(model => model.id === data.default_model_id)
     selectedModelId.value = (requested || saved || preferred || available[0])?.id || ''
   } catch (error) {
+    if (version !== modelLoadVersion) return
     modelOptions.value = []
     selectedModelId.value = ''
     modelLoadError.value = `模型列表加载失败：${error.message}`
   } finally {
-    modelsLoading.value = false
+    if (version === modelLoadVersion) modelsLoading.value = false
   }
 }
 
@@ -1697,7 +1744,11 @@ watch(() => [chatStore.activeConversationId, chatStore.newConversationVersion], 
       const res = await api.get(`/chat/conversations/${newId}/history`)
       if (load !== conversationLoad) return
       // 历史消息 meta 中持久化了 sources 和 steps，重载时还原引用块 + 思考过程
+      const lastUser = (res.messages || []).findLast(m => m.role === 'user')
+      selectedAgentId.value = lastUser?.meta?.agent_id || ''
+      if (lastUser?.meta?.agent_id) deepResearch.value = agentOptions.value.find(a => a.id === lastUser.meta.agent_id)?.mode === 'deepagents'
       messages.value = (res.messages || []).map(m => ({
+        messageId: m.id,
         role: m.role,
         content: m.content,
         image: m.image || null,
@@ -1812,6 +1863,10 @@ async function send(options = {}) {
     : null
   const text = resumeCheckpoint ? (resumeUser?.content || '').trim() : input.value.trim()
   if (!text || sending.value) return
+  if (!resumeCheckpoint && selectedAgentId.value && (!selectedAgent.value || !selectedAgent.value.enabled)) {
+    agentLoadError.value = '所选智能体已移除或停用，请重新选择'
+    return
+  }
   const requestWorkspaceId = conversationId.value ? null : chatStore.activeWorkspaceId
   const requestOwner = chatStore.owner
   if (chatStore.draft) chatStore.draft.has_content = true
@@ -1898,6 +1953,7 @@ async function send(options = {}) {
       conversation_id: conversationId.value,
       ...(conversationId.value ? {} : { workspace_id: requestWorkspaceId }),
       model_id: selectedModelId.value,
+      agent_id: selectedAgentId.value || undefined,
       skill_ids: requestSkills.map(skill => skill.id),
       deep_research: deepResearch.value,
       image: attachedImage.value || undefined,
@@ -2051,6 +2107,7 @@ async function send(options = {}) {
         messages.value[msgIndex] = {
           ...m,
           content: finalContent,
+          messageId: ev.message_id || m.messageId,
           sources: ev.sources || [],
           meta: {
             intent: ev.intent,
@@ -2271,7 +2328,10 @@ const showCompactHint = computed(
   () => contextState.value.compactable > 0 && !compacting.value
 )
 
-onActivated(() => {
+onActivated(async () => {
+  await loadAgents()
+  const handled = await consumeAgentRoute()
+  if (!handled) void loadModels()
   // 从知识库页切回时滚动到底部并恢复焦点
   scrollBottom()
   nextTick(() => inputEl.value?.focus())
@@ -2294,6 +2354,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.session-agent-picker { margin-right: auto; min-width: 0; display: flex; align-items: center; gap: 7px; color: var(--gray-600); font-size: 12px; }
+.session-agent-picker select { max-width: 210px; min-width: 0; border: 0; border-radius: 5px; background: transparent; color: var(--gray-700); padding: 4px 3px; font-size: 12px; }
+.session-agent-picker a { display: inline-flex; padding: 5px; color: var(--gray-400); }
+.session-agent-picker a:hover { color: var(--main-700); }
+.session-agent-error { margin: 0 10px; font-size: 11px; color: var(--color-error-700); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 600px) { .session-agent-picker select { max-width: 145px; } .session-agent-error { display: none; } }
 .download-artifact { display:flex; align-items:center; gap:10px; padding:12px; margin-top:8px; border:1px solid var(--border-color, #e7e5e2); border-radius:12px; background:var(--bg-secondary, #f8f8f7); }
 .download-artifact > div { flex:1; min-width:0; }
 .download-artifact strong { display:block; font-size:13px; overflow-wrap:anywhere; }
