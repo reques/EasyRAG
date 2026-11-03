@@ -14,6 +14,7 @@
         <router-link :to="{ path: '/', query: chatStore.activeConversationId ? { session: chatStore.activeConversationId } : {} }" class="nav-item" title="智能对话" exact-active-class="active"><MessagesSquare :size="17" class="nav-icon" /><span class="nav-text">对话</span></router-link>
         <router-link to="/knowledge" class="nav-item" title="知识空间" active-class="active"><LibraryBig :size="17" class="nav-icon" /><span class="nav-text">知识库</span></router-link>
         <router-link to="/agents" class="nav-item" title="智能体管理" active-class="active"><Bot :size="17" class="nav-icon" /><span class="nav-text">智能体</span></router-link>
+        <router-link to="/observability" class="nav-item" title="观测与评测" active-class="active"><ChartNoAxesCombined :size="17" class="nav-icon" /><span class="nav-text">观测与评测</span></router-link>
         <router-link to="/memory" class="nav-item" title="记忆管理" active-class="active"><BrainCircuit :size="17" class="nav-icon" /><span class="nav-text">记忆</span></router-link>
         <router-link to="/mcp" class="nav-item" title="MCP 工具中心" active-class="active"><Blocks :size="17" class="nav-icon" /><span class="nav-text">MCP 工具</span></router-link>
       </nav>
@@ -45,7 +46,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Asterisk, Blocks, Bot, BrainCircuit, Copy, Folder, LibraryBig, LogOut, MessagesSquare, PanelLeft, Plus } from 'lucide-vue-next'
+import { Asterisk, Blocks, Bot, BrainCircuit, ChartNoAxesCombined, Copy, Folder, LibraryBig, LogOut, MessagesSquare, PanelLeft, Plus } from 'lucide-vue-next'
 import WorkspaceSessions from '../components/WorkspaceSessions.vue'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
@@ -63,8 +64,8 @@ const copied = ref(false)
 const appVersion = ref('v0.3.1')
 const avatarLetter = computed(() => (auth.username || '?').slice(0, 1).toUpperCase())
 const currentWorkspaceName = computed(() => chatStore.workspaces.find(w => w.id === chatStore.activeWorkspaceId)?.name || '最近')
-const pageTitle = computed(() => ({ '/agents': '智能体管理', '/knowledge': '知识空间', '/memory': '记忆管理', '/mcp': 'MCP 工具中心' }[route.path] || chatStore.activeConversation?.title || '智能对话'))
-const pageDescription = computed(() => ({ '/agents': '角色配置与模型连接', '/knowledge': '组织资料、检索与评估', '/memory': '查看和修正 Agent 记住的信息', '/mcp': '管理远程与本地扩展工具能力' }[route.path] || '从你的知识与工具中获得答案'))
+const pageTitle = computed(() => ({ '/observability':'观测与评测', '/agents': '智能体管理', '/knowledge': '知识空间', '/memory': '记忆管理', '/mcp': 'MCP 工具中心' }[route.path] || chatStore.activeConversation?.title || '智能对话'))
+const pageDescription = computed(() => ({ '/observability':'执行过程、用量与质量', '/agents': '角色配置与模型连接', '/knowledge': '组织资料、检索与评估', '/memory': '查看和修正 Agent 记住的信息', '/mcp': '管理远程与本地扩展工具能力' }[route.path] || '从你的知识与工具中获得答案'))
 
 watch(() => [route.path, route.query.session], ([path, id], previous = []) => {
   if (path !== '/') { sidebarOpen.value = false; return }

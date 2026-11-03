@@ -153,6 +153,7 @@ def run_evaluation(
     """
     from app.rag.retriever import get_document_chunk_id, get_retriever
 
+    execution_started_at = datetime.now(timezone.utc)
     k = top_k or cfg.RETRIEVER_TOP_K
     scoped_kb_id = str(uuid.UUID(str(knowledge_base_id)))
     retriever = get_retriever()
@@ -369,6 +370,8 @@ def run_evaluation(
             "visibility": "not_confirmed",
             "url": experiment_navigation(experiment) if linked else None,
         }
+    result["execution_started_at"] = execution_started_at.isoformat()
+    result["execution_finished_at"] = datetime.now(timezone.utc).isoformat()
     return result
 
 
@@ -384,7 +387,15 @@ async def save_run(
     benchmark_snapshot: Optional[Dict[str, Any]] = None,
 ) -> EvaluationRun:
     """把一次评估结果落库为命名运行。"""
-    finished_at = datetime.now(timezone.utc)
+    def recorded_time(key, fallback):
+        try:
+            value = datetime.fromisoformat(metrics[key].replace("Z", "+00:00"))
+            return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+        except (KeyError, AttributeError, TypeError, ValueError):
+            return fallback
+
+    finished_at = recorded_time("execution_finished_at", datetime.now(timezone.utc))
+    started_at = min(recorded_time("execution_started_at", finished_at), finished_at)
     experiment_id = (metrics.get("observability") or {}).get("experiment_id")
     run = EvaluationRun(
         id=uuid.UUID(experiment_id) if experiment_id else uuid.uuid4(),
@@ -405,7 +416,7 @@ async def save_run(
         mrr=metrics["mrr"],
         avg_score=metrics["avg_score"],
         metrics_json=json.dumps(metrics, ensure_ascii=False),
-        started_at=finished_at,
+        started_at=started_at,
         finished_at=finished_at,
     )
     session.add(run)

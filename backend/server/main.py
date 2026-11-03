@@ -254,6 +254,7 @@ def create_app() -> FastAPI:
     from backend.server.routers.memory_router import router as memory_router
     from backend.server.routers.mcp_router import router as mcp_router
     from backend.server.routers.agent_router import router as agent_router
+    from backend.server.routers.observability_router import router as observability_router
 
     from backend.server.routers.artifact_router import router as artifact_router
     application.include_router(artifact_router, prefix="/api/v1")
@@ -266,6 +267,7 @@ def create_app() -> FastAPI:
     application.include_router(memory_router, prefix="/api/v1")
     application.include_router(mcp_router, prefix="/api/v1")
     application.include_router(agent_router, prefix="/api/v1")
+    application.include_router(observability_router, prefix="/api/v1")
 
     # =========================================================================
     # 旧路由（保持兼容）— app/api/routes.py + app/api/kb_routes.py

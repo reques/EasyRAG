@@ -298,6 +298,11 @@ class EvalRunSummary(BaseModel):
     avg_score: float
     ragas_status: Optional[str] = None
     created_at: str
+    status: str = "completed"
+    failed_items: int = 0
+    benchmark_id: Optional[str] = None
+    benchmark_version: Optional[int] = None
+    observability: Optional[dict[str, Any]] = None
 
 
 class EvalRunDetail(EvalRunSummary):
@@ -330,6 +335,12 @@ def _to_summary(r) -> EvalRunSummary:
         avg_score=r.avg_score,
         ragas_status=ragas.get("status"),
         created_at=r.created_at.isoformat() if r.created_at else "",
+        status=getattr(r, "status", "completed") or "completed",
+        failed_items=sum(bool(item.get("retrieval_error") or item.get("generation_error"))
+                         for item in metrics.get("details", [])),
+        benchmark_id=str(r.benchmark_id) if getattr(r, "benchmark_id", None) else None,
+        benchmark_version=getattr(r, "benchmark_version", None),
+        observability=metrics.get("observability"),
     )
 
 

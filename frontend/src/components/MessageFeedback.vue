@@ -27,6 +27,7 @@ import { ThumbsUp, ThumbsDown } from 'lucide-vue-next'
 import api from '../api'
 
 const props = defineProps({ messageId: { type: Number, required: true } })
+const emit = defineEmits(['saved'])
 const rating = ref(null)
 const reason = ref('')
 const saving = ref(false)
@@ -62,6 +63,7 @@ async function submit(value) {
     reason.value = result.reason || ''
     saved.value = true
     editing.value = false
+    emit('saved')
   } catch {
     if (version === requestVersion) error.value = '反馈保存失败，请重试'
   } finally { saving.value = false }

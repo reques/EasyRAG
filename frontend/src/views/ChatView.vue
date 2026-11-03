@@ -71,13 +71,14 @@
                  渲染在答案上方，按实际走的节点（意图/检索/工具/推理/生成）实时流转，
                  不被下一轮覆盖 -->
             <AgentTrace
-              v-if="(msg.traceEvents && msg.traceEvents.length) || (canObserve && msg.meta?.streamId)"
+              v-if="msg.meta?.traceId || (msg.traceEvents && msg.traceEvents.length) || (canObserve && msg.meta?.streamId)"
               :events="msg.traceEvents"
               :running="msg.stepsLoading"
               :error="msg.error || ''"
               :stopped="!!msg.stopped"
               :stream-id="msg.meta?.streamId || ''"
               :can-observe="canObserve"
+              :trace-id="msg.meta?.traceId || ''"
             />
             <WorkProgress
               v-else-if="(msg.workItems && msg.workItems.length) || (msg.progressSummaries && msg.progressSummaries.length)"

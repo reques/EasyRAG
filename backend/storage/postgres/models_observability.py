@@ -36,3 +36,20 @@ class ObservabilityScore(Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lease_token: Mapped[str | None] = mapped_column(String(32), nullable=True)
     error_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class TurnJudgement(Base):
+    """One persisted latest judge result, with an expiring admission lease."""
+    __tablename__ = "turn_judgements"
+
+    trace_id: Mapped[str] = mapped_column(String(32), ForeignKey("execution_traces.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    state: Mapped[str] = mapped_column(String(16), default="running")
+    model_id: Mapped[str] = mapped_column(String(160))
+    request_id: Mapped[str] = mapped_column(String(36))
+    lease_token: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

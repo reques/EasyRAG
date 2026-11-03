@@ -1,5 +1,6 @@
 <template>
-  <section v-if="rows.length || running || error || (canObserve && streamId)" class="trace-process" aria-label="执行过程" :aria-busy="running">
+  <section v-if="traceId || rows.length || running || error || (canObserve && streamId)" class="trace-process" aria-label="执行过程" :aria-busy="running">
+    <div v-if="traceId" class="trace-observability"><router-link :to="{path:'/observability',query:{tab:'traces',trace:traceId}}">查看执行详情 ↗</router-link></div>
     <div v-if="canObserve && streamId" class="trace-observability">
       <button type="button" :disabled="observabilityLoading" @click="loadObservability">查看观测</button>
       <template v-if="observability">
@@ -52,6 +53,7 @@ const props = defineProps({
   stopped: { type: Boolean, default: false },
   streamId: { type: String, default: '' },
   canObserve: { type: Boolean, default: false },
+  traceId: { type: String, default: '' },
 })
 const observability = ref(null)
 const observabilityLoading = ref(false)

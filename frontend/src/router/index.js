@@ -24,6 +24,7 @@ const routes = [
       { path: 'memory', name: 'Memory', component: () => import('../views/MemoryView.vue') },
       { path: 'mcp', name: 'Mcp', component: () => import('../views/McpView.vue') },
       { path: 'agents', name: 'Agents', component: () => import('../views/AgentsView.vue') },
+      { path: 'observability', name: 'Observability', component: () => import('../views/ObservabilityView.vue') },
     ],
   },
 ]
