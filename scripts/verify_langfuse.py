@@ -29,6 +29,8 @@ def verify():
 
     cfg = get_settings()
     old_enabled = cfg.LANGFUSE_ENABLED
+    old_content_mode = cfg.EASYRAG_OBSERVABILITY_CONTENT_MODE
+    cfg.EASYRAG_OBSERVABILITY_CONTENT_MODE = "metadata_only"
     old_client, old_init = langfuse_client._client, langfuse_client._initialized
     exporter = InMemorySpanExporter()
     # A custom exporter ensures no traces or API calls leave this process.
@@ -81,6 +83,7 @@ def verify():
     finally:
         client.shutdown()
         cfg.LANGFUSE_ENABLED = old_enabled
+        cfg.EASYRAG_OBSERVABILITY_CONTENT_MODE = old_content_mode
         langfuse_client._client, langfuse_client._initialized = old_client, old_init
 
 

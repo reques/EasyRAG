@@ -65,7 +65,7 @@
       <div class="memory-toolbar">
         <div>
           <h2>Agent 记住的事实</h2>
-          <p>每轮对话完成后，Fast LLM 会判断是否需要新增、修正或删除长期事实。</p>
+          <p>从对话中积累的长期偏好与事实，可随时查看和修正。</p>
         </div>
         <label class="memory-search">
           <Search :size="15" />
@@ -297,22 +297,23 @@ onMounted(loadFacts)
 </script>
 
 <style scoped>
-.memory-page { height: 100%; overflow: auto; padding: 34px 42px 60px; background: var(--gray-25); }
+.memory-page { height: 100%; overflow: auto; padding: 30px 32px 60px; background: #fff; }
 .memory-header { max-width: 980px; margin: 0 auto 24px; display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
-.memory-eyebrow { display: block; color: var(--gray-500); font-size: 11px; font-weight: 650; letter-spacing: .13em; margin-bottom: 7px; }
-.memory-header h1 { font-size: 27px; line-height: 1.25; color: var(--gray-1000); margin-bottom: 7px; }
+.memory-eyebrow { display: none; }
+.memory-header h1 { font-size: 22px; font-weight: 600; line-height: 1.25; color: var(--gray-1000); margin-bottom: 8px; }
 .memory-header p, .memory-toolbar p { color: var(--gray-600); font-size: 13px; }
 .memory-button { border-radius: var(--radius-md); padding: 7px 13px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--gray-150); font-size: 13px; }
 .memory-button.secondary, .memory-button.ghost { color: var(--gray-700); background: #fff; }
 .memory-button.primary { color: #fff; background: var(--main-700); border-color: var(--main-700); }
 .memory-button.danger-fill { color: #fff; background: var(--gray-900); border-color: var(--gray-900); }
 .memory-button:disabled { opacity: .45; cursor: not-allowed; }
-.memory-overview { max-width: 980px; margin: 0 auto 24px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.memory-overview article { background: #fff; border: 1px solid var(--gray-150); border-radius: var(--radius-lg); padding: 16px; display: flex; gap: 12px; align-items: center; }
-.memory-metric-icon { width: 36px; height: 36px; border-radius: 8px; background: var(--gray-50); display: grid; place-items: center; }
-.memory-overview small { color: var(--gray-500); display: block; font-size: 11px; }
-.memory-overview strong { font-size: 21px; line-height: 1.1; }
-.memory-section { max-width: 980px; margin: 0 auto; background: #fff; border: 1px solid var(--gray-150); border-radius: var(--radius-lg); overflow: hidden; }
+.memory-overview { max-width: 980px; margin: 0 auto 28px; display: flex; flex-wrap: wrap; gap: 10px; }
+.memory-overview article { background: var(--gray-10); border: 1px solid var(--gray-150); border-radius: 8px; padding: 8px 12px; display: flex; gap: 8px; align-items: center; }
+.memory-metric-icon { width: 20px; height: 20px; color: var(--gray-400); display: grid; place-items: center; }
+.memory-overview article > div { display: flex; align-items: center; gap: 8px; }
+.memory-overview small { color: var(--gray-600); font-size: 12px; }
+.memory-overview strong { font-size: 14px; font-weight: 600; line-height: 1.1; }
+.memory-section { max-width: 980px; margin: 20px auto 0; background: #fff; border: 1px solid var(--gray-150); border-radius: var(--radius-lg); overflow: hidden; }
 .episode-section { margin-top: 18px; }
 .memory-toolbar { padding: 18px 20px; border-bottom: 1px solid var(--gray-100); display: flex; justify-content: space-between; gap: 20px; align-items: center; }
 .memory-toolbar h2 { font-size: 16px; margin-bottom: 2px; }
@@ -329,7 +330,7 @@ onMounted(loadFacts)
 .memory-card-meta { display: flex; gap: 14px; margin-top: 7px; color: var(--gray-500); font-size: 11px; }
 .memory-card-meta span { display: inline-flex; align-items: center; gap: 4px; }
 .memory-card-actions { display: flex; gap: 3px; opacity: 0; transition: opacity .15s; }
-.memory-card:hover .memory-card-actions { opacity: 1; }
+.memory-card:hover .memory-card-actions, .memory-card:focus-within .memory-card-actions { opacity: 1; }
 .memory-card-actions button { width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--gray-500); display: grid; place-items: center; }
 .memory-card-actions button:hover { background: var(--gray-100); color: var(--gray-900); }
 .memory-card-actions button.danger:hover { color: var(--color-error-700); }

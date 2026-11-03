@@ -84,6 +84,11 @@ class LLMClient:
             http_client=async_model_http_client(),
         )
 
+    async def aclose(self):
+        """Release transports for a short-lived, explicitly constructed client."""
+        await self._async_client.close()
+        self._sync_client.close()
+
     # ── internal helpers ──────────────────────────────────────────────────
 
     def _request_sync(self, *, messages, **options):

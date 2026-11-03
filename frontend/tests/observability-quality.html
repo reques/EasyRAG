@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>回答反馈与评测关联回归</title>
+<div id="app"></div>
+<script type="module">
+import { createApp, h, ref } from 'vue'
+import axios from 'axios'
+import '../src/style.css'
+const stored = { rating: null, reason: '' }
+let failNext = false
+axios.defaults.adapter = async config => {
+  if (failNext) { failNext = false; throw new Error('Synthetic unavailable') }
+  if (config.method === 'put') Object.assign(stored, JSON.parse(config.data))
+  return { data: { ...stored }, status: 200, statusText: 'OK', headers: {}, config }
+}
+const { default: Feedback } = await import('../src/components/MessageFeedback.vue')
+const { default: Experiment } = await import('../src/components/EvaluationObservability.vue')
+createApp({ setup() {
+  const key = ref(0)
+  return () => h('main', { style: 'max-width:640px;margin:48px auto;padding:24px' }, [
+    h('p', { style: 'line-height:1.8;margin-bottom:18px' }, '根据合同条款，付款期限为收到发票后的 30 天。'),
+    h(Feedback, { messageId: 42, key: key.value }),
+    h('hr', { style: 'margin:32px 0;border:0;border-top:1px solid #ddd' }),
+    h('h2', '检索评测结果'),
+    h(Experiment, { value: { linked_items: 3, total_items: 3, url: 'http://localhost:3000/project/test/experiments/results?baseline=synthetic' } }),
+    h(Experiment, { value: { linked_items: 0, total_items: 3, url: 'javascript:alert(1)' } }),
+    h('nav', { style: 'display:flex;gap:12px;margin-top:32px' }, [
+      h('button', { onClick: () => { key.value++ } }, '模拟刷新'),
+      h('button', { onClick: () => { failNext = true } }, '下次请求失败'),
+    ]),
+  ])
+} }).mount('#app')
+</script>
+</html>

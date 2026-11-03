@@ -19,6 +19,7 @@ from app.core.config import get_settings
 from app.core.exceptions import VectorStoreError
 from app.core.logger import get_logger
 from app.rag.embeddings import get_embedder
+from app.observability.retrieval import observe_retrieval
 
 logger = get_logger(__name__)
 cfg = get_settings()
@@ -109,6 +110,7 @@ class BaseRetriever:
     def add_documents(self, texts: List[str], metadatas: Optional[List[Dict]] = None) -> int:
         raise NotImplementedError
 
+    @observe_retrieval("retrieval.basic")
     def retrieve(
         self,
         query: str,
@@ -168,6 +170,7 @@ class MemoryRetriever(BaseRetriever):
         logger.info("[MemoryRetriever] added %d docs, total=%d", len(texts), len(self._texts))
         return len(texts)
 
+    @observe_retrieval("retrieval.basic")
     def retrieve(
         self,
         query: str,
@@ -349,6 +352,7 @@ class MilvusRetriever(BaseRetriever):
         logger.info("[MilvusRetriever] inserted %d docs", len(texts))
         return len(texts)
 
+    @observe_retrieval("retrieval.basic")
     def retrieve(
         self,
         query: str,
@@ -514,6 +518,7 @@ class ChromaRetriever(BaseRetriever):
         logger.info("[ChromaRetriever] added %d docs", len(texts))
         return len(texts)
 
+    @observe_retrieval("retrieval.basic")
     def retrieve(
         self,
         query: str,

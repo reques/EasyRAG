@@ -276,6 +276,9 @@ class ToolRegistry:
         from app.agents.cancellation import check_run_cancelled
         check_run_cancelled()
         tool = self.get(name)  # acquires+releases lock internally
+        from app.agents.configuration import agent_tool_allowed
+        if not agent_tool_allowed(name):
+            raise ToolExecutionError(f"Tool '{name}' is not allowed by the selected agent configuration")
         if not _skill_allows(tool):
             raise ToolExecutionError(
                 f"Tool '{name}' is not allowed by the selected Skills. "

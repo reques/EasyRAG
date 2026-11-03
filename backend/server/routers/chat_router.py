@@ -68,6 +68,28 @@ cfg = get_settings()
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
+class MessageFeedbackRequest(BaseModel):
+    rating: Literal["like", "dislike"]
+    reason: str = Field(default="", max_length=2000)
+
+
+@router.get("/messages/{message_id}/feedback")
+async def read_message_feedback(message_id: int, current_user: User = Depends(get_current_user)):
+    from backend.services.feedback_service import get_feedback
+    async with get_session() as session:
+        return await get_feedback(session, message_id, current_user.id)
+
+
+@router.put("/messages/{message_id}/feedback")
+async def write_message_feedback(message_id: int, req: MessageFeedbackRequest,
+                                 current_user: User = Depends(get_current_user)):
+    from backend.services.feedback_service import save_feedback
+    async with get_session() as session:
+        result = await save_feedback(session, message_id, current_user.id, req.rating, req.reason)
+        await session.commit()
+        return result
+
+
 async def _load_knowledge_scope(
     session: AsyncSession, user_id: uuid.UUID
 ) -> tuple[list[str], list[dict[str, Any]]]:
@@ -84,6 +106,7 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None  # None = 创建新会话
     workspace_id: Optional[uuid.UUID] = None
     model_id: Optional[str] = Field(default=None, max_length=64)
+    agent_id: Optional[str] = Field(default=None, max_length=80)
     # 2026-09-04 Skill 重构：语义从"注入这些 Skill 的指令"改为"本次请求可用的
     # Skill 范围"。上限由 SKILLS_MAX_SELECTED 控制（默认 10；渐进式披露下首轮
     # 只给摘要行，放宽不会撑爆上下文）。运行时上限校验在 _resolve_request_skills。
@@ -104,6 +127,8 @@ class ChatResponse(BaseModel):
     run_id: str = ""
     model_id: str = ""
     model_name: str = ""
+    agent_id: str = ""
+    agent_name: str = ""
     intent: str = ""
     steps: list[str | dict[str, Any]] = Field(default_factory=list)
     sources: list[dict] = []
@@ -112,7 +137,7 @@ class ChatResponse(BaseModel):
     resumed: bool = False
     trace_id: str = ""
     token_usage: dict[str, int] = Field(default_factory=dict)
-    context_usage: dict[str, int] = Field(default_factory=dict)
+    context_usage: dict[str, Any] = Field(default_factory=dict)
 
 
 async def _persist_trace_safely(
@@ -682,12 +707,65 @@ async def delete_custom_chat_model(
         record = await repo.get_by_public_id(current_user.id, model_id)
         if record is None:
             raise HTTPException(status_code=404, detail="自定义模型不存在或无权访问")
+        from backend.services.agent_config_service import model_in_use
+        if await model_in_use(session, current_user.id, model_id):
+            raise HTTPException(409, "该模型仍被智能体使用，请先修改智能体的模型配置")
         await repo.delete(record)
         await session.commit()
     from app.llm.client import evict_chat_model_clients
 
     evict_chat_model_clients(model_id)
     return None
+
+
+@router.get("/models/{model_id}/configuration")
+async def model_configuration(model_id: str, current_user: User = Depends(get_current_user)):
+    async with get_session() as session:
+        record = await CustomModelConfigRepository(session).get_by_public_id(current_user.id, model_id)
+        if record is None:
+            raise HTTPException(404, "自定义模型不存在或无权访问")
+        return dict(id=record.public_id, name=record.name, provider_name=record.provider_name,
+                    provider_type=record.provider_type, base_url=record.base_url,
+                    model_name=record.model_name, temperature=record.temperature,
+                    supports_vision=record.supports_vision, requires_api_key=record.requires_api_key,
+                    has_api_key=bool(record.api_key_encrypted))
+
+
+@router.put("/models/{model_id}", response_model=ChatModelInfo)
+async def update_custom_chat_model(model_id: str, req: CustomModelCreate,
+                                   current_user: User = Depends(get_current_user)):
+    async with get_session() as session:
+        repo = CustomModelConfigRepository(session)
+        record = await repo.get_by_public_id(current_user.id, model_id)
+        if record is None:
+            raise HTTPException(404, "自定义模型不存在或无权访问")
+        if not req.name.strip() or not req.model_name.strip():
+            raise HTTPException(400, "模型名称和模型 ID 不能为空")
+        other = await repo.get_by_name(current_user.id, req.name.strip())
+        if other and other.id != record.id:
+            raise HTTPException(409, "已存在同名自定义模型")
+        try:
+            address = validate_and_normalize_base_url(req.base_url, req.provider_type)
+            key = encrypt_api_key(req.api_key) if req.api_key.strip() else record.api_key_encrypted
+        except ModelConfigValidationError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if req.requires_api_key and not key:
+            raise HTTPException(400, "该模型配置要求填写 API Key")
+        record.name, record.model_name, record.base_url = req.name.strip(), req.model_name.strip(), address
+        record.provider_name = req.provider_name.strip() or ("本地模型" if req.provider_type == "local" else "自定义云端")
+        record.provider_type, record.api_key_encrypted = req.provider_type, key
+        record.requires_api_key, record.temperature = req.requires_api_key, req.temperature
+        record.supports_vision = req.supports_vision
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(409, "已存在同名自定义模型") from exc
+        profile = profile_from_custom_model(record)
+    from app.llm.client import evict_chat_model_clients
+    evict_chat_model_clients(model_id)
+    return ChatModelInfo(**profile.to_public_dict(default_model_id=cfg.LLM_DEFAULT_MODEL_ID))
+
 
 @router.post("/send", response_model=ChatResponse)
 async def send_message(
@@ -816,9 +894,10 @@ async def send_message_stream(
             if existing.fingerprint != request_fingerprint:
                 raise HTTPException(409, "request_id was already used for a different request")
             return _stream_response(existing)
-        selected_model = await _resolve_request_model(
-            req.model_id, current_user.id, session
-        )
+        from backend.services.agent_config_service import resolve_agent
+        selected_agent = await resolve_agent(session, current_user.id, req.agent_id)
+        agent_model = selected_agent.snapshot.get("model_id") if selected_agent else None
+        selected_model = await _resolve_request_model(req.model_id or agent_model, current_user.id, session)
         selected_skills = await _resolve_request_skills(
             req.skill_ids, current_user.id, session
         )
@@ -858,6 +937,16 @@ async def send_message_stream(
             # Completion may have committed while admission waited on the lock.
             await session.refresh(conv, attribute_names=["messages"])
             user_message = _last_resumable_user_message(conv, req.query)
+            try:
+                saved_agent = json.loads(user_message.metadata_json or "{}")
+            except (TypeError, ValueError):
+                saved_agent = {}
+            if req.agent_id != saved_agent.get("agent_id"):
+                raise HTTPException(409, "恢复时不能切换智能体，请新建对话")
+            if selected_agent:
+                selected_agent = await resolve_agent(session, current_user.id, req.agent_id,
+                                                     snapshot=saved_agent.get("agent_snapshot"))
+                selected_model = await _resolve_request_model(req.model_id or selected_agent.snapshot.get("model_id"), current_user.id, session)
             previous = await streams.latest_stream(session, conv_id, current_user.id)
             if previous and previous.source_message_id == user_message.id and previous.status == "cancelled":
                 raise HTTPException(409, "任务已主动取消，请发送新消息开始新任务。")
@@ -872,6 +961,8 @@ async def send_message_stream(
                     "skills": skill_payload,
                     "model_id": selected_model.id,
                     "deep_research": req.deep_research,
+                    **({"agent_id": selected_agent.id, "agent_name": selected_agent.name,
+                        "agent_snapshot": selected_agent.snapshot} if selected_agent else {}),
                 }, ensure_ascii=False),
             )
         user_message_id = user_message.id
@@ -942,6 +1033,7 @@ async def send_message_stream(
             input_message_id=str(user_message_id),
             resume_checkpoint=req.resume_checkpoint,
             deep_research=req.deep_research,
+            agent_config=selected_agent,
         )
         _chat_ctx.execution_id = str(execution.id)
         _chat_ctx.local_trace_id = stream_run.local_trace_id or ""
@@ -973,6 +1065,8 @@ async def send_message_stream(
             "model_name": selected_model.name,
             "skills": skill_payload,
             "agent_mode": agent_mode,
+            "agent_id": selected_agent.id if selected_agent else "",
+            "agent_name": selected_agent.name if selected_agent else "",
             "resume_requested": req.resume_checkpoint,
         })
 
@@ -1162,6 +1256,9 @@ async def send_message_stream(
                 "token_usage": deep_result.get("token_usage") or {},
                 "context_usage": deep_result.get("context_usage") or {},
             }
+            if selected_agent:
+                meta.update(agent_id=selected_agent.id, agent_name=selected_agent.name)
+                done_payload.update(agent_id=selected_agent.id, agent_name=selected_agent.name)
             await streams.commit_result(execution, answer, meta, done_payload)
             schedule_memory_evaluation(
                 current_user.id, req.query, conv_id, assistant_content=answer,
@@ -1326,6 +1423,9 @@ async def send_message_stream(
             "token_usage": dyn_result.get("token_usage") or {},
             "context_usage": dyn_result.get("context_usage") or {},
         }
+        if selected_agent:
+            meta.update(agent_id=selected_agent.id, agent_name=selected_agent.name)
+            done_payload.update(agent_id=selected_agent.id, agent_name=selected_agent.name)
         await streams.commit_result(execution, answer, meta, done_payload)
         schedule_memory_evaluation(
             current_user.id, req.query, conv_id, assistant_content=answer,
@@ -1392,6 +1492,7 @@ async def resume_conversation_checkpoint(
             query=query,
             conversation_id=str(conversation_id),
             model_id=req.model_id or saved_request.get("model_id"),
+            agent_id=saved_request.get("agent_id"),
             skill_ids=req.skill_ids or saved_skill_ids,
             deep_research=(
                 req.deep_research

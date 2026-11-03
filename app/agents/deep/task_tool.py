@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from app.agents.deep.subagents import (
     get_subagent_config,
-    get_subagents,
+    get_available_subagents as get_subagents,
     run_subagent,
     subagents_prompt,
 )

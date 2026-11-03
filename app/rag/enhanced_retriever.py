@@ -37,6 +37,8 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.rag.embeddings import get_embedder
+from app.observability.retrieval import observe_retrieval, observe_stage
+from contextvars import copy_context
 
 logger = get_logger(__name__)
 cfg = get_settings()
@@ -316,7 +318,7 @@ def _run_async_in_thread(coro):
         finally:
             loop.close()
 
-    t = threading.Thread(target=_runner, daemon=True)
+    t = threading.Thread(target=copy_context().run, args=(_runner,), daemon=True)
     t.start()
     t.join(timeout=30)
     if error:
@@ -403,6 +405,7 @@ class EnhancedRetriever:
     # 公开接口
     # ═══════════════════════════════════════════════════════════════════════════
 
+    @observe_retrieval("retrieval.enhanced")
     def retrieve(
         self,
         query: str,
@@ -492,6 +495,7 @@ class EnhancedRetriever:
         )
         return result
 
+    @observe_stage("retrieval.cached_decompose_query")
     def _cached_decompose_query(
         self, query: str, history: Optional[List[Dict[str, str]]] = None,
     ) -> QueryDecomposition:
@@ -640,6 +644,7 @@ class EnhancedRetriever:
     # ② 四路并行检索
     # ═══════════════════════════════════════════════════════════════════════════
 
+    @observe_stage("retrieval.parallel_retrieve")
     def _parallel_retrieve(
         self,
         query: str,
@@ -660,17 +665,17 @@ class EnhancedRetriever:
         # 构建检索任务：(来源子问题, 路径名, future)；空子问题 = 原始 query 级
         tasks: List[Tuple[str, str, "concurrent.futures.Future"]] = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            tasks.append(("", "entity", executor.submit(
+            tasks.append(("", "entity", executor.submit(copy_context().run,
                 self._retrieve_entity_path, decomposition, knowledge_base_ids
             )))
-            tasks.append(("", "relation", executor.submit(
+            tasks.append(("", "relation", executor.submit(copy_context().run,
                 self._retrieve_relation_path, decomposition, knowledge_base_ids
             )))
             # 原始 query 的语义 + BM25（兜底，覆盖未拆分子问题的情况）
-            tasks.append(("", "semantic", executor.submit(
+            tasks.append(("", "semantic", executor.submit(copy_context().run,
                 self._retrieve_semantic_path, query, decomposition, knowledge_base_ids
             )))
-            tasks.append(("", "bm25", executor.submit(
+            tasks.append(("", "bm25", executor.submit(copy_context().run,
                 self._retrieve_bm25_path, query, knowledge_base_ids
             )))
             # 每个子问题独立检索（用检索关键词扩展，帮助口语表述映射到规范表述）
@@ -678,10 +683,10 @@ class EnhancedRetriever:
             for i, sq in enumerate(sub_questions):
                 kw = keywords[i] if i < len(keywords) else []
                 expanded = (sq + " " + " ".join(kw)).strip() if kw else sq
-                tasks.append((sq, f"semantic_sub{i}", executor.submit(
+                tasks.append((sq, f"semantic_sub{i}", executor.submit(copy_context().run,
                     self._retrieve_semantic_path, expanded, decomposition, knowledge_base_ids
                 )))
-                tasks.append((sq, f"bm25_sub{i}", executor.submit(
+                tasks.append((sq, f"bm25_sub{i}", executor.submit(copy_context().run,
                     self._retrieve_bm25_path, expanded, knowledge_base_ids
                 )))
 
@@ -1044,6 +1049,7 @@ class EnhancedRetriever:
     # ③ 图谱感知融合重排序
     # ═══════════════════════════════════════════════════════════════════════════
 
+    @observe_stage("retrieval.fusion_rerank")
     def _fusion_rerank(
         self,
         candidates: List[CandidateDoc],
@@ -1133,6 +1139,7 @@ class EnhancedRetriever:
         consensus_map = {1: 0.3, 2: 0.65, 3: 0.85, 4: 1.0}
         return consensus_map.get(hits, 1.0)
 
+    @observe_stage("retrieval.apply_reranker")
     def _apply_reranker(
         self, query: str, docs: List[CandidateDoc]
     ) -> List[CandidateDoc]:
@@ -1182,6 +1189,7 @@ class EnhancedRetriever:
             logger.warning("[enhanced] reranker failed: %s, keeping fusion order", exc)
             return docs
 
+    @observe_stage("retrieval.apply_answerability")
     def _apply_answerability(
         self,
         query: str,
@@ -1268,6 +1276,7 @@ class EnhancedRetriever:
         )
         return ranked_head + docs[n:]
 
+    @observe_stage("retrieval.coverage_gate")
     def _coverage_gate(
         self,
         query: str,
@@ -1300,10 +1309,10 @@ class EnhancedRetriever:
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             futures = []
             for sq in uncovered[:3]:
-                futures.append((sq, executor.submit(
+                futures.append((sq, executor.submit(copy_context().run,
                     self._retrieve_semantic_path, sq, decomposition, knowledge_base_ids
                 )))
-                futures.append((sq, executor.submit(
+                futures.append((sq, executor.submit(copy_context().run,
                     self._retrieve_bm25_path, sq, knowledge_base_ids
                 )))
             for sq, f in futures:
@@ -1457,6 +1466,7 @@ class EnhancedRetriever:
     # ④ 知识块聚类
     # ═══════════════════════════════════════════════════════════════════════════
 
+    @observe_stage("retrieval.cluster_into_blocks")
     def _cluster_into_blocks(
         self,
         docs: List[CandidateDoc],
@@ -1637,6 +1647,7 @@ class EnhancedRetriever:
     # ⑤ 迭代缺口检测与补充检索
     # ═══════════════════════════════════════════════════════════════════════════
 
+    @observe_stage("retrieval.iterative_gap_fill")
     def _iterative_gap_fill(
         self,
         query: str,
@@ -1666,7 +1677,7 @@ class EnhancedRetriever:
             # 对每个缺口查询做补充检索（并行，仅 Path B 语义路径 + Path D BM25）
             gap_futures = {}
             for gq in gap_queries[:3]:
-                gap_futures[gq] = self._executor.submit(
+                gap_futures[gq] = self._executor.submit(copy_context().run,
                     self._gap_supplement_search, gq, knowledge_base_ids
                 )
 

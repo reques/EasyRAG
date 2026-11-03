@@ -61,6 +61,7 @@ def use_request_context(
     from app.skills.runtime import SkillRuntimeContext, use_skill_context
     from app.tools.sandbox.context import SandboxContext, use_sandbox_context
     from app.agents.cancellation import use_run_cancellation
+    from app.agents.configuration import use_agent_configuration
 
     definitions = (
         skill_definitions
@@ -73,6 +74,7 @@ def use_request_context(
 
     with (
         use_run_cancellation(ctx.cancel_event),
+        use_agent_configuration(ctx.agent_config),
         use_chat_model(model_profile if model_profile is not None else (ctx.model_id or None)),
         use_skill_context(skill_runtime),
         use_authorised_kb_ids(list(ctx.knowledge_base_ids) or None),
